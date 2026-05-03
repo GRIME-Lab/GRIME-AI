@@ -1306,6 +1306,23 @@ class TrainingTab(QtWidgets.QWidget):
             return
 
         root = Path(raw).resolve()
+
+        # If the root folder has changed and selected folders are present, ask user
+        previous_root = getattr(self, "_last_training_root", None)
+        if previous_root is not None and Path(previous_root) != root:
+            sel_root = self.listWidget_selectedFolders.invisibleRootItem()
+            if sel_root.childCount() > 0:
+                reply = QMessageBox.question(
+                    self,
+                    "Root Folder Changed",
+                    "You are changing the root folder.\n\nWould you like to clear your currently selected folders?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    self.reset_lists()
+
+        self._last_training_root = str(root)
         self.listWidget_availableFolders.clear()
 
         # HARD STOP: REFUSE TO SCAN SUSPICIOUS/SYSTEM ROOTS

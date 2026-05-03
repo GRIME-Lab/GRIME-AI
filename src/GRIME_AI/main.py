@@ -144,7 +144,7 @@ from PyQt5 import QtCore, QtWidgets, QtGui, uic
 from PyQt5.QtCore import QCoreApplication, QTimer
 from PyQt5.QtGui import QImage, QPixmap, QFont, QPainter, QPen, QIcon
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidgetItem, QToolBar, QDateTimeEdit, \
-    QMessageBox, QAction, QHeaderView, QDialog, QFileDialog
+    QMessageBox, QAction, QHeaderView, QDialog, QFileDialog, QSplashScreen
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu
 from PyQt5.QtWidgets import QTreeWidgetItem
 
@@ -728,6 +728,17 @@ class MainWindow(QMainWindow):
             print("[INFO] Temporal Averaging added to Tools menu successfully.")
         except Exception as e:
             print(f"[ERROR] Failed to add Temporal Averaging to Tools menu: {e}")
+            traceback.print_exc()
+
+        try:
+            self.action_LaunchSAGE = QAction("SAGE", self)
+            self.action_LaunchSAGE.setStatusTip("Open the SAGE annotation and segmentation tool")
+            self.action_LaunchSAGE.triggered.connect(self.menubar_launch_sage)
+            self.menuTools.addSeparator()
+            self.menuTools.addAction(self.action_LaunchSAGE)
+            print("[INFO] SAGE added to Tools menu successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to add SAGE to Tools menu: {e}")
             traceback.print_exc()
 
         # ------------------------------------------------------------------------------------------------------------------
@@ -2602,8 +2613,22 @@ class MainWindow(QMainWindow):
         CONFIG_FILENAME = "site_config.json"
         site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
 
+        # Show a splash screen while the ML dialog loads
+        from PyQt5.QtGui import QPixmap, QColor
+        from PyQt5.QtCore import Qt
+        _splash_pix = QPixmap(480, 120)
+        _splash_pix.fill(QColor("#2b2b2b"))
+        _splash = QSplashScreen(_splash_pix, Qt.WindowStaysOnTopHint)
+        _splash.showMessage("Loading ML Image Processing...",
+                            Qt.AlignCenter | Qt.AlignVCenter,
+                            QColor("#ffffff"))
+        _splash.show()
+        QApplication.processEvents()
+
         from GRIME_AI.dialogs.ML_image_processing.GRIME_AI_ML_ImageProcessingDlg import GRIME_AI_ML_ImageProcessingDlg
         hyperparameterDlg = GRIME_AI_ML_ImageProcessingDlg(frame)
+
+        _splash.finish(hyperparameterDlg)
 
         hyperparameterDlg.ml_train_signal.connect(train_main)
         hyperparameterDlg.ml_segment_signal.connect(segment_main)
@@ -2942,6 +2967,19 @@ class MainWindow(QMainWindow):
         self._temporalAvgDlg.show()
         self._temporalAvgDlg.raise_()
         self._temporalAvgDlg.activateWindow()
+
+    # ==================================================================================================================
+    # SAGE — SEGMENTATION & ANNOTATION FOR GEOSPATIAL ECOHYDROLOGY
+    # ==================================================================================================================
+    def menubar_launch_sage(self):
+        """Launch SAGE as a separate process."""
+        try:
+            import subprocess
+            subprocess.Popen([sys.executable, "-m", "SAGE.main"])
+        except Exception as e:
+            print(f"[ERROR] Failed to launch SAGE: {e}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "SAGE Launch Failed", str(e))
 
 
     # ======================================================================================================================
@@ -5575,6 +5613,8 @@ def segment_main(cfg: DictConfig) -> None:
     if hyperparameterDlg is not None:
         copy_original_image = hyperparameterDlg.get_copy_original_image()
         save_masks = hyperparameterDlg.get_saved_masks()
+        save_probability_maps = hyperparameterDlg.get_save_probability_maps()
+        save_diagnostic_panels = hyperparameterDlg.get_save_diagnostic_panels()
         selected_label_categories = hyperparameterDlg.get_selected_label_categories()
         selected_segment_model = hyperparameterDlg.get_selected_segment_model()
 
@@ -5586,7 +5626,10 @@ def segment_main(cfg: DictConfig) -> None:
 
         from GRIME_AI.ml_core.ml_image_segmentation import MLImageSegmentation
         mySegmentation = MLImageSegmentation(cfg, parent_widget=hyperparameterDlg)
-        mySegmentation.ML_Segmentation_Dispatcher(copy_original_image, save_masks, selected_label_categories, mode=selected_segment_model)
+        mySegmentation.ML_Segmentation_Dispatcher(copy_original_image, save_masks, selected_label_categories,
+                                                    mode=selected_segment_model,
+                                                    save_probability_maps=save_probability_maps,
+                                                    save_diagnostic_panels=save_diagnostic_panels)
 
         # Re-enable Segment button
         try:

@@ -176,6 +176,7 @@ class SegmentImagesTab(QWidget):
         self.checkBox_save_predicted_masks.setChecked(load_model_conf.get("save_model_masks", True))
         self.checkBox_copyOriginalModelImage.setChecked(load_model_conf.get("copy_original_model_image", True))
         self.checkBox_save_probability_maps.setChecked(load_model_conf.get("save_probability_maps", True))
+        self.checkBox_save_diagnostic_panels.setChecked(load_model_conf.get("save_diagnostic_panels", False))
 
         # Set the appropriate radio button based on MODEL
         if model_type == "sam2":
@@ -223,6 +224,7 @@ class SegmentImagesTab(QWidget):
         site_config["save_model_masks"] = self.checkBox_save_predicted_masks.isChecked()
         site_config["copy_original_model_image"] = self.checkBox_copyOriginalModelImage.isChecked()
         site_config["save_probability_maps"] = self.checkBox_save_probability_maps.isChecked()
+        site_config["save_diagnostic_panels"] = self.checkBox_save_diagnostic_panels.isChecked()
 
         site_config.setdefault("load_model", {})
 
@@ -378,6 +380,9 @@ class SegmentImagesTab(QWidget):
 
         self.checkBox_copyOriginalModelImage.toggled.connect(self.on_copy_original_toggled)
         self.checkBox_copyOriginalModelImage.toggled.connect(self.update_model_config)
+
+        self.checkBox_save_diagnostic_panels.toggled.connect(self.on_save_diagnostic_panels_toggled)
+        self.checkBox_save_diagnostic_panels.toggled.connect(self.update_model_config)
 
         # Labels list affects segment button state
         try:
@@ -696,6 +701,11 @@ class SegmentImagesTab(QWidget):
     # ------------------------------------------------------------------------------------------------------------------
     def on_copy_original_toggled(self, checked: bool):
         print(f"Copy Original Image checkbox toggled: {checked}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def on_save_diagnostic_panels_toggled(self, checked: bool):
+        print(f"Save Diagnostic Panels checkbox toggled: {checked}")
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

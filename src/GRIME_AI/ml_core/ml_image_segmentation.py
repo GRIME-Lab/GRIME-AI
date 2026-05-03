@@ -112,7 +112,8 @@ class MLImageSegmentation:
     # ------------------------------------------------------------------------------------------------------------------
     #
     # ------------------------------------------------------------------------------------------------------------------
-    def ML_Segmentation_Dispatcher(self, copy_original_image, save_masks, selected_label_categories, mode="segformer"):
+    def ML_Segmentation_Dispatcher(self, copy_original_image, save_masks, selected_label_categories, mode="segformer",
+                                    save_probability_maps=True, save_diagnostic_panels=False):
         if self.missing_items:
             return
 
@@ -183,7 +184,9 @@ class MLImageSegmentation:
             if mode.lower() == "sam2":
                 result = engine.run_inference_on_folder(
                     predictor, input_dir, output_dir,
-                    copy_original_image, save_masks, selected_label_categories, progressBar
+                    copy_original_image, save_masks, selected_label_categories, progressBar,
+                    save_probability_maps=save_probability_maps,
+                    save_diagnostic_panels=save_diagnostic_panels
                 )
 
             elif mode.lower() == "segformer":
