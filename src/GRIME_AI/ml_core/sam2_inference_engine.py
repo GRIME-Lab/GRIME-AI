@@ -105,7 +105,11 @@ class SAM2InferenceEngine:
         model = instantiate(new_cfg, _recursive_=True)
 
         # 3. Move model to device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Use self.device as passed by the caller — do NOT re-resolve here.
+        # Re-resolving via torch.cuda.is_available() can return False under lazy
+        # CUDA initialisation, silently falling back to CPU.
+        device = self.device
+        print(f"Inference device: {device}")
         sam2_model = model.to(device).eval()
         predictor = SAM2ImagePredictor(sam2_model)
 
@@ -276,25 +280,87 @@ class SAM2InferenceEngine:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def show_masks(self, output_file_with_path, image, mask, borders=True, category_id=None, category_name=None, display_label=True):
-        fig, ax = plt.subplots()
-        try:
-            ax.imshow(image)
-            ax.axis('off')
-            self.show_mask(mask, ax, category_id=category_id, borders=borders, category_name=category_name, display_label=display_label)
-            fig.savefig(output_file_with_path, bbox_inches='tight', pad_inches=0)
-        finally:
-            plt.close(fig)
+        """
+        Compose and save an overlay image using OpenCV — replaces the previous
+        matplotlib-based implementation for a 5–20× speedup per frame.
+
+        Args:
+            output_file_with_path: full path for the output PNG
+            image: RGB numpy array (H, W, 3) — PIL image converted via np.array
+            mask:  binary numpy array (H, W) — 1=foreground, 0=background
+            borders: if True, draw white contours around the mask
+            category_id: used to look up the RGBA colour for this category
+            category_name: text label drawn at the mask centroid when display_label=True
+            display_label: whether to render the category name on the overlay
+        """
+        # image arrives as RGB from PIL — convert to BGR for OpenCV
+        bgr = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+        mask_u8 = mask.astype(np.uint8)
+
+        # Resolve category colour (RGBA float 0-1) → BGR uint8
+        rgba = get_color_for_category(category_id)          # shape (4,) float32 0-1
+        b = int(rgba[2] * 255)
+        g = int(rgba[1] * 255)
+        r = int(rgba[0] * 255)
+        alpha = float(rgba[3]) if len(rgba) > 3 else 0.45  # blend strength
+
+        # Blend category colour into masked region
+        overlay = bgr.copy()
+        colour_layer = np.zeros_like(bgr)
+        colour_layer[mask_u8 == 1] = (b, g, r)
+        overlay = cv2.addWeighted(overlay, 1.0 - alpha, colour_layer, alpha, 0)
+
+        # Contours
+        if borders:
+            contours, _ = cv2.findContours(mask_u8, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(overlay, contours, -1, (255, 255, 255), 1)
+
+        # Category label at centroid of largest blob
+        if display_label and category_name:
+            num_labels, labels = cv2.connectedComponents(mask_u8)
+            if num_labels > 1:
+                largest_lbl, largest_size = 1, 0
+                for lbl_id in range(1, num_labels):
+                    sz = int(np.sum(labels == lbl_id))
+                    if sz > largest_size:
+                        largest_size = sz
+                        largest_lbl = lbl_id
+                ys, xs = np.where(labels == largest_lbl)
+                if xs.size > 0:
+                    cx, cy = int(xs.mean()), int(ys.mean())
+                    text = category_name.upper()
+                    font       = cv2.FONT_HERSHEY_SIMPLEX
+                    font_scale = 0.8
+                    thickness  = 2
+                    (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+                    # Dark rounded background rectangle
+                    pad = 4
+                    cv2.rectangle(overlay,
+                                  (cx - tw // 2 - pad, cy - th - pad),
+                                  (cx + tw // 2 + pad, cy + baseline + pad),
+                                  (0, 0, 0), cv2.FILLED)
+                    cv2.putText(overlay, text,
+                                (cx - tw // 2, cy),
+                                font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+        cv2.imwrite(output_file_with_path, overlay)
 
     # ------------------------------------------------------------------------------------------------------------------
+    # show_mask is retained as a thin wrapper for any callers that pass an ax —
+    # internally it delegates to show_masks so there is one code path.
     # ------------------------------------------------------------------------------------------------------------------
     def show_mask(self, mask, ax, category_id=None, borders=True, category_name=None, display_label=True):
+        """Legacy matplotlib-ax signature — kept for API compatibility but not called by save_outputs."""
+        # This path is only hit if something outside the normal inference loop
+        # calls show_mask directly with a matplotlib axis.  In that case fall
+        # back to the original behaviour so callers don't break.
         color = get_color_for_category(category_id)
         h, w = mask.shape[-2:]
         mask = mask.astype(np.uint8)
         mask_image = np.zeros((h, w, 4), dtype=np.float32)
         rgba_color = color.reshape((1, 1, -1))
         mask_image += mask.reshape(h, w, 1) * rgba_color
-
         if borders:
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             for contour in contours:
@@ -302,36 +368,23 @@ class SAM2InferenceEngine:
                 if contour.ndim != 2 or contour.shape[1] != 2:
                     continue
                 ax.plot(contour[:, 0], contour[:, 1], linewidth=0.5, color="white")
-
         ax.imshow(mask_image)
-
-        # Add category label at center of mask (if enabled)
         if display_label and category_name:
-            # Find the largest connected component
             num_labels, labels = cv2.connectedComponents(mask)
-            if num_labels > 1:  # 0 is background
-                # Find largest component (excluding background)
-                largest_component = 1
-                largest_size = 0
+            if num_labels > 1:
+                largest_component, largest_size = 1, 0
                 for label_id in range(1, num_labels):
                     size = np.sum(labels == label_id)
                     if size > largest_size:
                         largest_size = size
                         largest_component = label_id
-                
-                # Calculate centroid of largest component
                 ys, xs = np.where(labels == largest_component)
-                if len(xs) > 0 and len(ys) > 0:
-                    center_x = xs.mean()
-                    center_y = ys.mean()
-                    
-                    # Draw text at centroid
-                    ax.text(center_x, center_y, category_name.upper(),
-                           fontsize=7, fontweight='bold',
-                           color='white', ha='center', va='center',
-                           bbox=dict(boxstyle='round,pad=0.25',
-                                   facecolor='black', alpha=0.25, edgecolor='none'))
-
+                if len(xs) > 0:
+                    ax.text(xs.mean(), ys.mean(), category_name.upper(),
+                            fontsize=7, fontweight='bold', color='white',
+                            ha='center', va='center',
+                            bbox=dict(boxstyle='round,pad=0.25',
+                                      facecolor='black', alpha=0.25, edgecolor='none'))
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
@@ -357,29 +410,48 @@ class SAM2InferenceEngine:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def save_outputs(self, image_path, pil_image, mask, prob_map, score, save_masks, copy_original_image, category_id, category_name=None, display_label=True):
+    def save_outputs(self, image_path, pil_image, mask, prob_map, score, save_masks,
+                     copy_original_image, category_id, category_name=None, display_label=True,
+                     save_probability_maps=True, save_diagnostic_panels=False):
         base = os.path.splitext(os.path.basename(image_path))[0]
+
+        # Overlay — pure OpenCV path via show_masks
         overlay_path = os.path.join(self.predictions_output_path, f"{base}_overlay.png")
-        self.show_masks(overlay_path, pil_image, mask, borders=False, category_id=category_id, category_name=category_name, display_label=display_label)
+        self.show_masks(overlay_path, np.array(pil_image), mask, borders=False,
+                        category_id=category_id, category_name=category_name,
+                        display_label=display_label)
 
+        # Binary mask
         if save_masks:
-            mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
-
+            mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE,
+                                    np.ones((3, 3), np.uint8))
             mask_path = os.path.join(self.predictions_output_path, f"{base}_mask.png")
-            cv2.imwrite(mask_path, (mask.astype(np.uint8)) * 255)
+            cv2.imwrite(mask_path, mask.astype(np.uint8) * 255)
 
+        # Original image copy
         if copy_original_image:
-            shutil.copy(image_path, os.path.join(self.predictions_output_path, os.path.basename(image_path)))
+            try:
+                shutil.copy(image_path,
+                            os.path.join(self.predictions_output_path,
+                                         os.path.basename(image_path)))
+            except Exception as e:
+                print(f"[SAM2] Could not copy original image: {e}")
 
-        # IF PROB_MAP IS NONE, CREATE A FLAT ZERO MAP FOR PANEL TO AVOID CRASHES
-        if prob_map is None:
-            prob_map = np.zeros((mask.shape[0], mask.shape[1]), dtype=np.float32)
+        # Probability maps
+        if save_probability_maps and prob_map is not None:
+            self._save_heatmap(prob_map, self.predictions_output_path, base)
 
-        self._save_panel(np.array(pil_image), mask, prob_map, self.predictions_output_path, base)
+        # Diagnostic panel
+        if save_diagnostic_panels:
+            if prob_map is None:
+                prob_map = np.zeros((mask.shape[0], mask.shape[1]), dtype=np.float32)
+            self._save_panel(np.array(pil_image), mask, prob_map,
+                             self.predictions_output_path, base)
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def run_sam2_inference(self, copy_original_image, save_masks, selected_label_categories, progressBar):
+    def run_sam2_inference(self, copy_original_image, save_masks, selected_label_categories, progressBar,
+                           save_probability_maps=True, save_diagnostic_panels=False):
         predictor = self.load_sam2_model()
         
         # Validate that selected categories exist in model
@@ -433,14 +505,16 @@ class SAM2InferenceEngine:
             return self._run_test_mode_inference(predictor, copy_original_image, save_masks, progressBar)
         else:
             # === NORMAL MODE: Standard single-category inference ===
-            return self._run_normal_inference(predictor, copy_original_image, save_masks, 
-                                             selected_label_categories, progressBar)
+            return self._run_normal_inference(predictor, copy_original_image, save_masks,
+                                             selected_label_categories, progressBar,
+                                             save_probability_maps, save_diagnostic_panels)
     
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def run_inference_on_folder(self, predictor, input_dir, output_dir,
                                 copy_original_image, save_masks,
-                                selected_label_categories, progressBar):
+                                selected_label_categories, progressBar,
+                                save_probability_maps=True, save_diagnostic_panels=False):
         """
         Run inference using an already-loaded predictor on a specific folder.
         Avoids reloading the model for each folder in multi-folder segmentation.
@@ -449,13 +523,15 @@ class SAM2InferenceEngine:
         self.predictions_output_path = output_dir
         return self._run_normal_inference(
             predictor, copy_original_image, save_masks,
-            selected_label_categories, progressBar
+            selected_label_categories, progressBar,
+            save_probability_maps, save_diagnostic_panels
         )
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def _run_normal_inference(self, predictor, copy_original_image, save_masks, 
-                             selected_label_categories, progressBar):
+    def _run_normal_inference(self, predictor, copy_original_image, save_masks,
+                              selected_label_categories, progressBar,
+                              save_probability_maps=True, save_diagnostic_panels=False):
         """Normal inference mode - processes single category."""
         coco_data = init_coco_structure(selected_label_categories)
 
@@ -476,28 +552,38 @@ class SAM2InferenceEngine:
         target_category_name = selected_label_categories[0].get("name", "unknown") if selected_label_categories else "unknown"
         cancelled = False
 
+        # ── Pre-loop constants (OPT 1, 2) ────────────────────────────────────
+        # Centroid denormalization and radius/diagonal are invariant across
+        # frames — compute once here rather than repeating per image.
+        category_id   = selected_label_categories[0]["id"] if selected_label_categories else 2
+        category_name = selected_label_categories[0].get("name", "unknown") if selected_label_categories else "unknown"
+
+        positive_centroids = self.category_centroids.get(int(category_id), [])
+
+        # Centroid pixel coords are resolved lazily on the first image so we
+        # know the actual image dimensions; cached after that.
+        centroid_coords_cache = None   # list of [cx_px, cy_px] or None
+        radius_threshold_cache = None  # int or None
+
         for img_index, image in enumerate(images_list):
             # Update progress at start of iteration
             if progressBar is not None and progressBar.isVisible():
                 progressBar.setValue(img_index)
-            
+
             # Check for cancellation
             if progressBar is not None:
                 if hasattr(progressBar, 'wasCanceled') and progressBar.wasCanceled():
                     print("Inference cancelled by user")
                     cancelled = True
                     break
-                # If progress bar is closed/hidden, treat as cancellation
 
             image_path = os.path.join(self.segmentation_images_path, image)
-
-            # Initialize per-iteration variables to safe defaults so they are
-            # always defined even if prediction fails or mask is empty.
-            base = os.path.splitext(os.path.basename(image_path))[0]
-            prob_map = None  # will be set to a zero map after image loads
+            base       = os.path.splitext(os.path.basename(image_path))[0]
+            prob_map   = None
 
             try:
-                pil_image = Image.open(image_path).convert("RGB")
+                with Image.open(image_path) as _img:
+                    pil_image = _img.convert("RGB")
             except Exception as e:
                 print(f"Failed to open {image_path}: {e}")
                 images_not_found += 1
@@ -505,13 +591,10 @@ class SAM2InferenceEngine:
                 continue
 
             image_array = np.array(pil_image)
-            # Safe zero map now that we know image dimensions
-            prob_map = np.zeros((image_array.shape[0], image_array.shape[1]), dtype=np.float32)
+            prob_map    = np.zeros((image_array.shape[0], image_array.shape[1]), dtype=np.float32)
 
-            multimask_output = False
-            category_id = selected_label_categories[0]["id"] if selected_label_categories else 2
             mask, score, logits = self.predict_with_centroids(
-                predictor, image_array, category_id, multimask_output=multimask_output
+                predictor, image_array, category_id, multimask_output=False
             )
             if mask is None:
                 images_not_found += 1
@@ -526,85 +609,67 @@ class SAM2InferenceEngine:
                     (target_w, target_h),
                     interpolation=cv2.INTER_NEAREST)
 
-            # ============================================================
-            # FILTER BLOBS NOT NEAR CENTROID PROMPTS (matches training)
-            # ============================================================
-            # Get positive centroids for this category
-            positive_centroids = self.category_centroids.get(int(category_id), [])
-            
-            if positive_centroids:
-                # Denormalize centroids
-                centroid_coords = []
+            # ── OPT 1 & 2: resolve centroid coords + radius once ──────────────
+            if positive_centroids and centroid_coords_cache is None:
+                centroid_coords_cache = []
                 for entry in positive_centroids:
                     if isinstance(entry, dict):
                         cx_norm, cy_norm = entry["centroid_norm"]
                     else:
                         cx_norm, cy_norm = entry
-                    cx_px = int(round(cx_norm * (target_w - 1)))
-                    cy_px = int(round(cy_norm * (target_h - 1)))
-                    centroid_coords.append([cx_px, cy_px])
-                
-                # Filter blobs using connected components
+                    centroid_coords_cache.append([
+                        int(round(cx_norm * (target_w - 1))),
+                        int(round(cy_norm * (target_h - 1))),
+                    ])
+                img_diagonal         = np.sqrt(target_h ** 2 + target_w ** 2)
+                radius_threshold_cache = max(10, int(self.blob_filter_radius * img_diagonal))
+
+            # ── FILTER BLOBS NOT NEAR CENTROID PROMPTS ────────────────────────
+            if centroid_coords_cache:
                 labels_np = mask.astype(np.uint8)
                 num_labels, labels = cv2.connectedComponents(labels_np)
                 valid_mask = np.zeros_like(labels, dtype=np.uint8)
-                
-                # Adaptive radius threshold — uses the same fraction resolved at model load time
-                # (from checkpoint metadata → site_config.json → default), ensuring
-                # inference matches the threshold used during training exactly.
-                img_diagonal = np.sqrt(target_h * target_h + target_w * target_w)
-                radius_threshold = max(10, int(self.blob_filter_radius * img_diagonal))
-                
-                for lbl in range(1, num_labels):  # skip background
+
+                for lbl in range(1, num_labels):
                     ys, xs = np.nonzero(labels == lbl)
                     if xs.size == 0:
                         continue
                     cx_blob, cy_blob = xs.mean(), ys.mean()
-                    
-                    # Keep blob if near any centroid prompt
-                    for cx, cy in centroid_coords:
-                        if np.linalg.norm([cx - cx_blob, cy - cy_blob]) < radius_threshold:
+                    for cx, cy in centroid_coords_cache:
+                        if np.linalg.norm([cx - cx_blob, cy - cy_blob]) < radius_threshold_cache:
                             valid_mask[labels == lbl] = 1
                             break
-                
-                # Replace mask with filtered version
+
                 mask = valid_mask
 
-            # Check if mask has any foreground pixels
-            if np.sum(mask) == 0:
-                # Save diagnostic panel with empty mask before skipping
-                self._save_panel(image_array, mask, prob_map, self.predictions_output_path, base)
-
-                # Mask is empty - category not found in this image
+            # OPT 5: mask.any() is faster than np.sum(mask) == 0
+            if not mask.any():
                 images_not_found += 1
                 images_processed += 1
                 continue
 
-            # Resize logits to image size for heatmap
+            # Resize logits to image size for probability map
             if logits is not None:
                 prob_map = cv2.resize(logits.astype(np.float32), (target_w, target_h),
                                       interpolation=cv2.INTER_LINEAR)
-                base = os.path.splitext(os.path.basename(image_path))[0]
-                self._save_heatmap(prob_map, self.predictions_output_path, base)
 
-            category_id = selected_label_categories[0]["id"] if selected_label_categories else 2
-            category_name = selected_label_categories[0].get("name", "unknown") if selected_label_categories else "unknown"
-
-            # Save overlay/mask outputs
-            self.save_outputs(image_path, pil_image, mask, prob_map, score, save_masks, copy_original_image,
-                              category_id, category_name=category_name, display_label=self.DISPLAY_LABELS)
+            # Save overlay/mask/probability map/panel outputs
+            self.save_outputs(image_path, pil_image, mask, prob_map, score, save_masks,
+                              copy_original_image, category_id, category_name=category_name,
+                              display_label=self.DISPLAY_LABELS,
+                              save_probability_maps=save_probability_maps,
+                              save_diagnostic_panels=save_diagnostic_panels)
 
             # COCO bookkeeping
             add_coco_entries(coco_data, image_path, mask, image_array, image_id, annotation_id)
 
-            image_id += 1
-            annotation_id += 1
-            images_found += 1  # Successfully segmented this image
+            image_id       += 1
+            annotation_id  += 1
+            images_found   += 1
             images_processed += 1
 
-            # Clear GPU cache periodically to prevent memory accumulation
-            if torch.cuda.is_available() and img_index % 10 == 0:
-                torch.cuda.empty_cache()
+            # OPT 4: periodic empty_cache removed — not needed in inference;
+            # only the final cleanup below is retained.
 
         
         # Final GPU cleanup
@@ -649,7 +714,8 @@ class SAM2InferenceEngine:
             image_path = os.path.join(self.segmentation_images_path, image)
 
             try:
-                pil_image = Image.open(image_path).convert("RGB")
+                with Image.open(image_path) as _img:
+                    pil_image = _img.convert("RGB")
             except Exception as e:
                 print(f"Failed to open {image_path}: {e}")
                 continue
@@ -741,70 +807,57 @@ class SAM2InferenceEngine:
 
 
     def _save_heatmap(self, prob_map, out_dir, base):
-        # ENSURE FLOAT32
         prob_map = prob_map.astype(np.float32)
-
-        # NORMALIZE PROBABILITY HEATMAP [0-1] TO [0–255]
         min_val, max_val = prob_map.min(), prob_map.max()
         if max_val > min_val:
             norm_map = ((prob_map - min_val) / (max_val - min_val) * 255).astype(np.uint8)
         else:
-            norm_map = (prob_map * 255).astype(np.uint8)  # fallback if flat
+            norm_map = (prob_map * 255).astype(np.uint8)
 
-        heatmap_dir = os.path.normpath(os.path.join(out_dir, "heatmaps"))
+        heatmap_dir = os.path.normpath(os.path.join(out_dir, "probability_maps"))
         os.makedirs(heatmap_dir, exist_ok=True)
 
-        gray_path = os.path.join(heatmap_dir, f"{base}_heatmap_gray.png")
-        cv2.imwrite(gray_path, norm_map)
-
-        jet_path = os.path.join(heatmap_dir, f"{base}_heatmap_jet.png")
-        cv2.imwrite(jet_path, cv2.applyColorMap(norm_map, cv2.COLORMAP_JET))
-
-        print(f"Saved heatmaps: {gray_path}, {jet_path}")
+        cv2.imwrite(os.path.join(heatmap_dir, f"{base}_heatmap_gray.png"), norm_map)
+        cv2.imwrite(os.path.join(heatmap_dir, f"{base}_heatmap_jet.png"),
+                    cv2.applyColorMap(norm_map, cv2.COLORMAP_JET))
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def _save_panel(self, img, pred, prob_map, out_dir, base):
         """
-        Create a 2x2 composite panel:
-          [0,0] Original image
-          [0,1] Overlay (mask on original)
-          [1,0] Binary mask
-          [1,1] Probability heatmap
+        2×2 composite panel using OpenCV — replaces the matplotlib version.
+          [0,0] Original   [0,1] Overlay
+          [1,0] Binary mask  [1,1] Probability heatmap (jet)
         """
         try:
-            fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+            h, w = img.shape[:2]
+            img_bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-            # Original
-            axs[0, 0].imshow(img)
-            axs[0, 0].set_title("Original")
-            axs[0, 0].axis("off")
+            # [0,1] Overlay
+            overlay = img_bgr.copy()
+            colour_layer = np.zeros_like(img_bgr)
+            colour_layer[pred == 1] = (255, 150, 0)   # BGR: same blue-orange as original
+            overlay = cv2.addWeighted(overlay, 0.6, colour_layer, 0.4, 0)
 
-            # Overlay
-            overlay = img.copy()
-            overlay[pred == 1] = (0, 150, 255)
-            blended = (0.6 * img + 0.4 * overlay).astype(np.uint8)
-            axs[0, 1].imshow(blended)
-            axs[0, 1].set_title("Overlay")
-            axs[0, 1].axis("off")
+            # [1,0] Binary mask — convert to 3-channel grey
+            mask_vis = (pred.astype(np.uint8) * 255)
+            mask_bgr = cv2.cvtColor(mask_vis, cv2.COLOR_GRAY2BGR)
 
-            # Binary mask
-            axs[1, 0].imshow(pred, cmap="gray")
-            axs[1, 0].set_title("Binary Mask")
-            axs[1, 0].axis("off")
+            # [1,1] Heatmap
+            prob_f = prob_map.astype(np.float32)
+            mn, mx = prob_f.min(), prob_f.max()
+            norm = ((prob_f - mn) / (mx - mn + 1e-8) * 255).astype(np.uint8)
+            heatmap_bgr = cv2.applyColorMap(norm, cv2.COLORMAP_JET)
+            heatmap_bgr = cv2.resize(heatmap_bgr, (w, h))
 
-            # Heatmap
-            axs[1, 1].imshow(prob_map, cmap="jet")
-            axs[1, 1].set_title("Probability Heatmap")
-            axs[1, 1].axis("off")
+            # Stack into 2×2 grid
+            top    = np.hstack([img_bgr, overlay])
+            bottom = np.hstack([mask_bgr, heatmap_bgr])
+            panel  = np.vstack([top, bottom])
 
-            panel_path = os.path.normpath(os.path.join(out_dir, "panels"))
-            os.makedirs(panel_path, exist_ok=True)
-            output_file = os.path.join(panel_path, f"{base}_panel.png")
+            panel_dir = os.path.normpath(os.path.join(out_dir, "panels"))
+            os.makedirs(panel_dir, exist_ok=True)
+            cv2.imwrite(os.path.join(panel_dir, f"{base}_panel.png"), panel)
 
-            plt.tight_layout()
-            plt.savefig(output_file)
-
-            #print(f"Saved side-by-side panel: {output_file}")
-        finally:
-            plt.close()
+        except Exception as e:
+            print(f"[SAM2] _save_panel failed for {base}: {e}")

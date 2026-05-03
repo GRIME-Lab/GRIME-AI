@@ -30,11 +30,11 @@ from GRIME_AI.dialogs.ML_image_processing.training_tab import TrainingTab
 from GRIME_AI.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
 from GRIME_AI.dialogs.ML_image_processing.roi_analyzer_tab import ROIAnalyzerTab
 from GRIME_AI.dialogs.ML_image_processing.correlation_analyzer_tab import CorrelationAnalyzerTab
-from GRIME_AI.dialogs.ML_image_processing.annotation_tab import AnnotationTab
 from GRIME_AI.dialogs.ML_image_processing.coco_generation import COCOGeneration
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from GRIME_AI.dialogs.ML_image_processing.annotation_analyzer_tab import AnnotationAnalyzerTab
 from GRIME_AI.dialogs.ML_image_processing.mask_viewer import CocoViewerTab
+from GRIME_AI.dialogs.ML_image_processing.surface_state_classifier_tab import SurfaceStateClassifierTab
 
 # ======================================================================================================================
 # ======================================================================================================================
@@ -103,15 +103,6 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
         self.tabWidget.addTab(self.roi_tab, "ROI Analyzer")
 
         # --------------------------------------------------------------------------------------------------------------
-        # IMAGE ANNOTATION TAB   ---   IMAGE ANNOTATION TAB   ---   IMAGE ANNOTATION TAB   ---   IMAGE ANNOTATION TAB
-        # --------------------------------------------------------------------------------------------------------------
-        # Create the Image Annotation tab widget
-        self.annotation_tab = AnnotationTab(self)
-
-        # Add Image Annotation tab to the tabWidget
-        self.tabWidget.addTab(self.annotation_tab, "Image Annotation")
-
-        # --------------------------------------------------------------------------------------------------------------
         # COCO GENERATION TAB    ---    COCO GENERATION TAB    ---    COCO GENERATION TAB    ---    COCO GENERATION TAB
         # --------------------------------------------------------------------------------------------------------------
         self.coco_generation_tab = COCOGeneration(self)
@@ -146,6 +137,18 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
         self.tabWidget.addTab(self.correlation_tab, "Correlation Analyzer (EXPERIMENTAL)")
 
         # --------------------------------------------------------------------------------------------------------------
+        #  SURFACE STATE CLASSIFIER TAB   ---   SURFACE STATE CLASSIFIER TAB   ---   SURFACE STATE CLASSIFIER TAB
+        # --------------------------------------------------------------------------------------------------------------
+        self.surface_state_tab = SurfaceStateClassifierTab(self)
+
+        loadUi(ui_path("ML_image_processing/surface_state_classifier_tab.ui"), self.surface_state_tab)
+
+        self.surface_state_tab.configure_filmstrip()
+        self.surface_state_tab.wire_connections()
+
+        self.tabWidget.addTab(self.surface_state_tab, "Surface State Classifier")
+
+        # --------------------------------------------------------------------------------------------------------------
         # LOAD CONFIGURATION SETTINGS THAT MAY BE REQUIRED FOR THE  TABS
         # --------------------------------------------------------------------------------------------------------------
         settings_folder = Path(GRIME_AI_Save_Utils().get_settings_folder()).resolve()
@@ -170,24 +173,6 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
                 # File exists but is empty or invalid JSON → reset
                 self.site_config = mgr.create_template()
                 self.update_model_config()
-
-        # --------------------------------------------------------------------------------------------------------------
-        ###JES hide GRIME AI annotation/labeling; users must use CVAT
-        # JES - The Image Annotation/Labeling functionality is currently in development and not intended for public release.
-        # JES - Access is restricted to the development team. While it may be technically possible to circumvent
-        # JES - these restrictions, GRIME Lab and its developers accept no liability or responsibility for any
-        # JES - consequences arising from such actions.
-        #
-        # JES - Licensed under the Apache License, Version 2.0 (the "License");
-        # JES - you may not use this file except in compliance with the License.
-        # JES - You may obtain a copy of the License at:
-        # JES -     http://www.apache.org/licenses/LICENSE-2.0
-        # --------------------------------------------------------------------------------------------------------------
-        tb = self.tabWidget.tabBar()
-        if getpass.getuser() == "johns" or getpass.getuser() == "tgilmore10":
-            tb.setTabVisible(3, True)
-        else:
-            tb.setTabVisible(3, False)
 
         # Initialize tracking variables.
         self.selected_label_categories = []
@@ -663,6 +648,12 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
 
     def get_saved_masks(self):
         return self.segment_tab.checkBox_save_predicted_masks.isChecked()
+
+    def get_save_probability_maps(self):
+        return self.segment_tab.checkBox_save_probability_maps.isChecked()
+
+    def get_save_diagnostic_panels(self):
+        return self.segment_tab.checkBox_save_diagnostic_panels.isChecked()
 
     def get_selected_training_labels(self):
         return self.training_tab.get_selected_training_labels()

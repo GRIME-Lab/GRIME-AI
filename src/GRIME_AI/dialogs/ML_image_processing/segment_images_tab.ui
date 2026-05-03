@@ -156,6 +156,22 @@
                </property>
               </widget>
              </item>
+             <item>
+              <widget class="QCheckBox" name="checkBox_save_diagnostic_panels">
+               <property name="font">
+                <font>
+                 <family>Arial</family>
+                 <pointsize>11</pointsize>
+                </font>
+               </property>
+               <property name="text">
+                <string>Save Diagnostic Panels</string>
+               </property>
+               <property name="checked">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
             </layout>
            </widget>
           </item>
