@@ -1,9 +1,18 @@
 {% set name = "grime-ai" %}
-{% set version = "1.1.0.0" %}
+
+{% set version_file = load_file_data('src/GRIME_AI/version.py', "toml") %}
+{% set version = version_file.get('SW_VERSION') %}
+{% set release = version_file.get('RELEASE') %}
+{% set build_date = version_file.get('BUILD_DATE').replace('-','') %}
+
 
 package:
   name: {{ name|lower }}
+  {% if release == 'nightly' %}
+  version: {{ version }}.dev{{ build_date }}
+  {% else %}
   version: {{ version }}
+  {% endif %}
 
 source:
     path: ../..
