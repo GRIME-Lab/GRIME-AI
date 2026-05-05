@@ -17,17 +17,6 @@ jobs:
           conda activate base
           git clone -b $GITHUB_REF_NAME $GITHUB_SERVER_URL/$GITHUB_REPOSITORY .
 
-      - name: Set nightly version
-        run: |
-          DATE=$(date +%Y%m%d)
-          BASE=$(sed -n 's/.*{%.*set version.*=.*"\(.*\)".*/\1/p' recipe/grime-ai/meta.yaml)
-          echo "NIGHTLY_VERSION=${BASE}.dev${DATE}" >> $GITHUB_ENV
-
-      - name: Patch meta.yaml version
-        run: |
-          sed -i "s/{% set version = \".*\" %}/{% set version = \"$NIGHTLY_VERSION\" %}/" \
-            recipe/grime-ai/meta.yaml
-
       - name: Build and upload to dev label
         env:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
