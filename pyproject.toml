@@ -4,8 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "grime-ai"
-version = "1.1.0.0"
-dynamic = ["dependencies"]
+dynamic = ["dependencies", "version"]
 requires-python = ">=3"
 authors = [
   {name = "Troy Gilmore", email = "gilmore@unl.edu"},
