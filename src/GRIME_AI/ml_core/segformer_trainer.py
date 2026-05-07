@@ -450,7 +450,8 @@ class SegFormerTrainer:
             site_name=site_name,
             lr=lr,
             normalize=True,
-            file_prefix="Normalized"
+            file_prefix="Normalized",
+            target_label=self.cfg.target_category_name
         )
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()

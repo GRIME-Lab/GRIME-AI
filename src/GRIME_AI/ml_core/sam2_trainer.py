@@ -304,6 +304,57 @@ class SAM2Trainer:
         val_split = float(self.site_config.get("val_split", 0.2))
         val_split = max(0.10, min(0.40, val_split))  # clamp to valid range
         train_split = round(1.0 - val_split, 2)
+
+        # Seasonal hold-out: remove images from one or more hold-out seasons before splitting.
+        # Config key is "holdout_seasons" (list). Legacy single-value key "knockout_season"
+        # is also supported for backward compatibility.
+        holdout_seasons = self.site_config.get("holdout_seasons", [])
+        if not holdout_seasons:
+            legacy = self.site_config.get("knockout_season", None)
+            if legacy:
+                holdout_seasons = [legacy]
+        season_type = self.site_config.get("season_type", "Meteorological")
+
+        if holdout_seasons:
+            from GRIME_AI.ml_core.seasonal_dropout import filter_seasons, extract_date_from_usgs_filename, get_season_date_range
+            all_image_keys = list(self.dataset.keys())
+            kept_keys, excluded_keys = filter_seasons(all_image_keys, holdout_seasons, season_type)
+            if excluded_keys:
+                print(f"[Seasonal Hold-Out] Excluding {len(excluded_keys)} images from "
+                      f"{', '.join(holdout_seasons)} ({season_type}).")
+                self.dataset = {k: self.dataset[k] for k in kept_keys}
+
+                # Save hold-out manifest CSV
+                import csv as _csv
+                seasons_label     = "_".join(s.lower() for s in holdout_seasons)
+                knockout_filename = os.path.join(
+                    self.model_output_folder,
+                    f"{season_type.lower()}_{seasons_label}_seasonal_holdouts.csv"
+                )
+                with open(knockout_filename, "w", newline="") as _f:
+                    writer = _csv.writer(_f)
+                    writer.writerow([
+                        "File Date",
+                        "Image Filename",
+                        "Season Type",
+                        "Hold-Out Seasons",
+                        "Season Date Range",
+                    ])
+                    for k in excluded_keys:
+                        bare      = str(k).replace("\\", "/").split("/")[-1]
+                        file_date = extract_date_from_usgs_filename(bare)
+                        from GRIME_AI.ml_core.seasonal_dropout import get_season
+                        img_season = get_season(file_date, season_type) if file_date else ""
+                        date_range = get_season_date_range(img_season, season_type) if img_season else ""
+                        writer.writerow([
+                            str(file_date) if file_date else "",
+                            bare,
+                            season_type,
+                            ", ".join(holdout_seasons),
+                            date_range,
+                        ])
+                print(f"[Seasonal Hold-Out] Manifest saved to: {knockout_filename}")
+
         train_images, val_images = self.dataset_util.split_dataset(
             self.dataset, train_split=train_split, val_split=val_split
         )
@@ -438,7 +489,10 @@ class SAM2Trainer:
                     self.train_sam(lr, self.weight_decay, train_images, val_images, 
                                  epochs=self.num_epochs, target_label=category_name)
                     self.training_time_seconds = _time.perf_counter() - _training_start
-                    self._plot_training_graphs(lr)
+                    if self.epoch_list:
+                        self._plot_training_graphs(lr)
+                    else:
+                        print(f"[SAM2Trainer] No epochs completed for {category_name} lr={lr} — skipping report.")
         else:
             # === NORMAL MODE: Train on ALL categories from TRAINING_CATEGORIES ===
             training_cats = self.site_config.get("train_model", {}).get("TRAINING_CATEGORIES", [])
@@ -468,7 +522,10 @@ class SAM2Trainer:
                     self.train_sam(lr, self.weight_decay, train_images, val_images,
                                      epochs=self.num_epochs, target_label=category_name)
                     self.training_time_seconds = _time.perf_counter() - _training_start
-                    self._plot_training_graphs(lr)
+                    if self.epoch_list:
+                        self._plot_training_graphs(lr)
+                    else:
+                        print(f"[SAM2Trainer] No epochs completed for {category_name} lr={lr} — skipping report.")
 
 
 
@@ -559,6 +616,33 @@ class SAM2Trainer:
             target_label = self.site_config["load_model"]["SEGMENTATION_CATEGORIES"][0]
         # else: use the provided target_label (TEST_MODE)
 
+        # ── Pre-load validation images and masks into memory ─────────────────
+        # Eliminates repeated disk I/O during validation each epoch.
+        # predictor.set_image() is still called each epoch but images and masks
+        # are served from memory rather than re-read from disk.
+        val_cache = []
+        if val_images:
+            print(f"[SAM2Trainer] Pre-loading {len(val_images)} validation images into memory...")
+            target_id_for_cache = next(
+                (c["id"] for c in self.categories if c["name"] == target_label), None
+            )
+            for vf in val_images:
+                try:
+                    img_np = np.array(Image.open(vf).convert("RGB"))
+                except Exception as e:
+                    print(f"[SAM2Trainer] Could not load val image {vf}: {e}")
+                    continue
+                result = self.dataset_util.load_true_mask(
+                    vf, self.annotation_index, mode="binary", target_id=target_id_for_cache
+                )
+                true_mask = result[0] if isinstance(result, tuple) else result
+                if true_mask is None:
+                    print(f"[SAM2Trainer] No annotation for {vf} — skipping from val cache.")
+                    continue
+                val_cache.append({"file": vf, "image_np": img_np, "true_mask": true_mask})
+            print(f"[SAM2Trainer] Val cache ready: {len(val_cache)} images.")
+        # ─────────────────────────────────────────────────────────────────────
+
         try:
             for epoch in range(epochs):
                 print(f"\nEpoch {epoch + 1}/{epochs}")
@@ -631,12 +715,14 @@ class SAM2Trainer:
                 # Skip validation during warmup period (first 10% of epochs)
                 validation_warmup_epochs = max(1, int(epochs * 0.1))
 
-                if val_images and (epoch + 1) > validation_warmup_epochs:
+                if val_cache and (epoch + 1) > validation_warmup_epochs:
+                    is_last_epoch = (epoch + 1 == epochs)
                     avg_val_loss, val_accuracy, miou, avg_val_dice, avg_val_iou = self._validate_one_epoch(
-                        val_images=val_images,
+                        val_cache=val_cache,
                         predictor=predictor,
                         progressBar=progressBar,
-                        target_label=target_label
+                        target_label=target_label,
+                        save_overlays=is_last_epoch
                     )
 
                     if avg_val_loss is None:
@@ -809,13 +895,17 @@ class SAM2Trainer:
         Selects the best available SDPA backend once, to be reused throughout training.
         Returns the selected backend or None if all fail.
         """
+        # Enable all SDP backends — allows CuDNN fused attention on RTX 40-series
+        torch.backends.cuda.enable_cudnn_sdp(True)
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
+
         desired = ("FLASH_ATTENTION", "XFORMERS", "EFFICIENT_ATTENTION", "MATH")
         backends = [getattr(SDPBackend, name) for name in desired if hasattr(SDPBackend, name)]
 
         print("\n=== Selecting SDPA Backend ===")
         for backend in backends:
             try:
-                # Quick test with dummy tensors
                 dummy_q = torch.randn(1, 8, 16, 64, device=device)
                 dummy_k = torch.randn(1, 8, 16, 64, device=device)
                 dummy_v = torch.randn(1, 8, 16, 64, device=device)
@@ -1152,16 +1242,14 @@ class SAM2Trainer:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def _validate_one_epoch(self, val_images, predictor, progressBar, target_label):
+    def _validate_one_epoch(self, val_cache, predictor, progressBar, target_label,
+                            save_overlays=False):
         """
-        Runs one validation epoch. Returns (avg_val_loss, val_accuracy, miou, avg_val_dice, avg_val_iou).
+        Runs one validation epoch using pre-cached image embeddings.
 
-        FIXED: Now uses logits with BCEWithLogitsLoss (matches training approach).
-        FIXED: Uses n_items for avg_val_loss calculation (Issue #9).
-        FIXED: Added error handling around predict() (Issue #11).
-        FIXED: Removed unused loss_fn parameter.
-        FIXED: Added pixel sampling for memory efficiency.
-        FIXED: Removed duplicate variable references (best_mask_tensor, prob_full).
+        val_cache: list of dicts produced by the pre-caching block in train_sam.
+                   Each dict has: file, image_np, true_mask, features, orig_hw, input_size.
+        save_overlays: only write overlay PNGs when True (last epoch only).
         """
         import torch.nn.functional as F
 
@@ -1182,16 +1270,15 @@ class SAM2Trainer:
         bce_loss_fn = nn.BCEWithLogitsLoss()
         dice_loss_fn = DiceLoss()
 
-        # target_label is now passed as parameter (works for both normal and TEST_MODE)
         target_id = next((c["id"] for c in self.categories if c["name"] == target_label), None)
+
         with torch.no_grad():
-            for val_idx, val_image_file in enumerate(val_images):
+            for val_idx, cached in enumerate(val_cache):
                 if self.progress_bar_closed:
                     self._terminate_validation(progressBar)
                     return None, None, None, None, None
 
-                # Initialize all per-image tensors to None so del is always safe
-                # even if the image is skipped via continue
+                # Initialize per-image tensors to None so del is always safe
                 iou_actual = None
                 logit_tensor = None
                 logit_upsampled = None
@@ -1199,20 +1286,13 @@ class SAM2Trainer:
                 pred_binary = None
                 val_true_mask_tensor = None
 
-                val_image = np.array(Image.open(val_image_file).convert("RGB"))
+                val_image   = cached["image_np"]
+                val_true_mask = cached["true_mask"]
 
-                result = self.dataset_util.load_true_mask(
-                    val_image_file, self.annotation_index, mode="binary", target_id=target_id
-                )
-                val_true_mask = result[0] if isinstance(result, tuple) else result
-
-                if val_true_mask is None:
-                    print(f"No annotation found for validation image {val_image_file}, skipping.")
-                    continue
-
+                # Re-encode image each epoch (images served from memory cache)
                 predictor.set_image(val_image)
 
-                # ===== BUILD CENTROID PROMPTS (matches training and inference) =====
+                # Build centroid prompts
                 h_img, w_img = val_image.shape[:2]
                 point_coords, point_labels = build_centroid_point_prompts(
                     category_id=target_id,
@@ -1223,14 +1303,11 @@ class SAM2Trainer:
                     random_seed=42
                 )
 
-                # Guard: if no centroids yet (e.g. called before epoch 1 completes),
-                # skip this image rather than producing unprompted metrics silently.
                 if point_coords is None:
-                    print(f"  Validation skipped for {val_image_file} — "
+                    print(f"  Validation skipped for {cached['file']} — "
                           f"no centroids yet for category '{target_label}' (ID {target_id}).")
                     continue
 
-                # ===== ERROR HANDLING =====
                 try:
                     masks, scores, low_res_logits = predictor.predict(
                         point_coords=point_coords,
@@ -1239,53 +1316,36 @@ class SAM2Trainer:
                     )
 
                     if masks.size == 0 or scores.size == 0:
-                        print(f"Warning: No masks predicted for {val_image_file}")
+                        print(f"Warning: No masks predicted for {cached['file']}")
                         continue
 
                 except Exception as e:
-                    print(f"Error during prediction for {val_image_file}: {e}")
+                    print(f"Error during prediction for {cached['file']}: {e}")
                     continue
 
                 best_idx = int(np.argmax(scores))
+                best_logits = low_res_logits[best_idx]
 
-                # ===== LOGITS APPROACH =====
-                # Get logits before sigmoid (low resolution)
-                best_logits = low_res_logits[best_idx]  # [256, 256]
-
-                # Convert to tensor
                 logit_tensor = torch.tensor(
-                    best_logits,
-                    dtype=torch.float32,
-                    device=device
-                ).unsqueeze(0).unsqueeze(0)  # [1, 1, 256, 256]
+                    best_logits, dtype=torch.float32, device=device
+                ).unsqueeze(0).unsqueeze(0)
 
-                # Prepare ground truth mask
                 if len(val_true_mask.shape) > 2:
                     val_true_mask = val_true_mask[:, :, 0]
 
                 val_true_mask_tensor = torch.tensor(
-                    val_true_mask,
-                    dtype=torch.float32,
-                    device=device
-                ).unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
+                    val_true_mask, dtype=torch.float32, device=device
+                ).unsqueeze(0).unsqueeze(0)
 
-                # Upsample logits to match ground truth size
                 H, W = val_true_mask_tensor.shape[2:]
                 logit_upsampled = F.interpolate(
-                    logit_tensor,
-                    size=(H, W),
-                    mode='bilinear',
-                    align_corners=False
-                )  # [1, 1, H, W]
+                    logit_tensor, size=(H, W), mode='bilinear', align_corners=False
+                )
 
-                # Compute BCE loss on LOGITS (same as training)
-                bce_val = bce_loss_fn(logit_upsampled, val_true_mask_tensor).item()
-
-                # Compute Dice loss on PROBABILITIES
+                bce_val  = bce_loss_fn(logit_upsampled, val_true_mask_tensor).item()
                 prob_upsampled = torch.sigmoid(logit_upsampled)
                 dice_val = dice_loss_fn(prob_upsampled, val_true_mask_tensor).item()
 
-                # Compute score loss (IoU prediction vs actual IoU)
                 pred_binary = (prob_upsampled > 0.5).float()
                 inter = (val_true_mask_tensor * pred_binary).sum()
                 union = val_true_mask_tensor.sum() + pred_binary.sum() - inter
@@ -1294,57 +1354,45 @@ class SAM2Trainer:
                     iou_actual = torch.tensor(1.0, device=device)
 
                 score_val = torch.abs(scores[best_idx] - iou_actual).item()
-
-                # Combined loss (same weights as training)
                 val_loss += 0.5 * bce_val + 0.5 * dice_val + 0.05 * score_val
 
-                # Metrics for tracking
                 d_metric = dice_coeff_from_probs(prob_upsampled, val_true_mask_tensor)
                 j_metric = iou_from_probs(prob_upsampled, val_true_mask_tensor)
                 dice_sum += d_metric
-                iou_sum += j_metric
-                n_items += 1
+                iou_sum  += j_metric
+                n_items  += 1
 
-                # ===== ACCURACY & PIXEL SAMPLING =====
                 pred_binary_np = pred_binary.cpu().numpy()
                 true_binary_np = val_true_mask_tensor.cpu().numpy()
                 val_correct += np.sum(pred_binary_np == true_binary_np)
-                val_total += np.prod(true_binary_np.shape)
+                val_total   += np.prod(true_binary_np.shape)
 
-                # Flatten for sampling
-                true_flat = true_binary_np.flatten()
-                pred_flat = pred_binary_np.flatten()
-
-                # Get configuration for sampling
+                true_flat  = true_binary_np.flatten()
+                pred_flat  = pred_binary_np.flatten()
                 max_samples = self.site_config.get('max_pixel_samples', 10000)
                 total_pixels = len(true_flat)
-
-                # Get scores (use prob_upsampled, not undefined prob_full)
                 score_flat = prob_upsampled.squeeze().cpu().numpy().flatten()
 
-                # Sample pixels for memory efficiency
                 if total_pixels > max_samples:
                     sample_indices = np.random.choice(total_pixels, max_samples, replace=False)
-                    true_sampled = true_flat[sample_indices]
-                    pred_sampled = pred_flat[sample_indices]
+                    true_sampled  = true_flat[sample_indices]
+                    pred_sampled  = pred_flat[sample_indices]
                     score_sampled = score_flat[sample_indices]
                 else:
-                    true_sampled = true_flat
-                    pred_sampled = pred_flat
+                    true_sampled  = true_flat
+                    pred_sampled  = pred_flat
                     score_sampled = score_flat
 
-                # Add SAMPLED pixels to lists
                 self.val_true_list.extend(int(x) for x in true_sampled)
                 self.val_pred_list.extend(int(x) for x in pred_sampled)
                 self.val_score_list.extend(score_sampled.tolist())
 
-                # ===== SAVE OVERLAY IMAGES =====
-                if val_idx < self.validation_overlay_samples:
+                # Overlay images: only on the last epoch to avoid repeated disk I/O
+                if save_overlays and val_idx < self.validation_overlay_samples:
                     img_vis = val_image.copy()
                     overlay = (prob_upsampled.squeeze().cpu().numpy() * 255).astype(np.uint8)
                     overlay_color = cv2.applyColorMap(overlay, cv2.COLORMAP_JET)
-                    alpha = 0.4
-                    blended = cv2.addWeighted(img_vis, 1.0, overlay_color, alpha, 0.0)
+                    blended = cv2.addWeighted(img_vis, 1.0, overlay_color, 0.4, 0.0)
                     overlay_dir = os.path.join(self.model_output_folder, "validation_overlays")
                     os.makedirs(overlay_dir, exist_ok=True)
                     out_path = os.path.join(
@@ -1353,7 +1401,6 @@ class SAM2Trainer:
                     )
                     cv2.imwrite(out_path, cv2.cvtColor(blended, cv2.COLOR_RGB2BGR))
 
-                # Free validation tensors to prevent VRAM accumulation
                 del logit_tensor, logit_upsampled, prob_upsampled, pred_binary, val_true_mask_tensor, iou_actual
 
                 progressBar.setValue(progressBar.getValue() + 1)

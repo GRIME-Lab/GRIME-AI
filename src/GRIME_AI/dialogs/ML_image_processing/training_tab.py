@@ -463,6 +463,9 @@ class TrainingTab(QtWidgets.QWidget):
         self.spinBox_valSplit.valueChanged.connect(self._on_val_split_changed)
         self.spinBox_trainSplit.valueChanged.connect(self._on_train_split_changed)
 
+        # Hold-out seasons dual listbox — no connections needed; drag-drop is handled by Qt
+        self._init_holdout_season_lists()
+
         # YOLO base weights combobox
         self._populate_yolo_weights_combobox()
         self.pushButton_refreshYoloWeights.clicked.connect(self._populate_yolo_weights_combobox)
@@ -1013,6 +1016,10 @@ class TrainingTab(QtWidgets.QWidget):
             if idx >= 0:
                 self.comboBox_yoloWeights.setCurrentIndex(idx)
 
+        # Hold-out seasons — restore from config
+        holdout_seasons = cfg.get("holdout_seasons", [])
+        self._set_holdout_seasons(holdout_seasons)
+
         # Folder lists
         self.listWidget_availableFolders.clear()
         for p in cfg.get("available_folders", []):
@@ -1079,6 +1086,7 @@ class TrainingTab(QtWidgets.QWidget):
                 self.comboBox_yoloWeights.currentText()
                 if self.comboBox_yoloWeights.isEnabled() else ""
             ),
+            "holdout_seasons": self._get_holdout_seasons(),
             "segmentation_images_path": self.lineEdit_model_training_images_path.text().strip(),
             "available_folders": [
                 self.listWidget_availableFolders.invisibleRootItem().child(i).text(0).lstrip('★ ')
@@ -2007,6 +2015,37 @@ class TrainingTab(QtWidgets.QWidget):
             self._split_updating = False
 
     # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    # ── Hold-out seasons dual listbox ─────────────────────────────────────────
+
+    _SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"]
+    _SEASON_TYPE  = "Meteorological"  # hardcoded; no UI control needed
+
+    def _init_holdout_season_lists(self) -> None:
+        """Ensure all four seasons are distributed between the two listboxes."""
+        # Seasons already populated in UI file on left side; right starts empty.
+        # Nothing to do on init beyond what the .ui file provides.
+        pass
+
+    def _get_holdout_seasons(self) -> list:
+        """Return list of season names currently in the hold-out listbox."""
+        lw = self.listWidget_holdoutSeasons
+        return [lw.item(i).text() for i in range(lw.count())]
+
+    def _set_holdout_seasons(self, holdout_seasons: list) -> None:
+        """
+        Distribute seasons between available and hold-out listboxes based on
+        the provided holdout list. Resets both listboxes.
+        """
+        holdout_set = set(holdout_seasons)
+        self.listWidget_availableSeasons.clear()
+        self.listWidget_holdoutSeasons.clear()
+        for season in self._SEASON_ORDER:
+            if season in holdout_set:
+                self.listWidget_holdoutSeasons.addItem(season)
+            else:
+                self.listWidget_availableSeasons.addItem(season)
+
     # ------------------------------------------------------------------------
     def _update_blob_filter_pct_label(self):
         """

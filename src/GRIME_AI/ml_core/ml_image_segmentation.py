@@ -159,6 +159,19 @@ class MLImageSegmentation:
             if not self._validate_sam2_categories(engine, selected_label_categories, progressBar):
                 return None
 
+        # ── Season filter ─────────────────────────────────────────────────────
+        segment_seasons      = self.config.get("segment_seasons", [])
+        season_filter_active = bool(segment_seasons)
+        if season_filter_active:
+            try:
+                from GRIME_AI.ml_core.seasonal_only import filter_seasons_only
+                print(f"[MLImageSegmentation] Season filter active: "
+                      f"{', '.join(segment_seasons)} (Meteorological) — only these seasons will be segmented.")
+            except ImportError:
+                print("[MLImageSegmentation] WARNING: seasonal_only not available; "
+                      "season filter disabled.")
+                season_filter_active = False
+
         for folder_entry in self.segmentation_image_folders:
             input_dir = os.path.normpath(folder_entry["path"])
             if not os.path.isdir(input_dir):
@@ -179,6 +192,17 @@ class MLImageSegmentation:
             print(f"[MLImageSegmentation] Segmenting: {input_dir}")
             print(f"[MLImageSegmentation] Output:     {output_dir}")
 
+            # Build filtered image list if season filter is active
+            image_filter = None
+            if season_filter_active:
+                VALID_EXTS = {'.jpg', '.jpeg', '.png'}
+                all_files = [f for f in os.listdir(input_dir)
+                             if os.path.splitext(f)[1].lower() in VALID_EXTS]
+                kept, excluded = filter_seasons_only(all_files, segment_seasons, "Meteorological")
+                image_filter = set(kept)
+                print(f"[MLImageSegmentation] Season filter: {len(kept)} images kept "
+                      f"({', '.join(segment_seasons)}), {len(excluded)} excluded")
+
             result = None
 
             if mode.lower() == "sam2":
@@ -186,7 +210,8 @@ class MLImageSegmentation:
                     predictor, input_dir, output_dir,
                     copy_original_image, save_masks, selected_label_categories, progressBar,
                     save_probability_maps=save_probability_maps,
-                    save_diagnostic_panels=save_diagnostic_panels
+                    save_diagnostic_panels=save_diagnostic_panels,
+                    image_filter=image_filter
                 )
 
             elif mode.lower() == "segformer":

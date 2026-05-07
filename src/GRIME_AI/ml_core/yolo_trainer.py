@@ -1032,6 +1032,7 @@ class YOLOTrainer:
             lr=lr,
             normalize=True,
             file_prefix="Normalized",
+            target_label=", ".join(c["name"] for c in self.categories)
         )
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()

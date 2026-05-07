@@ -708,6 +708,64 @@
         </item>
 
         <item row="8" column="0" colspan="6">
+         <widget class="QWidget" name="widget_holdoutSeasons">
+          <layout class="QVBoxLayout" name="verticalLayout_holdoutSeasons">
+           <property name="leftMargin"><number>0</number></property>
+           <property name="topMargin"><number>2</number></property>
+           <property name="rightMargin"><number>0</number></property>
+           <property name="bottomMargin"><number>2</number></property>
+           <property name="spacing"><number>2</number></property>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_holdoutLabels">
+             <item>
+              <widget class="QLabel" name="label_availableSeasons">
+               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
+               <property name="text"><string>Available Seasons</string></property>
+               <property name="alignment"><set>Qt::AlignCenter</set></property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="label_holdoutSeasons">
+               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
+               <property name="text"><string>Hold-Out Seasons</string></property>
+               <property name="alignment"><set>Qt::AlignCenter</set></property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_holdoutLists">
+             <item>
+              <widget class="QListWidget" name="listWidget_availableSeasons">
+               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
+               <property name="toolTip"><string>Drag seasons to Hold-Out Seasons to exclude them from training.</string></property>
+               <property name="dragDropMode"><enum>QAbstractItemView::DragDrop</enum></property>
+               <property name="defaultDropAction"><enum>Qt::MoveAction</enum></property>
+               <property name="selectionMode"><enum>QAbstractItemView::ExtendedSelection</enum></property>
+               <property name="maximumHeight"><number>62</number></property>
+               <item><property name="text"><string>Winter</string></property></item>
+               <item><property name="text"><string>Spring</string></property></item>
+               <item><property name="text"><string>Summer</string></property></item>
+               <item><property name="text"><string>Fall</string></property></item>
+              </widget>
+             </item>
+             <item>
+              <widget class="QListWidget" name="listWidget_holdoutSeasons">
+               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
+               <property name="toolTip"><string>Seasons listed here will be excluded from training and validation.</string></property>
+               <property name="dragDropMode"><enum>QAbstractItemView::DragDrop</enum></property>
+               <property name="defaultDropAction"><enum>Qt::MoveAction</enum></property>
+               <property name="selectionMode"><enum>QAbstractItemView::ExtendedSelection</enum></property>
+               <property name="maximumHeight"><number>62</number></property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+
+        <item row="9" column="0" colspan="6">
          <widget class="QWidget" name="widget_yoloWeightsRow">
           <layout class="QHBoxLayout" name="horizontalLayout_yoloWeightsRow">
            <property name="leftMargin"><number>0</number></property>
