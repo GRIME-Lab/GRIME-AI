@@ -514,30 +514,40 @@ class SAM2InferenceEngine:
     def run_inference_on_folder(self, predictor, input_dir, output_dir,
                                 copy_original_image, save_masks,
                                 selected_label_categories, progressBar,
-                                save_probability_maps=True, save_diagnostic_panels=False):
+                                save_probability_maps=True, save_diagnostic_panels=False,
+                                image_filter=None):
         """
         Run inference using an already-loaded predictor on a specific folder.
         Avoids reloading the model for each folder in multi-folder segmentation.
+
+        image_filter: optional set of filenames to include. When provided only
+                      those filenames are segmented; all others are skipped.
         """
         self.segmentation_images_path = input_dir
         self.predictions_output_path = output_dir
         return self._run_normal_inference(
             predictor, copy_original_image, save_masks,
             selected_label_categories, progressBar,
-            save_probability_maps, save_diagnostic_panels
+            save_probability_maps, save_diagnostic_panels,
+            image_filter=image_filter
         )
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def _run_normal_inference(self, predictor, copy_original_image, save_masks,
                               selected_label_categories, progressBar,
-                              save_probability_maps=True, save_diagnostic_panels=False):
+                              save_probability_maps=True, save_diagnostic_panels=False,
+                              image_filter=None):
         """Normal inference mode - processes single category."""
         coco_data = init_coco_structure(selected_label_categories)
 
         os.makedirs(self.predictions_output_path, exist_ok=True)
         VALID_EXTS = ('.jpg', '.jpeg')
-        images_list = [f for f in os.listdir(self.segmentation_images_path) if f.lower().endswith(VALID_EXTS)]
+        images_list = [f for f in os.listdir(self.segmentation_images_path)
+                       if f.lower().endswith(VALID_EXTS)]
+        if image_filter is not None:
+            images_list = [f for f in images_list if f in image_filter]
+            print(f"[SAM2InferenceEngine] Season filter applied: {len(images_list)} images")
         if progressBar is not None:
             progressBar.setRange(0, len(images_list) + 1)
 

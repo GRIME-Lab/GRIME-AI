@@ -178,6 +178,11 @@ class SegmentImagesTab(QWidget):
         self.checkBox_save_probability_maps.setChecked(load_model_conf.get("save_probability_maps", True))
         self.checkBox_save_diagnostic_panels.setChecked(load_model_conf.get("save_diagnostic_panels", False))
 
+        # Season filter
+        # Segment seasons — restore from config
+        segment_seasons = load_model_conf.get("segment_seasons", [])
+        self._set_segment_seasons(segment_seasons)
+
         # Set the appropriate radio button based on MODEL
         if model_type == "sam2":
             self.radioButton_segment_model_sam2.setChecked(True)
@@ -249,6 +254,10 @@ class SegmentImagesTab(QWidget):
             if self.listWidget_labels.item(idx) and self.listWidget_labels.item(idx).isSelected()
         ]
         site_config["load_model"]["SEGMENTATION_CATEGORIES"] = selected_labels
+
+        # Season filter
+        # Segment seasons
+        site_config["load_model"]["segment_seasons"] = self._get_segment_seasons()
 
         # Selected model type from radio buttons
         if self.radioButton_segment_model_sam2.isChecked():
@@ -383,6 +392,10 @@ class SegmentImagesTab(QWidget):
 
         self.checkBox_save_diagnostic_panels.toggled.connect(self.on_save_diagnostic_panels_toggled)
         self.checkBox_save_diagnostic_panels.toggled.connect(self.update_model_config)
+
+        # Segment seasons dual listbox — no signal connections needed.
+        # Placeholder cleanup is handled lazily in _get_segment_seasons().
+        self._init_segment_season_lists()
 
         # Labels list affects segment button state
         try:
@@ -874,6 +887,50 @@ class SegmentImagesTab(QWidget):
                 item.setSelected(True)  # mark as selected
                 self.listWidget_labels.setCurrentItem(item)  # make it active
                 self.listWidget_labels.scrollToItem(item)  # ensure visible
+
+    # ── Season filter helpers (mirrors training_tab pattern) ──────────────────
+
+    # ── Segment seasons dual listbox ──────────────────────────────────────────
+
+    _SEASON_ORDER    = ["Winter", "Spring", "Summer", "Fall"]
+    _SEASON_TYPE     = "Meteorological"
+    _ALL_SEASONS_PLACEHOLDER = "All Seasons"
+
+    def _init_segment_season_lists(self) -> None:
+        """Ensure right listbox shows 'All Seasons' placeholder on startup."""
+        pass
+
+    def _get_segment_seasons(self) -> list:
+        """Return list of seasons to segment, or [] if all seasons.
+        Also cleans up the placeholder if real seasons are present."""
+        lw = self.listWidget_segmentSeasons
+        items = [lw.item(i).text() for i in range(lw.count())]
+        real = [t for t in items if t != self._ALL_SEASONS_PLACEHOLDER]
+
+        # Lazy cleanup: remove placeholder if real seasons were dragged in
+        if real and self._ALL_SEASONS_PLACEHOLDER in items:
+            for i in range(lw.count() - 1, -1, -1):
+                if lw.item(i).text() == self._ALL_SEASONS_PLACEHOLDER:
+                    lw.takeItem(i)
+
+        # Lazy restore: if empty, put placeholder back
+        if not real and lw.count() == 0:
+            lw.addItem(self._ALL_SEASONS_PLACEHOLDER)
+
+        return real  # empty list means all seasons
+
+    def _set_segment_seasons(self, segment_seasons: list) -> None:
+        """Restore dual-listbox state from a list of seasons to segment."""
+        season_set = set(segment_seasons)
+        self.listWidget_availableSegmentSeasons.clear()
+        self.listWidget_segmentSeasons.clear()
+        for season in self._SEASON_ORDER:
+            if season in season_set:
+                self.listWidget_segmentSeasons.addItem(season)
+            else:
+                self.listWidget_availableSegmentSeasons.addItem(season)
+        if not season_set:
+            self.listWidget_segmentSeasons.addItem(self._ALL_SEASONS_PLACEHOLDER)
 
 
 # WILL NEED THIS IN ORDER TO UPDATE THE JSON SETTINGS FILE

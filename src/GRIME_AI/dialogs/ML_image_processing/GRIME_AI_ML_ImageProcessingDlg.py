@@ -28,6 +28,7 @@ from PyQt5.uic import loadUi
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
 from GRIME_AI.dialogs.ML_image_processing.training_tab import TrainingTab
 from GRIME_AI.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
+from GRIME_AI.dialogs.ML_image_processing.holdout_validation_tab import HoldoutValidationTab
 from GRIME_AI.dialogs.ML_image_processing.roi_analyzer_tab import ROIAnalyzerTab
 from GRIME_AI.dialogs.ML_image_processing.correlation_analyzer_tab import CorrelationAnalyzerTab
 from GRIME_AI.dialogs.ML_image_processing.coco_generation import COCOGeneration
@@ -84,6 +85,10 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
         # Instantiate the SegmentTab and add it to the tabWidget
         self.segment_tab = SegmentImagesTab(self)
         self.tabWidget.addTab(self.segment_tab, "Segment Images")
+
+        # Instantiate the HoldoutValidationTab and add it to the tabWidget
+        self.holdout_tab = HoldoutValidationTab(self)
+        self.tabWidget.addTab(self.holdout_tab, "Holdout Validation")
 
         self.segment_tab.ml_segment_signal.connect(self.ml_segment_signal)
 
@@ -488,6 +493,9 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
             sel_root.child(i).text(0).lstrip('\u2605 ')
             for i in range(sel_root.childCount())
         ]
+
+        # Merge segment tab values (includes segment_season, model paths, output folder, etc.)
+        site_config = self.segment_tab.get_values(site_config)
 
         return site_config
 

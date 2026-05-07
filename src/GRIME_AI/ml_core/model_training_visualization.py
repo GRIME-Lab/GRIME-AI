@@ -279,13 +279,15 @@ class ModelTrainingVisualization:
             site_name: str = "",
             lr: float = 0.0,
             normalize: bool = False,
-            file_prefix: str = ""
+            file_prefix: str = "",
+            target_label: str = ""
     ):
-        cats_sorted = sorted(self.categories, key=lambda c: c["id"])
-        labels = [c["id"] for c in cats_sorted]
-        class_names = [c["name"] for c in cats_sorted]
+        # val_true_list and val_pred_list are binary: 0 = background, 1 = target class.
+        pos_name = target_label if target_label else "target"
+        labels = [0, 1]
+        class_names = ["background", pos_name]
 
-        # force inclusion of every category by its actual id
+        # force inclusion of both classes even if one is absent
         cm = confusion_matrix(y_true, y_pred, labels=labels)
 
         if normalize:
@@ -966,6 +968,13 @@ class ModelTrainingVisualization:
         Returns:
             dict with keys: severity, findings, suggestions, summary, report_text
         """
+        # If training was cancelled before any epoch completed, nothing to report.
+        if not train_acc or not val_acc or not train_loss or not val_loss:
+            print("[ModelTrainingVisualization] save_training_report: no epoch data — skipping report.")
+            return {"severity": "critical", "findings": [], "suggestions": [],
+                    "summary": "Training cancelled before first epoch completed.",
+                    "report_text": ""}
+
         result = self.analyze_training_results(
             train_acc=train_acc,
             val_acc=val_acc,
@@ -1044,10 +1053,10 @@ class ModelTrainingVisualization:
             ("Model",              model_type or "N/A"),
             ("Learning Rate",      f"{lr:.5f}" if lr is not None else "N/A"),
             ("Epochs Completed",   str(len(val_acc))),
-            ("Final Train Accuracy", f"{train_acc[-1]:.4f}"),
-            ("Final Val Accuracy",   f"{val_acc[-1]:.4f}"),
-            ("Final Train Loss",     f"{train_loss[-1]:.4f}"),
-            ("Final Val Loss",       f"{val_loss[-1]:.4f}"),
+            ("Final Train Accuracy", f"{train_acc[-1]:.4f}" if train_acc else "N/A"),
+            ("Final Val Accuracy",   f"{val_acc[-1]:.4f}"   if val_acc   else "N/A"),
+            ("Final Train Loss",     f"{train_loss[-1]:.4f}" if train_loss else "N/A"),
+            ("Final Val Loss",       f"{val_loss[-1]:.4f}"   if val_loss  else "N/A"),
         ]
         if miou_values:
             meta_rows.append(("Final mIoU", f"{float(miou_values[-1]):.4f}"))
