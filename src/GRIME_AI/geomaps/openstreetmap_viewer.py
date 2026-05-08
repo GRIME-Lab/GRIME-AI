@@ -62,7 +62,8 @@ class OpenStreetMapWidget(QWidget):
         Returns the chosen port number.
         """
         base_path = os.path.abspath(os.path.dirname(__file__))
-        serve_root = os.path.normpath(os.path.join(base_path, ".."))
+        self._serve_root = os.path.normpath(os.path.join(base_path, ".."))
+        serve_root = self._serve_root
 
         class _Handler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
@@ -84,6 +85,14 @@ class OpenStreetMapWidget(QWidget):
         if self._server is not None:
             self._server.shutdown()
             self._server = None
+
+        map_html_path = os.path.join(self._serve_root, "map.html")
+        if os.path.exists(map_html_path):
+            try:
+                os.remove(map_html_path)
+            except OSError:
+                pass  # non-fatal
+
         super().closeEvent(event)
 
     # --------------------------------------------------------------------------------------------------------------
@@ -242,7 +251,7 @@ class OpenStreetMapWidget(QWidget):
         images_dir = os.path.join(leaflet_dir, "images")
 
         # Build HTTP-relative paths from the serve root (one level above base_path)
-        serve_root = os.path.normpath(os.path.join(base_path, ".."))
+        serve_root = self._serve_root
 
         def http_url(p):
             rel = os.path.relpath(os.path.normpath(p), serve_root).replace(os.sep, "/")
