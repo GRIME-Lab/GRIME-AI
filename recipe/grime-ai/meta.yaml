@@ -91,7 +91,7 @@ requirements:
 
 test:
   commands:
-    - grime-ai --help
+    - grime-ai --version
     - sage --help
 
 app:

@@ -4772,6 +4772,8 @@ def my_main():
 
     # Main parser
     parser = argparse.ArgumentParser(description='CLI for GRIME AI')
+    parser.add_argument("-v", "--version", action=version_action(print_version),
+                        nargs=0, help="Show version info (-v for short, --version for full details)")
 
     # Subparsers
     subparsers = parser.add_subparsers(dest='command')
@@ -4912,6 +4914,33 @@ def my_main():
 
     # SHOW MAIN WINDOW
     #frame.show()
+
+def version_action(fn):
+    class _Action(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            fn(long=option_string == "--version")
+            parser.exit()
+    return _Action
+
+def print_version(long: bool):
+    try:
+        from GRIME_AI.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
+    except ImportError:
+        SW_VERSION = globals().get('SW_VERSION', '0.0.0.0')
+        RELEASE    = 'N/A'
+        BUILD_DATE = 'N/A'
+        SHA        = 'N/A'
+
+    if not long:
+        print(SW_VERSION)
+    else:
+        print(
+            f"Version: v{SW_VERSION}\n"
+            f"Release: {RELEASE}\n"
+            f"Build date: {BUILD_DATE}\n"
+            f"Commit: {SHA}\n"
+            f"Python: {sys.version.split()[0]}"
+        )
 
 def run_cli(args):
     import re
