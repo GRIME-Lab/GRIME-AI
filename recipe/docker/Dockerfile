@@ -1,5 +1,5 @@
 FROM almalinux:8.10
-LABEL org.opencontainers.image.source https://github.com/JohnStranzl/GRIME-AI
+LABEL org.opencontainers.image.source https://github.com/GRIME-Lab/GRIME-AI
 
 RUN dnf install -y epel-release
 RUN dnf install -y -q mesa-libGLU-devel mesa-libGL-devel tcsh bzip2 libglvnd-glx xcalc
