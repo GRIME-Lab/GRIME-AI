@@ -7,6 +7,7 @@ on:
 
 jobs:
   nightly:
+    name: Nightly Conda Build
     runs-on: ubuntu-latest
     container: quay.io/condaforge/linux-anvil-cos7-x86_64
     steps:
@@ -27,3 +28,64 @@ jobs:
           conda config --set anaconda_upload yes
           conda build -c grimelab -e /opt/conda/conda_build_config.yaml \
           --label dev --user grimelab --token $ANACONDA_API_TOKEN recipe/grime-ai
+
+  nightly-container:
+    name: Nightly Container Build
+    runs-on: ubuntu-latest
+    needs: nightly
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read version.py metadata
+        id: version
+        run: |
+          python - <<'EOF'
+          import re, os
+
+          with open("src/GRIME_AI/version.py") as f:
+              content = f.read()
+
+          def get_var(name):
+              match = re.search(rf'^{name}\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
+              return match.group(1) if match else ""
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"version={get_var('SW_VERSION')}\n")
+              out.write(f"commit={get_var('SHA')[:7]}\n")
+              out.write(f"release={get_var('RELEASE')}\n")
+              out.write(f"date={get_var('BUILD_DATE')}\n")
+              out.write(f"package_name=grimelab/label/dev::grime-ai={get_var('SW_VERSION')}.dev{get_var('BUILD_DATE').replace('-','')}"\n")
+          EOF
+
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ steps.version.outputs.commit }}
+            type=raw,value=nightly,enable=${{ github.ref == 'refs/heads/main' }}
+
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./recipe/docker
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GRIME_PACKAGE=${{ steps.version.outputs.package_name }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
