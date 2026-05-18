@@ -63,7 +63,7 @@ jobs:
               out.write(f"commit={get_var('SHA')[:7]}\n")
               out.write(f"release={get_var('RELEASE')}\n")
               out.write(f"date={get_var('BUILD_DATE')}\n")
-              out.write(f"package_name=grimelab/label/dev::grime-ai={get_var('SW_VERSION')}.dev{get_var('BUILD_DATE').replace('-','')}"\n")
+              out.write(f"package_name=grimelab/label/dev::grime-ai={get_var('SW_VERSION')}.dev{get_var('BUILD_DATE').replace('-','')}\n")
           EOF
 
 
