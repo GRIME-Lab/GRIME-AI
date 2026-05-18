@@ -10,8 +10,8 @@ RUN curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -C /usr
 ARG GRIME_PACKAGE='grime-ai'
 ARG PYTHON_VERSION="3.12"
 
-RUN CONDA_OVERRIDE_CUDA=12.9 micromamba create -y -p /opt/grimeai -c grimelab -c conda-forge ${GRIME_PACKAGE} python=${PYTHON_VERSION} 'pytorch=*=cuda*' && \
-    micromamba clean -y -a
+RUN CONDA_OVERRIDE_CUDA=12.9 micromamba create -q -y -p /opt/grimeai -c grimelab -c conda-forge ${GRIME_PACKAGE} python=${PYTHON_VERSION} 'pytorch=*=cuda*' && \
+    micromamba clean -q -y -a
 
 RUN /opt/grimeai/bin/download-sam2-checkpoints
 RUN command -v /opt/grimeai/bin/download-yolo11-models && /opt/grimeai/bin/download-yolo11-models do-something || true
