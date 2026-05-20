@@ -3,7 +3,7 @@ LABEL org.opencontainers.image.source https://github.com/GRIME-Lab/GRIME-AI
 
 RUN dnf install -y epel-release
 RUN dnf install -y -q mesa-libGLU-devel mesa-libGL-devel tcsh bzip2 libglvnd-glx xcalc
-RUN dnf groupinstall -y base-x
+RUN dnf groupinstall -y -q base-x
 
 RUN curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | tar -C /usr/local -xvj bin/micromamba
 
