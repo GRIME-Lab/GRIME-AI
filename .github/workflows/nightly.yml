@@ -66,7 +66,7 @@ jobs:
               return match.group(1) if match else ""
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"version={get_var('SW_VERSION')}\n")
+              out.write(f"version={get_var('SW_VERSION')}.dev{get_var('BUILD_DATE').replace('-','')}\n")
               out.write(f"commit={get_var('SHA')[:7]}\n")
               out.write(f"release={get_var('RELEASE')}\n")
               out.write(f"date={get_var('BUILD_DATE')}\n")
