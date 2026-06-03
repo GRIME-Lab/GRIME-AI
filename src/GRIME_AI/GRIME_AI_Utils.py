@@ -108,13 +108,15 @@ class GRIME_AI_Utils:
 
         if bFetchRecursive:
             for root, dirs, files in os.walk(folder):
+                dirs.sort()
+                files.sort()
                 for file in files:
                     ext = os.path.splitext(file)[-1].lower()
                     if ext in extensions:
                         filenames.append(os.path.join(root, file))
                         image_count += 1
         else:
-            for imageIndex, file in enumerate(os.listdir(folder)):
+            for imageIndex, file in enumerate(sorted(os.listdir(folder))):
                 ext = os.path.splitext(file)[-1].lower()
                 if ext in extensions:
                     filenames.append(os.path.join(folder, file))

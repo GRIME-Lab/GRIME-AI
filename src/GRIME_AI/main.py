@@ -4990,7 +4990,7 @@ def run_cli(args):
         )
 
         compositeSlices = GRIME_AI_CompositeSlices(slice_rect, False)
-        compositeSlices.create_composite_image(filenames, args.folder+'\compositeSlices')
+        compositeSlices.create_composite_image(filenames, os.path.join(args.folder, "compositeSlices"))
 
         print("Composite slice complete!")
 
