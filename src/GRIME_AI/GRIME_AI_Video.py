@@ -145,7 +145,7 @@ class GRIME_AI_Video:
         progressBar = QProgressWheel(0, imageCount)
         progressBar.show()
 
-        for imageIndex, file in enumerate(os.listdir(rootFolder)):
+        for imageIndex, file in enumerate(sorted(os.listdir(rootFolder))):
             ext = os.path.splitext(file)[-1].lower()
 
             if ext in extensions:

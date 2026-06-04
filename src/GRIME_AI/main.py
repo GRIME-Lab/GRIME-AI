@@ -4792,7 +4792,7 @@ def my_main():
                                help="Correct rotated images.")
     triage_parser.add_argument("-d", "--delta", type=float, required=False, default=0.25,
                                help="Rotation tolerance for considering an image over- or under-rotated.")
-    triage_parser.add_argument("-i", "--image", type=float, required=False, default="",
+    triage_parser.add_argument("-i", "--image", type=str, required=False, default=None,
                                help="Image to use as ground truth for rotation angle.")
     triage_parser.add_argument("-b", "--blurthreshold", type=float, required=False, default=17.50,
                                help="Blur threshold for FFT.")
@@ -4978,15 +4978,28 @@ def run_cli(args):
     elif args.command == 'slice':
         filenames = cli_fetchLocalImageList(args.folder)
 
+        from PyQt5.QtCore import QRect
+        from PIL import Image
         from GRIME_AI.GRIME_AI_CompositeSlices import GRIME_AI_CompositeSlices
-        compositeSlices = GRIME_AI_CompositeSlices(args.center, args.width, False)
-        compositeSlices.create_composite_image(filenames, args.folder+'\compositeSlices')
+        first_image = Image.open(filenames[0].fullPathAndFilename)
+        slice_rect = QRect(
+            int(args.center - args.width / 2),
+            0,
+            int(args.width),
+            first_image.height
+        )
+
+        compositeSlices = GRIME_AI_CompositeSlices(slice_rect, False)
+        compositeSlices.create_composite_image(filenames, os.path.join(args.folder, "compositeSlices"))
 
         print("Composite slice complete!")
 
     elif args.command == "coco":
         # Import your CocoGenerator class from coco_generator.py
-        from coco_generator import CocoGenerator
+        try:
+            from GRIME_AI.coco_generator import CocoGenerator  # package mode
+        except ImportError:
+            from coco_generator import CocoGenerator  # direct script mode
         print("[INFO] Running COCO generation command...")
         folder = Path(args.folder)
         output_path = Path(args.output) if args.output else folder / "instances_default.json"
