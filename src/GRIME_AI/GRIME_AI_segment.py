@@ -209,10 +209,11 @@ def run_segformer(args, device, category, progressBar, image_list=None):
 
     engine = SegFormerInferenceEngine(
         device=device,
-        model_path=args.model,
-        input_dir=input_dir,
+        segformer_model=args.model,
+        input_dir=args.folder,
         output_dir=args.output,
-        class_index=args.category_id,
+        threshold=args.threshold,
+        class_index=category["id"]
     )
 
     normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
