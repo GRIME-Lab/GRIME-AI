@@ -803,8 +803,10 @@ class MainWindow(QMainWindow):
         # ------------------------------------------------------------------------------------------------------------------
         # USGS
         # ------------------------------------------------------------------------------------------------------------------
-        self.usgs = USGSClient()
-        self.usgs.initialize()
+        # self.usgs is populated in _on_usgs_startup_result once the background
+        # thread finishes. Any code that uses self.usgs only runs after user
+        # interaction (post-startup), so None here is safe.
+        self.usgs = None
         self._nwis_fetcher = None   # holds the active NWISParameterFetcher thread
         self._usgs_image_fetcher = None  # holds the active USGSLatestImageFetcher thread
         self.USGS_listboxSites.itemClicked.connect(self._usgs_tree_item_clicked)
@@ -820,7 +822,7 @@ class MainWindow(QMainWindow):
         self.usgs_checking = False  # Track if currently checking
 
         # ------------------------------------------------------------------------------------------------------------------
-        # NIMS — fetch camera data in background thread
+        # NIMS — fetch camera data in background thread (single initialization)
         self.USGS_listboxSites.clear()
         self._usgs_startup_fetcher = USGSStartupFetcher(self.usgs, parent=self)
         self._usgs_startup_fetcher.result.connect(self._on_usgs_startup_result)
@@ -963,6 +965,10 @@ class MainWindow(QMainWindow):
         self.myHIVIS         = hivis
         self.cameraDictionary = camera_dict
         self.cameraList       = camera_list
+
+        # Expose the initialized USGSClient for code that uses self.usgs directly
+        # (e.g. midday image fetcher, NWIS parameter fetcher).
+        self.usgs = hivis._client
 
         # Connect USGS service to HIVIS for cache access
         try:
@@ -1781,7 +1787,7 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     def USGS_InitProductTable(self):
         # HEADER TITLES
-        headerList = ['Site', 'Image Count', ' min Date ', ' max Date ', 'Start Date', 'End Date', 'Start Time', 'End Time']
+        headerList = ['Site', 'Image Count', ' min Date ', ' max Date ', 'Start Date', 'End Date', 'Site Start Time', 'Site End Time']
 
         # DEFINE HEADER STYLE
         stylesheet = "::section{Background-color:rgb(116,175,80);border-radius:14px;}"
@@ -2557,7 +2563,7 @@ class MainWindow(QMainWindow):
             if not os.path.exists(saveFolder):
                 os.makedirs(saveFolder)
 
-            downloaded, missing = self.usgs.download_images(
+            downloaded, missing = self.myHIVIS.download_images(
                 site,
                 startDate,
                 endDate,
@@ -4687,9 +4693,10 @@ def findAvailableMonths(item):
     # RETRIEVE INFORMATION FROM THE NEON WEBSITE FOR THE PARTICULAR SITE
     site_json = NEON_API().FetchSiteInfoFromNEON(SERVER, SITECODE)
 
-    if site_json is not []:
+    if site_json:
         # EXTRACT THE AVAILABLE MONTH AND THE URL FOR THE DATA FOR EACH AVAILABLE MONTH
-        for product in site_json['data']['dataProducts']:
+        data_products = site_json.get('data', {}).get('dataProducts', [])
+        for product in data_products:
             if (product['dataProductCode'] == PRODUCTCODE):
                 monthList['availableMonths'] = product['availableMonths']
                 monthList['availableDataUrls'] = product['availableDataUrls']

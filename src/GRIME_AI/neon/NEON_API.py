@@ -37,7 +37,7 @@ from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
 from GRIME_AI.nitrateData import nitrateData
 from GRIME_AI.siteData import siteData
 
-SERVER = 'http://data.neonscience.org/api/v0/'
+SERVER = 'https://data.neonscience.org/api/v0/'
 
 # https://www.neonscience.org/sites/default/files/NEON_Field_Site_Metadata_20240423.csv
 
@@ -259,7 +259,7 @@ class  NEON_API:
             # Convert to Python JSON object
             site_json = site_request.json()
         except Exception:
-            site_json = []
+            site_json = {}
 
         return (site_json)
 
