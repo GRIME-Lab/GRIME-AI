@@ -2020,6 +2020,23 @@ class TrainingTab(QtWidgets.QWidget):
 
     _SEASON_ORDER = ["Winter", "Spring", "Summer", "Fall"]
     _SEASON_TYPE  = "Meteorological"  # hardcoded; no UI control needed
+    _SEASON_DATES = {
+        "Winter": "Dec 1 - Feb 28",
+        "Spring": "Mar 1 - May 31",
+        "Summer": "Jun 1 - Aug 31",
+        "Fall":   "Sep 1 - Nov 30",
+    }
+
+    @classmethod
+    def _season_label(cls, season: str) -> str:
+        """Return display label with date range, e.g. 'Winter (Dec - Feb)'."""
+        dates = cls._SEASON_DATES.get(season, "")
+        return f"{season} ({dates})" if dates else season
+
+    @staticmethod
+    def _season_from_label(label: str) -> str:
+        """Strip the date suffix from a display label to recover the season name."""
+        return label.split(" (")[0]
 
     def _init_holdout_season_lists(self) -> None:
         """Ensure all four seasons are distributed between the two listboxes."""
@@ -2028,23 +2045,25 @@ class TrainingTab(QtWidgets.QWidget):
         pass
 
     def _get_holdout_seasons(self) -> list:
-        """Return list of season names currently in the hold-out listbox."""
+        """Return list of plain season names currently in the hold-out listbox."""
         lw = self.listWidget_holdoutSeasons
-        return [lw.item(i).text() for i in range(lw.count())]
+        return [self._season_from_label(lw.item(i).text()) for i in range(lw.count())]
 
     def _set_holdout_seasons(self, holdout_seasons: list) -> None:
         """
         Distribute seasons between available and hold-out listboxes based on
-        the provided holdout list. Resets both listboxes.
+        the provided holdout list. Resets both listboxes. Items are displayed
+        with their meteorological date range in parentheses.
         """
         holdout_set = set(holdout_seasons)
         self.listWidget_availableSeasons.clear()
         self.listWidget_holdoutSeasons.clear()
         for season in self._SEASON_ORDER:
+            label = self._season_label(season)
             if season in holdout_set:
-                self.listWidget_holdoutSeasons.addItem(season)
+                self.listWidget_holdoutSeasons.addItem(label)
             else:
-                self.listWidget_availableSeasons.addItem(season)
+                self.listWidget_availableSeasons.addItem(label)
 
     # ------------------------------------------------------------------------
     def _update_blob_filter_pct_label(self):

@@ -25,6 +25,11 @@ from GRIME_AI.GRIME_AI_ImageData import imageData
 bChromeDriverLoaded = False
 driver = None
 
+# When False, time filtering ignores seconds and compares at HH:MM resolution,
+# consistent with PhenoCam API behavior. When True, filtering is applied at
+# full HH:MM:SS precision.
+strict_time_filter = False
+
 
 # ======================================================================================================================
 # ======================================================================================================================
@@ -85,7 +90,10 @@ class GRIME_AI_PhenoCam:
                 hour = int(timestamp[0:2])
                 minute = int(timestamp[2:4])
                 second = int(timestamp[4:6])
-                photo_time = datetime.time(int(hour), int(minute), int(second))
+                if strict_time_filter:
+                    photo_time = datetime.time(int(hour), int(minute), int(second))
+                else:
+                    photo_time = datetime.time(int(hour), int(minute), 0)
 
                 bDownload = False
                 if (photo_time >= start_time) and (photo_time <= end_time):

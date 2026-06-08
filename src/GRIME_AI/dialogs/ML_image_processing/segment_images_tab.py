@@ -393,8 +393,13 @@ class SegmentImagesTab(QWidget):
         self.checkBox_save_diagnostic_panels.toggled.connect(self.on_save_diagnostic_panels_toggled)
         self.checkBox_save_diagnostic_panels.toggled.connect(self.update_model_config)
 
-        # Segment seasons dual listbox — no signal connections needed.
-        # Placeholder cleanup is handled lazily in _get_segment_seasons().
+        # Segment seasons dual listbox — double-click to move items between lists.
+        self.listWidget_availableSegmentSeasons.itemDoubleClicked.connect(
+            self._on_available_season_double_clicked
+        )
+        self.listWidget_segmentSeasons.itemDoubleClicked.connect(
+            self._on_selected_season_double_clicked
+        )
         self._init_segment_season_lists()
 
         # Labels list affects segment button state
@@ -895,17 +900,85 @@ class SegmentImagesTab(QWidget):
     _SEASON_ORDER    = ["Winter", "Spring", "Summer", "Fall"]
     _SEASON_TYPE     = "Meteorological"
     _ALL_SEASONS_PLACEHOLDER = "All Seasons"
+    _SEASON_DATES = {
+        "Winter": "Dec 1 - Feb 28",
+        "Spring": "Mar 1 - May 31",
+        "Summer": "Jun 1 - Aug 31",
+        "Fall":   "Sep 1 - Nov 30",
+    }
+
+    @classmethod
+    def _season_label(cls, season: str) -> str:
+        """Return display label with date range, e.g. 'Winter (Dec 1 - Feb 28)'."""
+        dates = cls._SEASON_DATES.get(season, "")
+        return f"{season} ({dates})" if dates else season
+
+    @staticmethod
+    def _season_from_label(label: str) -> str:
+        """Strip the date suffix from a display label to recover the plain season name."""
+        return label.split(" (")[0]
 
     def _init_segment_season_lists(self) -> None:
         """Ensure right listbox shows 'All Seasons' placeholder on startup."""
         pass
 
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_available_season_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+        """Move a season from Available → Selected. Remove 'All Seasons' from Selected."""
+        label = item.text()
+        # Remove from available
+        row = self.listWidget_availableSegmentSeasons.row(item)
+        self.listWidget_availableSegmentSeasons.takeItem(row)
+        # Remove 'All Seasons' placeholder from Selected (do not return it to Available)
+        lw_sel = self.listWidget_segmentSeasons
+        for i in range(lw_sel.count() - 1, -1, -1):
+            if lw_sel.item(i).text() == self._ALL_SEASONS_PLACEHOLDER:
+                lw_sel.takeItem(i)
+        # Add to Selected using display label
+        lw_sel.addItem(label)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_selected_season_double_clicked(self, item: QtWidgets.QListWidgetItem) -> None:
+        """Move a season from Selected → Available. Restore 'All Seasons' if Selected becomes empty."""
+        label = item.text()
+        if label == self._ALL_SEASONS_PLACEHOLDER:
+            return  # nothing to do
+        season = self._season_from_label(label)
+        # Remove from Selected
+        row = self.listWidget_segmentSeasons.row(item)
+        self.listWidget_segmentSeasons.takeItem(row)
+        # Add back to Available in canonical order using display label
+        self._insert_season_sorted(self.listWidget_availableSegmentSeasons, season)
+        # Restore placeholder if Selected is now empty
+        if self.listWidget_segmentSeasons.count() == 0:
+            self.listWidget_segmentSeasons.addItem(self._ALL_SEASONS_PLACEHOLDER)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _insert_season_sorted(self, lw: QtWidgets.QListWidget, season: str) -> None:
+        """Insert season display label into lw respecting _SEASON_ORDER."""
+        label = self._season_label(season)
+        existing_labels = [lw.item(i).text() for i in range(lw.count())]
+        existing_seasons = [self._season_from_label(t) for t in existing_labels]
+        order = self._SEASON_ORDER
+        pos = len(existing_labels)
+        if season in order:
+            season_idx = order.index(season)
+            for i, s in enumerate(existing_seasons):
+                if s in order and order.index(s) > season_idx:
+                    pos = i
+                    break
+        lw.insertItem(pos, label)
+
     def _get_segment_seasons(self) -> list:
-        """Return list of seasons to segment, or [] if all seasons.
+        """Return list of plain season names to segment, or [] if all seasons.
         Also cleans up the placeholder if real seasons are present."""
         lw = self.listWidget_segmentSeasons
         items = [lw.item(i).text() for i in range(lw.count())]
-        real = [t for t in items if t != self._ALL_SEASONS_PLACEHOLDER]
+        real_labels = [t for t in items if t != self._ALL_SEASONS_PLACEHOLDER]
+        real = [self._season_from_label(t) for t in real_labels]
 
         # Lazy cleanup: remove placeholder if real seasons were dragged in
         if real and self._ALL_SEASONS_PLACEHOLDER in items:
@@ -920,15 +993,16 @@ class SegmentImagesTab(QWidget):
         return real  # empty list means all seasons
 
     def _set_segment_seasons(self, segment_seasons: list) -> None:
-        """Restore dual-listbox state from a list of seasons to segment."""
+        """Restore dual-listbox state from a list of plain season names to segment."""
         season_set = set(segment_seasons)
         self.listWidget_availableSegmentSeasons.clear()
         self.listWidget_segmentSeasons.clear()
         for season in self._SEASON_ORDER:
+            label = self._season_label(season)
             if season in season_set:
-                self.listWidget_segmentSeasons.addItem(season)
+                self.listWidget_segmentSeasons.addItem(label)
             else:
-                self.listWidget_availableSegmentSeasons.addItem(season)
+                self.listWidget_availableSegmentSeasons.addItem(label)
         if not season_set:
             self.listWidget_segmentSeasons.addItem(self._ALL_SEASONS_PLACEHOLDER)
 

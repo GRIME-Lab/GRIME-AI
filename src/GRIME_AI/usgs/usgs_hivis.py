@@ -364,16 +364,13 @@ class USGS_HIVIS:
             }
             print(f"✓ Cached {len(self._cached_filenames)} filtered filenames")
 
-            # Show message if no images in time range (even though some exist in date range)
+            # Log when the time filter eliminates all results, but don't pop a
+            # blocking dialog — the user may still be editing the time fields,
+            # and the "0" shown in the image count column is sufficient feedback.
             if filtered_count == 0:
-                msg = GRIME_AI_QMessageBox(
-                    'Images unavailable',
-                    f'No images available within the specified time range '
-                    f'({startTime.strftime("%H:%M")} - {endTime.strftime("%H:%M")}). '
-                    f'However, {len(filenames)} images exist in the date range.',
-                    QMessageBox.Close
-                )
-                msg.displayMsgBox()
+                print(f"[get_image_count] 0 images match local time range "
+                      f"{startTime.strftime('%H:%M')}–{endTime.strftime('%H:%M')} "
+                      f"(site tz: {site_tz_str}); {len(filenames)} images exist in date range.")
 
             return filtered_count
 
@@ -391,10 +388,22 @@ class USGS_HIVIS:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def download_images(self, siteName, startDate, endDate, startTime, endTime, saveFolder):
+    def download_images(self, siteName, startDate, endDate, startTime, endTime, saveFolder, progress=None):
         try:
-            downloaded, missing = self._client.download_images(
-                siteName, startDate, endDate, startTime, endTime, saveFolder
+            # Use the timezone-aware filtered list cached by get_image_count.
+            # That list already has UTC→local conversion applied, so each filename
+            # is confirmed to fall within the user's requested local time window.
+            names = self.get_cached_filenames(siteName, startDate, endDate, startTime, endTime)
+
+            if names is None:
+                # Cache is stale or get_image_count was never called for this range.
+                # Re-run get_image_count to populate the timezone-aware cache before downloading.
+                print("[download_images] Cache miss — re-running get_image_count for timezone-aware filtering")
+                self.get_image_count(siteName, self._last_nwis_id, startDate, endDate, startTime, endTime)
+                names = self._cached_filenames
+
+            downloaded, missing = self._client.download_images_from_list(
+                siteName, names, saveFolder, progress
             )
             return downloaded, missing
         except Exception:

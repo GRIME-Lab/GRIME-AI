@@ -113,6 +113,22 @@ class USGSClient:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def download_images_from_list(
+        self,
+        site_name: str,
+        names: List[str],
+        folder: str,
+        progress: Optional[ProgressFn] = None
+    ) -> Tuple[int, int]:
+        """
+        Download a pre-filtered list of image filenames.
+        Called by USGS_HIVIS.download_images() after timezone-aware filtering
+        has already been applied by get_image_count().
+        """
+        return self._svc.download_images_from_list(site_name, names, folder, progress)
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
     def get_available_parameters(self, cam_id: str) -> List[dict]:
         """Return available NWIS time series parameters for the site."""
         info: CameraInfo = self._svc.camera_info(cam_id)

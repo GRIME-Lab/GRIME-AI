@@ -266,6 +266,35 @@ class USGSService:
 
     # ------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------
+    def download_images_from_list(self, site_name: str, names: List[str],
+                                  save_folder: str,
+                                  progress: Optional[callable] = None) -> Tuple[int, int]:
+        """
+        Download a pre-filtered list of image filenames.
+        Used by USGS_HIVIS.download_images() to avoid re-querying the API
+        when the timezone-aware filtered list is already cached.
+        """
+        os.makedirs(save_folder, exist_ok=True)
+        downloaded, missing = 0, 0
+        total = len(names)
+        for idx, image in enumerate(names):
+            if progress:
+                progress(idx, total, image)
+            if not image or image == "[]":
+                continue
+            try:
+                file_url = f"{IMAGE_ENDPOINT}/{site_name}/{image}"
+                dst = os.path.join(save_folder, os.path.basename(image))
+                if not os.path.isfile(dst) or os.path.getsize(dst) == 0:
+                    urllib.request.urlretrieve(file_url, dst)
+                    downloaded += 1
+            except Exception as e:
+                print(f"Download failed for {image}: {e}")
+                missing += 1
+        return downloaded, missing
+
+    # ------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     def get_available_parameters(self, nwis_id: str) -> List[Dict]:
         """
         Query NWIS waterservices for all available time series parameters
