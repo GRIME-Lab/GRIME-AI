@@ -336,11 +336,13 @@ class PhenocamDownloadWorker(QtCore.QThread):
     def run(self):
         import urllib.request, os, datetime as dt_mod
         from GRIME_AI.phenocam.GRIME_AI_PhenoCam import GRIME_AI_PhenoCam
+        # All PhenoCam filename timestamps are local time (both NEON via PhenoCam
+        # and strictly PhenoCam sites), so the user's local start/end times are
+        # compared directly — no UTC conversion needed.
         start_date, end_date = self.start_dt.date(), self.end_dt.date()
         start_time, end_time = self.start_dt.time(), self.end_dt.time()
         t_min = dt_mod.time(0, 0)
         t_max = dt_mod.time(23, 59)
-        image_list, delta = [], max((end_date - start_date).days + 1, 1)
         current, day_idx = start_date, 0
         while current <= end_date:
             day_idx += 1
@@ -803,10 +805,8 @@ class MainWindow(QMainWindow):
         # ------------------------------------------------------------------------------------------------------------------
         # USGS
         # ------------------------------------------------------------------------------------------------------------------
-        # self.usgs is populated in _on_usgs_startup_result once the background
-        # thread finishes. Any code that uses self.usgs only runs after user
-        # interaction (post-startup), so None here is safe.
-        self.usgs = None
+        self.usgs = USGSClient()
+        self.usgs.initialize()
         self._nwis_fetcher = None   # holds the active NWISParameterFetcher thread
         self._usgs_image_fetcher = None  # holds the active USGSLatestImageFetcher thread
         self.USGS_listboxSites.itemClicked.connect(self._usgs_tree_item_clicked)
@@ -822,7 +822,7 @@ class MainWindow(QMainWindow):
         self.usgs_checking = False  # Track if currently checking
 
         # ------------------------------------------------------------------------------------------------------------------
-        # NIMS — fetch camera data in background thread (single initialization)
+        # NIMS — fetch camera data in background thread
         self.USGS_listboxSites.clear()
         self._usgs_startup_fetcher = USGSStartupFetcher(self.usgs, parent=self)
         self._usgs_startup_fetcher.result.connect(self._on_usgs_startup_result)
@@ -965,10 +965,6 @@ class MainWindow(QMainWindow):
         self.myHIVIS         = hivis
         self.cameraDictionary = camera_dict
         self.cameraList       = camera_list
-
-        # Expose the initialized USGSClient for code that uses self.usgs directly
-        # (e.g. midday image fetcher, NWIS parameter fetcher).
-        self.usgs = hivis._client
 
         # Connect USGS service to HIVIS for cache access
         try:
@@ -1168,6 +1164,15 @@ class MainWindow(QMainWindow):
 
             row = group.iloc[0]
 
+            # Store utc_offset in UserRole+3 for timezone-aware download filtering
+            # on strictly PhenoCam sites (non-NEON), whose filenames are UTC.
+            utc_offset_val = row.get("utc_offset", None)
+            if utc_offset_val is not None and pd.notna(utc_offset_val):
+                try:
+                    site_item.setData(0, QtCore.Qt.UserRole + 3, float(utc_offset_val))
+                except (ValueError, TypeError):
+                    pass
+
             # ── Camera detail fields directly under site ───────────────────
             for col, label in CAMERA_FIELDS:
                 val = row.get(col, None)
@@ -1250,12 +1255,15 @@ class MainWindow(QMainWindow):
         return row, date_edit, hour_spin, minute_spin
 
     def setup_phenocam_right_panel(self):
-        # ── LEFT: hard-cap the tree width, pin to top ────────────────────────────
+        # ── LEFT: hard-cap the tree width; let it expand vertically ─────────────
         self.treeWidget_Phenocam.setMaximumWidth(300)
         self.treeWidget_Phenocam.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        self.verticalLayout_PhenocamLeft.setAlignment(QtCore.Qt.AlignTop)
-        self.verticalLayout_PhenocamLeft.setAlignment(
-            self.treeWidget_Phenocam, QtCore.Qt.AlignTop)
+        # Expanding vertical policy lets the layout stretch the tree to fill the
+        # full tab height rather than leaving dead space below it.
+        self.treeWidget_Phenocam.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+        # Remove AlignTop so the layout distributes space rather than pinning to top
+        self.verticalLayout_PhenocamLeft.setAlignment(QtCore.Qt.Alignment())
         self.horizontalLayout_Phenocam.setStretch(0, 1)
         self.horizontalLayout_Phenocam.setStretch(1, 3)
 
@@ -1280,8 +1288,7 @@ class MainWindow(QMainWindow):
         self.phenocam_preview_label.setFixedHeight(385)
         rl.addWidget(self.phenocam_preview_label, stretch=0)
 
-        # Cap the tree to the same usable height so it never overflows
-        self.treeWidget_Phenocam.setMaximumHeight(740)
+        # (no maximum height cap — size policy handles vertical expansion)
 
         # Date / Time Range
         dt_group = QtWidgets.QGroupBox("Date / Time Range")
@@ -1355,8 +1362,7 @@ class MainWindow(QMainWindow):
         tab_h = self.tab_phenocam_sites.height()
         if tab_h < 50:
             return
-        self.treeWidget_Phenocam.setFixedHeight(tab_h - 110)
-        self.verticalLayout_PhenocamLeft.setAlignment(QtCore.Qt.AlignTop)
+        # Tree height is managed by its Expanding size policy; no setFixedHeight needed.
         self.phenocam_preview_label.setFixedHeight(tab_h // 2)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -1398,6 +1404,16 @@ class MainWindow(QMainWindow):
             roi = candidate.data(0, QtCore.Qt.UserRole + 2)
             if roi:
                 return roi
+        return None
+
+    def _phenocam_get_selected_utc_offset(self):
+        """Return the utc_offset (float hours) for the currently selected site, or None.
+        Walks up to the top-level site item where UserRole+3 is stored."""
+        item = self.treeWidget_Phenocam.currentItem()
+        while item is not None:
+            if item.parent() is None:  # top-level site item
+                return item.data(0, QtCore.Qt.UserRole + 3)
+            item = item.parent()
         return None
 
     def _phenocam_tree_item_clicked(self, item, column):
@@ -1787,7 +1803,7 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     def USGS_InitProductTable(self):
         # HEADER TITLES
-        headerList = ['Site', 'Image Count', ' min Date ', ' max Date ', 'Start Date', 'End Date', 'Site Start Time', 'Site End Time']
+        headerList = ['Site', 'Image Count', ' min Date ', ' max Date ', 'Start Date', 'End Date', 'Start Time', 'End Time']
 
         # DEFINE HEADER STYLE
         stylesheet = "::section{Background-color:rgb(116,175,80);border-radius:14px;}"
@@ -2563,7 +2579,7 @@ class MainWindow(QMainWindow):
             if not os.path.exists(saveFolder):
                 os.makedirs(saveFolder)
 
-            downloaded, missing = self.myHIVIS.download_images(
+            downloaded, missing = self.usgs.download_images(
                 site,
                 startDate,
                 endDate,
@@ -4997,14 +5013,14 @@ def run_cli(args):
         )
 
         compositeSlices = GRIME_AI_CompositeSlices(slice_rect, False)
-        compositeSlices.create_composite_image(filenames, os.path.join(args.folder, "compositeSlices"))
+        compositeSlices.create_composite_image(filenames, args.folder+'\compositeSlices')
 
         print("Composite slice complete!")
 
     elif args.command == "coco":
         # Import your CocoGenerator class from coco_generator.py
         try:
-            from GRIME_AI.coco_generator import CocoGenerator  # package mode
+            from .coco_generator import CocoGenerator  # package mode
         except ImportError:
             from coco_generator import CocoGenerator  # direct script mode
         print("[INFO] Running COCO generation command...")

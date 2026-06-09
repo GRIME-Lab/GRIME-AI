@@ -188,10 +188,19 @@ class USGS_HIVIS:
                 # ============================================================================
                 base_url = "https://jj5utwupk5.execute-api.us-east-1.amazonaws.com/prod/listFiles"
 
+                # Convert the user's local start/end datetimes to UTC so the API
+                # window correctly spans the full local date+time range, including
+                # cases where the local window crosses midnight UTC.
+                from datetime import datetime as _dt
+                local_start_aware = site_tz.localize(_dt.combine(startDate, startTime))
+                local_end_aware   = site_tz.localize(_dt.combine(endDate,   endTime))
+                utc_start = local_start_aware.astimezone(pytz.UTC)
+                utc_end   = local_end_aware.astimezone(pytz.UTC)
+
                 params = {
                     "camId": siteName,
-                    "after": f"{startDate.isoformat()}T00:00:00Z",
-                    "before": f"{endDate.isoformat()}T23:59:59Z",
+                    "after":  utc_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "before": utc_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "limit": 50000,  # High limit to get all images
                 }
 
