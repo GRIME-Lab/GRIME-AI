@@ -155,8 +155,9 @@ class SegmentImagesTab(QWidget):
 
         if model_file:
             self.lineEdit_segmentation_model_file.setText(model_file)
-            self.populate_model_labels(model_file)
-            # Populate metadata will be done on showEvent to avoid loading on init
+            # Label loading is deferred to showEvent (see _labels_loaded_once) so any
+            # warning dialog appears only after the ML dialog is fully constructed and
+            # visible, never behind the "ML Loading" splash during construction.
         else:
             self.lineEdit_segmentation_model_file.clear()
 
@@ -205,12 +206,20 @@ class SegmentImagesTab(QWidget):
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def showEvent(self, event):
-        """Called when tab becomes visible - populate metadata if model path exists."""
+        """Called when tab becomes visible - populate labels/metadata if model path exists.
+        Deferred here (not __init__) so any warning dialog appears on top of the visible
+        dialog rather than behind the 'ML Loading' splash during construction."""
         super().showEvent(event)
-        
+
         # Check if model path is populated
         model_path = self.lineEdit_segmentation_model_file.text().strip()
         if model_path and os.path.exists(model_path):
+            if not getattr(self, "_labels_loaded_once", False):
+                self._labels_loaded_once = True
+                try:
+                    self.populate_model_labels(model_path)
+                except Exception as e:
+                    print(f"Failed to populate labels on tab show: {e}")
             try:
                 self.populate_model_metadata(model_path)
             except Exception as e:
