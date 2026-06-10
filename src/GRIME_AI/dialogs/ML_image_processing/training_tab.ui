@@ -51,7 +51,6 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
-           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -107,7 +106,6 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
-           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -126,7 +124,6 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
-           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -200,7 +197,6 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
-           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -383,7 +379,6 @@
             <font>
              <family>Arial</family>
              <pointsize>10</pointsize>
-             <weight>75</weight>
              <italic>false</italic>
              <bold>true</bold>
             </font>
@@ -442,377 +437,805 @@
         <property name="verticalSpacing">
          <number>2</number>
         </property>
-
-        <!-- Row 0: Site Name | [site edit] | (gap) | Batch Size: | [batch spin] | (gap) -->
         <item row="0" column="0">
          <widget class="QLabel" name="label_siteName">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Site Name:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Site Name:</string>
+          </property>
          </widget>
         </item>
         <item row="0" column="1">
          <widget class="QLineEdit" name="lineEdit_siteName">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>200</width><height>16777215</height></size></property>
-          <property name="text"><string>MD_Lake_Serene_Edgewood</string></property>
+          <property name="maximumSize">
+           <size>
+            <width>200</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>MD_Lake_Serene_Edgewood</string>
+          </property>
          </widget>
         </item>
         <item row="0" column="3">
          <widget class="QLabel" name="label_batchSize">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Batch Size:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Batch Size:</string>
+          </property>
          </widget>
         </item>
         <item row="0" column="4">
          <widget class="QSpinBox" name="spinBox_batchSize">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>90</width><height>16777215</height></size></property>
-          <property name="minimum"><number>1</number></property>
-          <property name="maximum"><number>1024</number></property>
-          <property name="value"><number>32</number></property>
+          <property name="maximumSize">
+           <size>
+            <width>90</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>1024</number>
+          </property>
+          <property name="value">
+           <number>32</number>
+          </property>
          </widget>
         </item>
-
-        <!-- Row 1: Learning Rates | [lr edit] | (gap) | Save Model Freq: | [save spin] | (gap) -->
         <item row="1" column="0">
          <widget class="QLabel" name="label_learningRates">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Learning Rates:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Learning Rates:</string>
+          </property>
          </widget>
         </item>
         <item row="1" column="1">
          <widget class="QLineEdit" name="lineEdit_learningRates">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>200</width><height>16777215</height></size></property>
-          <property name="text"><string>0.0001, 0.001</string></property>
+          <property name="maximumSize">
+           <size>
+            <width>200</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>0.0001, 0.001</string>
+          </property>
          </widget>
         </item>
         <item row="1" column="3">
          <widget class="QLabel" name="label_saveFrequency">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Save Model Frequency:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Save Model Frequency:</string>
+          </property>
          </widget>
         </item>
         <item row="1" column="4">
          <widget class="QSpinBox" name="spinBox_saveFrequency">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>90</width><height>16777215</height></size></property>
-          <property name="minimum"><number>1</number></property>
-          <property name="maximum"><number>10000</number></property>
-          <property name="value"><number>20</number></property>
+          <property name="maximumSize">
+           <size>
+            <width>90</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>10000</number>
+          </property>
+          <property name="value">
+           <number>20</number>
+          </property>
          </widget>
         </item>
-
-        <!-- Row 2: Optimizer | [combo] | (gap) | Validation Freq: | [spin] | (gap) -->
         <item row="2" column="0">
          <widget class="QLabel" name="label_optimizer">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Optimizer:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Optimizer:</string>
+          </property>
          </widget>
         </item>
         <item row="2" column="1">
          <widget class="QComboBox" name="comboBox_optimizer">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>130</width><height>16777215</height></size></property>
-          <item><property name="text"><string>Adam</string></property></item>
-          <item><property name="text"><string>SGD</string></property></item>
-          <item><property name="text"><string>RMSProp</string></property></item>
+          <property name="maximumSize">
+           <size>
+            <width>130</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <item>
+           <property name="text">
+            <string>Adam</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>SGD</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>RMSProp</string>
+           </property>
+          </item>
          </widget>
         </item>
         <item row="2" column="3">
          <widget class="QLabel" name="label_validationFrequency">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Validation Frequency:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Validation Frequency:</string>
+          </property>
          </widget>
         </item>
         <item row="2" column="4">
          <widget class="QSpinBox" name="spinBox_validationFrequency">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>90</width><height>16777215</height></size></property>
-          <property name="minimum"><number>1</number></property>
-          <property name="maximum"><number>10000</number></property>
-          <property name="value"><number>20</number></property>
+          <property name="maximumSize">
+           <size>
+            <width>90</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>10000</number>
+          </property>
+          <property name="value">
+           <number>20</number>
+          </property>
          </widget>
         </item>
-
-        <!-- Row 3: Early Stopping: | [checkbox] | (gap) -->
         <item row="3" column="3">
          <widget class="QLabel" name="label_earlyStopping">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Early Stopping:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Early Stopping:</string>
+          </property>
          </widget>
         </item>
         <item row="3" column="4">
          <widget class="QCheckBox" name="checkBox_earlyStopping">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
          </widget>
         </item>
-        <!-- Row 4: Weight Decay | [dspin] | (gap) | Patience: | [spin] | (gap) -->
         <item row="4" column="0">
          <widget class="QLabel" name="label_weightDecay">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Weight Decay:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Weight Decay:</string>
+          </property>
          </widget>
         </item>
         <item row="4" column="1">
          <widget class="QDoubleSpinBox" name="doubleSpinBox_weightDecay">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>110</width><height>16777215</height></size></property>
-          <property name="decimals"><number>4</number></property>
-          <property name="minimum"><double>0.000000000000000</double></property>
-          <property name="maximum"><double>10.000000000000000</double></property>
-          <property name="singleStep"><double>0.001000000000000</double></property>
-          <property name="value"><double>0.010000000000000</double></property>
+          <property name="maximumSize">
+           <size>
+            <width>110</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="decimals">
+           <number>4</number>
+          </property>
+          <property name="minimum">
+           <double>0.000000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>10.000000000000000</double>
+          </property>
+          <property name="singleStep">
+           <double>0.001000000000000</double>
+          </property>
+          <property name="value">
+           <double>0.010000000000000</double>
+          </property>
          </widget>
         </item>
         <item row="4" column="3">
          <widget class="QLabel" name="label_patience">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Patience:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Patience:</string>
+          </property>
          </widget>
         </item>
         <item row="4" column="4">
          <widget class="QSpinBox" name="spinBox_patience">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>90</width><height>16777215</height></size></property>
-          <property name="minimum"><number>1</number></property>
-          <property name="maximum"><number>100</number></property>
-          <property name="value"><number>3</number></property>
+          <property name="maximumSize">
+           <size>
+            <width>90</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>100</number>
+          </property>
+          <property name="value">
+           <number>3</number>
+          </property>
          </widget>
         </item>
-
-        <!-- Row 5: Epochs | [spin] | (gap) | Device: | [combo] | (gap) -->
         <item row="5" column="0">
          <widget class="QLabel" name="label_epochs">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Number of Epochs:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Number of Epochs:</string>
+          </property>
          </widget>
         </item>
         <item row="5" column="1">
          <widget class="QSpinBox" name="spinBox_epochs">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>90</width><height>16777215</height></size></property>
-          <property name="minimum"><number>1</number></property>
-          <property name="maximum"><number>10000</number></property>
-          <property name="value"><number>20</number></property>
+          <property name="maximumSize">
+           <size>
+            <width>90</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>10000</number>
+          </property>
+          <property name="value">
+           <number>20</number>
+          </property>
          </widget>
         </item>
         <item row="5" column="3">
          <widget class="QLabel" name="label_device">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="text"><string>Device:</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="text">
+           <string>Device:</string>
+          </property>
          </widget>
         </item>
         <item row="5" column="4">
          <widget class="QComboBox" name="comboBox_device">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>90</width><height>16777215</height></size></property>
-          <item><property name="text"><string>cpu</string></property></item>
-          <item><property name="text"><string>gpu</string></property></item>
+          <property name="maximumSize">
+           <size>
+            <width>90</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <item>
+           <property name="text">
+            <string>cpu</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>gpu</string>
+           </property>
+          </item>
          </widget>
         </item>
-
-        <!-- Row 6: Blob Filter | [spin] | [pct label colspan=3] -->
         <item row="6" column="0">
          <widget class="QLabel" name="label_blobFilterRadius">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="toolTip"><string>Minimum distance (in pixels) a predicted blob centroid must be from a training centroid prompt to be kept. Stored internally as a fraction of image diagonal so it scales across different image resolutions.</string></property>
-          <property name="text"><string>Blob Filter Radius (px):</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="toolTip">
+           <string>Minimum distance (in pixels) a predicted blob centroid must be from a training centroid prompt to be kept. Stored internally as a fraction of image diagonal so it scales across different image resolutions.</string>
+          </property>
+          <property name="text">
+           <string>Blob Filter Radius (px):</string>
+          </property>
          </widget>
         </item>
         <item row="6" column="1">
          <widget class="QSpinBox" name="spinBox_blobFilterRadius">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="maximumSize"><size><width>90</width><height>16777215</height></size></property>
-          <property name="toolTip"><string>Minimum distance (in pixels) a detected blob centroid must be from the training centroid prompt to be kept.</string></property>
-          <property name="minimum"><number>1</number></property>
-          <property name="maximum"><number>2000</number></property>
-          <property name="value"><number>50</number></property>
+          <property name="maximumSize">
+           <size>
+            <width>90</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="toolTip">
+           <string>Minimum distance (in pixels) a detected blob centroid must be from the training centroid prompt to be kept.</string>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>2000</number>
+          </property>
+          <property name="value">
+           <number>50</number>
+          </property>
          </widget>
         </item>
         <item row="6" column="2" colspan="3">
          <widget class="QLabel" name="label_blobFilterRadiusPct">
-          <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-          <property name="toolTip"><string>Equivalent percentage of image diagonal.</string></property>
-          <property name="text"><string>≈ — % of diagonal</string></property>
+          <property name="font">
+           <font>
+            <family>Arial</family>
+            <pointsize>10</pointsize>
+           </font>
+          </property>
+          <property name="toolTip">
+           <string>Equivalent percentage of image diagonal.</string>
+          </property>
+          <property name="text">
+           <string>≈ — % of diagonal</string>
+          </property>
          </widget>
         </item>
-
-        <!-- Row 7: Train/Val split spanning all 6 columns -->
         <item row="7" column="0" colspan="6">
-         <widget class="QWidget" name="widget_splitRow">
-          <layout class="QHBoxLayout" name="horizontalLayout_splitRow">
-           <property name="leftMargin"><number>0</number></property>
-           <property name="topMargin"><number>0</number></property>
-           <property name="rightMargin"><number>0</number></property>
-           <property name="bottomMargin"><number>0</number></property>
-           <property name="spacing"><number>6</number></property>
-           <item>
-            <widget class="QLabel" name="label_trainSplit">
-             <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-             <property name="toolTip"><string>Percentage of images used for training.</string></property>
-             <property name="text"><string>Train Split (%):</string></property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QSpinBox" name="spinBox_trainSplit">
-             <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-               <horstretch>0</horstretch><verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="minimumSize"><size><width>70</width><height>0</height></size></property>
-             <property name="maximumSize"><size><width>70</width><height>16777215</height></size></property>
-             <property name="minimum"><number>60</number></property>
-             <property name="maximum"><number>90</number></property>
-             <property name="value"><number>80</number></property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QFrame" name="line_splitSeparator">
-             <property name="frameShape"><enum>QFrame::VLine</enum></property>
-             <property name="frameShadow"><enum>QFrame::Sunken</enum></property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QLabel" name="label_valSplit">
-             <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-             <property name="toolTip"><string>Percentage of images reserved for validation (10–40%).</string></property>
-             <property name="text"><string>Validation Split (%):</string></property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QSpinBox" name="spinBox_valSplit">
-             <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-               <horstretch>0</horstretch><verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <property name="minimumSize"><size><width>70</width><height>0</height></size></property>
-             <property name="maximumSize"><size><width>70</width><height>16777215</height></size></property>
-             <property name="minimum"><number>10</number></property>
-             <property name="maximum"><number>40</number></property>
-             <property name="value"><number>20</number></property>
-            </widget>
-           </item>
-           <item>
-            <spacer name="horizontalSpacer_splitRow">
-             <property name="orientation"><enum>Qt::Horizontal</enum></property>
-             <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
-            </spacer>
-           </item>
-          </layout>
-         </widget>
+         <layout class="QHBoxLayout" name="horizontalLayout_splitRow">
+          <property name="spacing">
+           <number>6</number>
+          </property>
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="label_trainSplit">
+            <property name="font">
+             <font>
+              <family>Arial</family>
+              <pointsize>10</pointsize>
+             </font>
+            </property>
+            <property name="toolTip">
+             <string>Percentage of images used for training.</string>
+            </property>
+            <property name="text">
+             <string>Train Split (%):</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QSpinBox" name="spinBox_trainSplit">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="minimumSize">
+             <size>
+              <width>70</width>
+              <height>0</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>70</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="font">
+             <font>
+              <family>Arial</family>
+              <pointsize>10</pointsize>
+             </font>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>97</number>
+            </property>
+            <property name="value">
+             <number>80</number>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QFrame" name="line_splitSeparator">
+            <property name="frameShape">
+             <enum>QFrame::VLine</enum>
+            </property>
+            <property name="frameShadow">
+             <enum>QFrame::Sunken</enum>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="label_valSplit">
+            <property name="font">
+             <font>
+              <family>Arial</family>
+              <pointsize>10</pointsize>
+             </font>
+            </property>
+            <property name="toolTip">
+             <string>Percentage of images reserved for validation (10–40%).</string>
+            </property>
+            <property name="text">
+             <string>Validation Split (%):</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QSpinBox" name="spinBox_valSplit">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="minimumSize">
+             <size>
+              <width>70</width>
+              <height>0</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>70</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="font">
+             <font>
+              <family>Arial</family>
+              <pointsize>10</pointsize>
+             </font>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>100</number>
+            </property>
+            <property name="value">
+             <number>20</number>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="horizontalSpacer_splitRow">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
         </item>
-
         <item row="8" column="0" colspan="6">
-         <widget class="QWidget" name="widget_holdoutSeasons">
-          <layout class="QVBoxLayout" name="verticalLayout_holdoutSeasons">
-           <property name="leftMargin"><number>0</number></property>
-           <property name="topMargin"><number>2</number></property>
-           <property name="rightMargin"><number>0</number></property>
-           <property name="bottomMargin"><number>2</number></property>
-           <property name="spacing"><number>2</number></property>
-           <item>
-            <layout class="QHBoxLayout" name="horizontalLayout_holdoutLabels">
-             <item>
-              <widget class="QLabel" name="label_availableSeasons">
-               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
-               <property name="text"><string>Available Seasons</string></property>
-               <property name="alignment"><set>Qt::AlignCenter</set></property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QLabel" name="label_holdoutSeasons">
-               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
-               <property name="text"><string>Hold-Out Seasons</string></property>
-               <property name="alignment"><set>Qt::AlignCenter</set></property>
-              </widget>
-             </item>
-            </layout>
-           </item>
-           <item>
-            <layout class="QHBoxLayout" name="horizontalLayout_holdoutLists">
-             <item>
-              <widget class="QListWidget" name="listWidget_availableSeasons">
-               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
-               <property name="toolTip"><string>Drag seasons to Hold-Out Seasons to exclude them from training.</string></property>
-               <property name="dragDropMode"><enum>QAbstractItemView::DragDrop</enum></property>
-               <property name="defaultDropAction"><enum>Qt::MoveAction</enum></property>
-               <property name="selectionMode"><enum>QAbstractItemView::ExtendedSelection</enum></property>
-               <property name="maximumHeight"><number>62</number></property>
-               <item><property name="text"><string>Winter</string></property></item>
-               <item><property name="text"><string>Spring</string></property></item>
-               <item><property name="text"><string>Summer</string></property></item>
-               <item><property name="text"><string>Fall</string></property></item>
-              </widget>
-             </item>
-             <item>
-              <widget class="QListWidget" name="listWidget_holdoutSeasons">
-               <property name="font"><font><family>Arial</family><pointsize>9</pointsize></font></property>
-               <property name="toolTip"><string>Seasons listed here will be excluded from training and validation.</string></property>
-               <property name="dragDropMode"><enum>QAbstractItemView::DragDrop</enum></property>
-               <property name="defaultDropAction"><enum>Qt::MoveAction</enum></property>
-               <property name="selectionMode"><enum>QAbstractItemView::ExtendedSelection</enum></property>
-               <property name="maximumHeight"><number>62</number></property>
-              </widget>
-             </item>
-            </layout>
-           </item>
-          </layout>
-         </widget>
-        </item>
-
-        <item row="9" column="0" colspan="6">
-         <widget class="QWidget" name="widget_yoloWeightsRow">
-          <layout class="QHBoxLayout" name="horizontalLayout_yoloWeightsRow">
-           <property name="leftMargin"><number>0</number></property>
-           <property name="topMargin"><number>0</number></property>
-           <property name="rightMargin"><number>0</number></property>
-           <property name="bottomMargin"><number>0</number></property>
-           <property name="spacing"><number>4</number></property>
-           <item>
-            <widget class="QLabel" name="label_yoloWeights">
-             <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-             <property name="toolTip"><string>Path to the YOLOv11-seg base weights file (.pt). Download from https://github.com/ultralytics/assets/releases</string></property>
-             <property name="text"><string>YOLO Base Weights:</string></property>
-            </widget>
-           </item>
-           <item>
-              <widget class="QComboBox" name="comboBox_yoloWeights">
-               <property name="font">
-                <font>
-                 <family>Arial</family>
-                 <pointsize>10</pointsize>
-                </font>
-               </property>
-               <property name="toolTip">
-                <string>Select a YOLO11-seg base weights file. Files are loaded from the ultralytics/assets folder.</string>
-               </property>
-              </widget>
-             </item>
-             <item>
-              <widget class="QPushButton" name="pushButton_refreshYoloWeights">
-               <property name="font">
-                <font>
-                 <family>Arial</family>
-                 <pointsize>10</pointsize>
-                </font>
-               </property>
-               <property name="toolTip">
-                <string>Refresh the list of available YOLO base weights</string>
-               </property>
+         <layout class="QVBoxLayout" name="verticalLayout_holdoutSeasons">
+          <property name="spacing">
+           <number>2</number>
+          </property>
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>2</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>2</number>
+          </property>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_holdoutLabels">
+            <item>
+             <widget class="QLabel" name="label_availableSeasons">
+              <property name="font">
+               <font>
+                <family>Arial</family>
+                <pointsize>9</pointsize>
+               </font>
+              </property>
+              <property name="text">
+               <string>Available Seasons</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignCenter</set>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="label_holdoutSeasons">
+              <property name="font">
+               <font>
+                <family>Arial</family>
+                <pointsize>9</pointsize>
+               </font>
+              </property>
+              <property name="text">
+               <string>Hold-Out Seasons</string>
+              </property>
+              <property name="alignment">
+               <set>Qt::AlignCenter</set>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="horizontalLayout_holdoutLists">
+            <item>
+             <widget class="QListWidget" name="listWidget_availableSeasons">
+              <property name="font">
+               <font>
+                <family>Arial</family>
+                <pointsize>9</pointsize>
+               </font>
+              </property>
+              <property name="toolTip">
+               <string>Drag seasons to Hold-Out Seasons to exclude them from training.</string>
+              </property>
+              <property name="dragDropMode">
+               <enum>QAbstractItemView::DragDrop</enum>
+              </property>
+              <property name="defaultDropAction">
+               <enum>Qt::MoveAction</enum>
+              </property>
+              <property name="selectionMode">
+               <enum>QAbstractItemView::ExtendedSelection</enum>
+              </property>
+              <item>
                <property name="text">
-                <string>Refresh</string>
+                <string>Winter</string>
                </property>
-              </widget>
-             </item>
-          </layout>
-         </widget>
+              </item>
+              <item>
+               <property name="text">
+                <string>Spring</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Summer</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Fall</string>
+               </property>
+              </item>
+             </widget>
+            </item>
+            <item>
+             <widget class="QListWidget" name="listWidget_holdoutSeasons">
+              <property name="font">
+               <font>
+                <family>Arial</family>
+                <pointsize>9</pointsize>
+               </font>
+              </property>
+              <property name="toolTip">
+               <string>Seasons listed here will be excluded from training and validation.</string>
+              </property>
+              <property name="dragDropMode">
+               <enum>QAbstractItemView::DragDrop</enum>
+              </property>
+              <property name="defaultDropAction">
+               <enum>Qt::MoveAction</enum>
+              </property>
+              <property name="selectionMode">
+               <enum>QAbstractItemView::ExtendedSelection</enum>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
         </item>
-
+        <item row="9" column="0" colspan="6">
+         <layout class="QHBoxLayout" name="horizontalLayout_yoloWeightsRow">
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="label_yoloWeights">
+            <property name="font">
+             <font>
+              <family>Arial</family>
+              <pointsize>10</pointsize>
+             </font>
+            </property>
+            <property name="toolTip">
+             <string>Path to the YOLOv11-seg base weights file (.pt). Download from https://github.com/ultralytics/assets/releases</string>
+            </property>
+            <property name="text">
+             <string>YOLO Base Weights:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QComboBox" name="comboBox_yoloWeights">
+            <property name="font">
+             <font>
+              <family>Arial</family>
+              <pointsize>10</pointsize>
+             </font>
+            </property>
+            <property name="toolTip">
+             <string>Select a YOLO11-seg base weights file. Files are loaded from the ultralytics/assets folder.</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="pushButton_refreshYoloWeights">
+            <property name="font">
+             <font>
+              <family>Arial</family>
+              <pointsize>10</pointsize>
+             </font>
+            </property>
+            <property name="toolTip">
+             <string>Refresh the list of available YOLO base weights</string>
+            </property>
+            <property name="text">
+             <string>Refresh</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
        </layout>
       </widget>
      </item>
