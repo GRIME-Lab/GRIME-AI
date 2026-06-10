@@ -701,7 +701,13 @@ class TrainingTab(QtWidgets.QWidget):
                 return  # set_training_model will re-fire and call this method again
 
         self.groupBox_labelSelection.setVisible(not is_yolo)
-        self.widget_yoloWeightsRow.setVisible(is_yolo)
+        # The .ui defines the YOLO weights row as a layout (horizontalLayout_yoloWeightsRow),
+        # not a wrapper widget, so toggle each child widget; the grid row collapses when empty.
+        _yolo_row = self.horizontalLayout_yoloWeightsRow
+        for _i in range(_yolo_row.count()):
+            _w = _yolo_row.itemAt(_i).widget()
+            if _w is not None:
+                _w.setVisible(is_yolo)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
