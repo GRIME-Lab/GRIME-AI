@@ -1995,7 +1995,9 @@ class TrainingTab(QtWidgets.QWidget):
             return
         self._split_updating = True
         try:
-            self.spinBox_trainSplit.setValue(100 - val_pct)
+            # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
+            # JES self.spinBox_trainSplit.setValue(100 - val_pct)
+            self.spinBox_trainSplit.setValue(val_pct)
         finally:
             self._split_updating = False
 
@@ -2010,7 +2012,9 @@ class TrainingTab(QtWidgets.QWidget):
             return
         self._split_updating = True
         try:
-            self.spinBox_valSplit.setValue(100 - train_pct)
+            # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
+            # JES self.spinBox_valSplit.setValue(100 - train_pct)
+            self.spinBox_valSplit.setValue(train_pct)
         finally:
             self._split_updating = False
 
