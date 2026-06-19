@@ -2,7 +2,7 @@ import os
 import threading
 import http.server
 import socketserver
-from PyQt5.QtWidgets import QWidget, QVBoxLayout
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
 from PyQt5.QtCore import QUrl, QTimer, pyqtSignal
 
@@ -41,6 +41,18 @@ class OpenStreetMapWidget(QWidget):
         self._server = None
         self._server_thread = None
         self._server_port = self._start_tile_server()
+
+        # Cleanup guard so server shutdown / file deletion only ever runs once,
+        # regardless of whether it's triggered via closeEvent or aboutToQuit
+        self._cleaned_up = False
+
+        # Primary cleanup path: app-level quit signal. This fires on normal
+        # application exit regardless of whether this widget is a top-level
+        # window or embedded as a child/tab, since embedded widgets do not
+        # reliably receive closeEvent when their parent window closes.
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._cleanup)
 
         # Start loading the map
         self._load_map()
@@ -81,7 +93,19 @@ class OpenStreetMapWidget(QWidget):
         print(f"[OSM] Local tile server started on http://127.0.0.1:{port}")
         return port
 
-    def closeEvent(self, event):
+    # --------------------------------------------------------------------------------------------------------------
+    # Cleanup
+    # --------------------------------------------------------------------------------------------------------------
+    def _cleanup(self):
+        """
+        Shuts down the local tile server and removes the generated map.html.
+        Safe to call multiple times (e.g. from both aboutToQuit and closeEvent);
+        only does work on the first call.
+        """
+        if self._cleaned_up:
+            return
+        self._cleaned_up = True
+
         if self._server is not None:
             self._server.shutdown()
             self._server = None
@@ -93,6 +117,8 @@ class OpenStreetMapWidget(QWidget):
             except OSError:
                 pass  # non-fatal
 
+    def closeEvent(self, event):
+        self._cleanup()
         super().closeEvent(event)
 
     # --------------------------------------------------------------------------------------------------------------
