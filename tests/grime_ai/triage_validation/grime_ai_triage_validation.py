@@ -34,7 +34,7 @@ Usage:
         --output C:/results
         --blur-threshold 17.50 --brightness-min 0 --brightness-max 255
 
-Author: Generated for GRIME AI validation
+Author: John E. Stranzl Jr., PhD Candidate, University of Nebraska-Lincoln
 License: Apache License, Version 2.0
 """
 

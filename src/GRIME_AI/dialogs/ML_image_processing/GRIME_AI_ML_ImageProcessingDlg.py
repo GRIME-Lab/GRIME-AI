@@ -56,14 +56,14 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
         loadUi(ui_path("ML_image_processing/QDialog_ML_ImageProcessing.ui"), self)
 
         # --------------------------------------------------------------------------------------------------------------
-        # RESIZE DIALOG: 50% wider, 20% shorter
+        # RESIZE DIALOG: 50% wider
         # --------------------------------------------------------------------------------------------------------------
         default_size = self.size()
         default_width = default_size.width()
         default_height = default_size.height()
 
         new_width = int(default_width * 1.5)  # 50% wider
-        new_height = int(default_height * 0.8)  # 20% shorter
+        new_height = default_height           # keep full height
 
         self.resize(new_width, new_height)
         self.setMinimumSize(int(new_width * 0.7), int(new_height * 0.7))

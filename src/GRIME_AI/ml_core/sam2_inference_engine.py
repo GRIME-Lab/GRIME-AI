@@ -167,14 +167,37 @@ class SAM2InferenceEngine:
     # ------------------------------------------------------------------------------------------------------------------
     def _resolve_blob_filter_radius(self, checkpoint: dict) -> float:
         """
-        Resolve blob_filter_radius using a three-tier fallback:
-          1. .torch checkpoint metadata  (most authoritative — matches training exactly)
-          2. site_config.json            (fallback for checkpoints predating this feature)
-          3. Default of 50px / 2236px   (last resort, ~0.02236 fraction of diagonal)
-        Returns the fraction of image diagonal to use as the radius threshold.
+        Resolve blob_filter_radius (scalar fallback fraction) using three-tier fallback:
+          1. .torch checkpoint metadata
+          2. site_config.json
+          3. Default of 50px / 2236px (~0.02236 fraction of diagonal)
+        Also loads blob_centroid_mean, blob_centroid_cov, and blob_filter_n_sigma
+        from the checkpoint for Mahalanobis filtering. These are stored as instance
+        attributes: self.blob_centroid_mean, self.blob_centroid_cov, self.blob_filter_n_sigma.
         """
         import math as _math
+        import numpy as np
         DEFAULT_FRACTION = 50.0 / _math.sqrt(2000**2 + 1000**2)  # ~0.02236
+
+        # Load Mahalanobis distribution from checkpoint if present
+        self.blob_centroid_mean  = checkpoint.get("blob_centroid_mean",  None)
+        self.blob_filter_n_sigma = float(checkpoint.get("blob_filter_n_sigma", 2.5))
+        raw_cov = checkpoint.get("blob_centroid_cov", None)
+        if raw_cov is not None:
+            try:
+                cov = np.array(raw_cov, dtype=np.float64)
+                inv_cov = np.linalg.inv(cov)
+                self.blob_centroid_cov     = cov
+                self.blob_centroid_inv_cov = inv_cov
+                print(f"  blob_filter: Mahalanobis distribution loaded from checkpoint "
+                      f"(n_sigma={self.blob_filter_n_sigma:.3f})")
+            except (np.linalg.LinAlgError, ValueError) as e:
+                print(f"  blob_filter: covariance matrix unusable ({e}) — scalar fallback")
+                self.blob_centroid_cov     = None
+                self.blob_centroid_inv_cov = None
+        else:
+            self.blob_centroid_cov     = None
+            self.blob_centroid_inv_cov = None
 
         # Tier 1: checkpoint metadata
         ckpt_value = checkpoint.get("blob_filter_radius")
@@ -640,15 +663,35 @@ class SAM2InferenceEngine:
                 num_labels, labels = cv2.connectedComponents(labels_np)
                 valid_mask = np.zeros_like(labels, dtype=np.uint8)
 
+                # Choose Mahalanobis or scalar filter based on checkpoint contents
+                use_mahal = (
+                    self.blob_centroid_mean is not None
+                    and self.blob_centroid_inv_cov is not None
+                )
+
+                if use_mahal:
+                    from scipy.spatial.distance import mahalanobis as _mahal
+                    _mean     = np.array(self.blob_centroid_mean, dtype=np.float64)
+                    _inv_cov  = self.blob_centroid_inv_cov
+                    _n_sigma  = self.blob_filter_n_sigma
+
                 for lbl in range(1, num_labels):
                     ys, xs = np.nonzero(labels == lbl)
                     if xs.size == 0:
                         continue
-                    cx_blob, cy_blob = xs.mean(), ys.mean()
-                    for cx, cy in centroid_coords_cache:
-                        if np.linalg.norm([cx - cx_blob, cy - cy_blob]) < radius_threshold_cache:
+                    cx_blob, cy_blob = float(xs.mean()), float(ys.mean())
+
+                    if use_mahal:
+                        # Mahalanobis distance from the training centroid distribution
+                        dist = _mahal([cx_blob, cy_blob], _mean, _inv_cov)
+                        if dist < _n_sigma:
                             valid_mask[labels == lbl] = 1
-                            break
+                    else:
+                        # Scalar circular fallback
+                        for cx, cy in centroid_coords_cache:
+                            if np.linalg.norm([cx - cx_blob, cy - cy_blob]) < radius_threshold_cache:
+                                valid_mask[labels == lbl] = 1
+                                break
 
                 mask = valid_mask
 

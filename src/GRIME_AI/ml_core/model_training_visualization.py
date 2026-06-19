@@ -43,6 +43,8 @@ class ModelTrainingVisualization:
         categories:   list of {"id": cid, "name": cname}
         """
         self.models_folder = models_folder
+        self.graphs_folder = os.path.join(models_folder, "graphs")
+        os.makedirs(self.graphs_folder, exist_ok=True)
         self.formatted_time = formatted_time
 
         # sort categories once, build label IDs + names
@@ -188,16 +190,19 @@ class ModelTrainingVisualization:
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Accuracy")
         ax.set_title(self._make_title("Accuracy", site_name, lr, model_name))  # ✅ Use helper
-        ax.set_ylim(0, 1)  # ✅ Fixed y-axis for cross-model comparability
+        _yall = list(tr_acc) + list(vl_acc)
+        _ymin, _ymax = min(_yall), max(_yall)
+        _ypad = max(0.005, (_ymax - _ymin) * 0.05)
+        ax.set_ylim(max(0.0, _ymin - _ypad), _ymax + _ypad)
         ax.legend(loc="lower left")
-        self._add_info_box(ax, lr=lr, epochs=epochs, batch_size=batch_size,
+        self._add_info_box(ax, lr=lr, epochs=len(vl_acc), batch_size=batch_size,
                            num_train_images=num_train_images, num_val_images=num_val_images,
                            blob_radius_pct=blob_radius_pct, weight_decay=weight_decay,
                            lora_rank=lora_rank, lora_alpha=lora_alpha, loc="lower right")
         ax.grid(True, alpha=self.grid_alpha)  # ✅ Added grid
 
         out_file = os.path.join(
-            self.models_folder,
+            self.graphs_folder,
             f"{self.formatted_time}_{site_name}_AccuracyCurves_lr{lr:.5f}.png"
         )
         fig.tight_layout()
@@ -254,14 +259,18 @@ class ModelTrainingVisualization:
         ax.set_ylabel("Loss")
         ax.set_title(self._make_title("Loss", site_name, lr, model_name))  # ✅ Use helper
         ax.legend(loc="upper right")
-        self._add_info_box(ax, lr=lr, epochs=epochs, batch_size=batch_size,
+        _yall = list(tr) + list(vl)
+        _ymin, _ymax = min(_yall), max(_yall)
+        _ypad = max(0.005, (_ymax - _ymin) * 0.05)
+        ax.set_ylim(_ymin - _ypad, _ymax + _ypad)
+        self._add_info_box(ax, lr=lr, epochs=len(vl), batch_size=batch_size,
                            num_train_images=num_train_images, num_val_images=num_val_images,
                            blob_radius_pct=blob_radius_pct, weight_decay=weight_decay,
                            lora_rank=lora_rank, lora_alpha=lora_alpha, loc="lower left")
         ax.grid(True, alpha=self.grid_alpha)  # ✅ Added grid
 
         out_file = os.path.join(
-            self.models_folder,
+            self.graphs_folder,
             f"{self.formatted_time}_{site_name}_LossCurves_lr{lr:.5f}.png"
         )
         fig.tight_layout()
@@ -326,11 +335,12 @@ class ModelTrainingVisualization:
             f"{self.formatted_time}_{site_name}_"
             f"{prefix_tag}ConfusionMatrix_{lr}{norm_tag}.png"
         )
-        png_path = os.path.join(self.models_folder, filename)
+        png_path = os.path.join(self.graphs_folder, filename)
 
         plt.tight_layout()
         plt.savefig(png_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
         plt.close(fig)  # ✅ CRITICAL: Close the specific figure (was plt.close())
+        return png_path
 
     # ------------------------------------------------------------------------------------------------------------------
     # ✅ FIXED: Added grid, used title helper, simplified downsampling
@@ -382,9 +392,11 @@ class ModelTrainingVisualization:
 
         if file_prefix:
             filename = f"{file_prefix}_precision_recall_curve.png"
-            fig.savefig(os.path.join(self.models_folder, filename), dpi=self.plot_dpi)  # ✅ Consistent DPI
+            pr_path = os.path.join(self.graphs_folder, filename)
+            fig.savefig(pr_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
             plt.close(fig)
             print(f"PR plot saved to {filename}")
+            return pr_path
         else:
             plt.close(fig)  # ✅ Ensure cleanup even if not saving
 
@@ -441,9 +453,11 @@ class ModelTrainingVisualization:
 
         if file_prefix:
             filename = f"{file_prefix}_roc_curve.png"
-            fig.savefig(os.path.join(self.models_folder, filename), dpi=self.plot_dpi)  # ✅ Consistent DPI
+            roc_path = os.path.join(self.graphs_folder, filename)
+            fig.savefig(roc_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
             plt.close(fig)
             print(f"ROC plot saved to {filename}")
+            return roc_path
         else:
             plt.close(fig)  # ✅ Ensure cleanup
 
@@ -506,9 +520,11 @@ class ModelTrainingVisualization:
 
         if file_prefix:
             filename = f"{file_prefix}_f1_curve.png"
-            fig.savefig(os.path.join(self.models_folder, filename), dpi=self.plot_dpi)  # ✅ Consistent DPI
+            f1_path = os.path.join(self.graphs_folder, filename)
+            fig.savefig(f1_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
             plt.close(fig)
             print(f"F1 plot saved to {filename}")
+            return f1_path
         else:
             plt.close(fig)  # ✅ Ensure cleanup
 
@@ -570,8 +586,11 @@ class ModelTrainingVisualization:
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Mean IoU")
         ax.set_title(self._make_title("Mean IoU over Epochs", site_name, lr, model_name))  # ✅ Use helper
-        ax.set_ylim(0, 1)  # ✅ Fixed y-axis for cross-model comparability
-        self._add_info_box(ax, lr=lr, epochs=num_epochs, batch_size=batch_size,
+        _yall = list(mi)
+        _ymin, _ymax = min(_yall), max(_yall)
+        _ypad = max(0.005, (_ymax - _ymin) * 0.05)
+        ax.set_ylim(max(0.0, _ymin - _ypad), _ymax + _ypad)
+        self._add_info_box(ax, lr=lr, epochs=len(mi), batch_size=batch_size,
                            num_train_images=num_train_images, num_val_images=num_val_images,
                            blob_radius_pct=blob_radius_pct, weight_decay=weight_decay,
                            lora_rank=lora_rank, lora_alpha=lora_alpha)
@@ -581,9 +600,11 @@ class ModelTrainingVisualization:
         # Save or show
         if file_prefix:
             filename = f"{file_prefix}_miou_curve.png"
-            fig.savefig(os.path.join(self.models_folder, filename), dpi=self.plot_dpi)  # ✅ Consistent DPI
+            miou_path = os.path.join(self.graphs_folder, filename)
+            fig.savefig(miou_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
             plt.close(fig)
             print(f"Mean IoU plot saved to {filename}")
+            return miou_path
         else:
             plt.close(fig)  # ✅ Ensure cleanup
 
@@ -629,8 +650,11 @@ class ModelTrainingVisualization:
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Dice")
         ax.set_title(self._make_title("Validation Dice over Epochs", site_name, lr, model_name))  # ✅ Use helper
-        ax.set_ylim(0, 1)  # ✅ Fixed y-axis for cross-model comparability
-        self._add_info_box(ax, lr=lr, epochs=num_epochs, batch_size=batch_size,
+        _yall = list(dv)
+        _ymin, _ymax = min(_yall), max(_yall)
+        _ypad = max(0.005, (_ymax - _ymin) * 0.05)
+        ax.set_ylim(max(0.0, _ymin - _ypad), _ymax + _ypad)
+        self._add_info_box(ax, lr=lr, epochs=len(dv), batch_size=batch_size,
                            num_train_images=num_train_images, num_val_images=num_val_images,
                            blob_radius_pct=blob_radius_pct, weight_decay=weight_decay,
                            lora_rank=lora_rank, lora_alpha=lora_alpha)
@@ -639,9 +663,11 @@ class ModelTrainingVisualization:
 
         if file_prefix:
             filename = f"{file_prefix}_dice_curve.png"
-            fig.savefig(os.path.join(self.models_folder, filename), dpi=self.plot_dpi)  # ✅ Consistent DPI
+            dice_path = os.path.join(self.graphs_folder, filename)
+            fig.savefig(dice_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
             plt.close(fig)
             print(f"Dice plot saved to {filename}")
+            return dice_path
         else:
             plt.close(fig)  # ✅ Ensure cleanup
 
@@ -687,8 +713,11 @@ class ModelTrainingVisualization:
         ax.set_xlabel("Epoch")
         ax.set_ylabel("IoU")
         ax.set_title(self._make_title("Validation IoU over Epochs", site_name, lr, model_name))  # ✅ Use helper
-        ax.set_ylim(0, 1)  # ✅ Fixed y-axis for cross-model comparability
-        self._add_info_box(ax, lr=lr, epochs=num_epochs, batch_size=batch_size,
+        _yall = list(iv)
+        _ymin, _ymax = min(_yall), max(_yall)
+        _ypad = max(0.005, (_ymax - _ymin) * 0.05)
+        ax.set_ylim(max(0.0, _ymin - _ypad), _ymax + _ypad)
+        self._add_info_box(ax, lr=lr, epochs=len(iv), batch_size=batch_size,
                            num_train_images=num_train_images, num_val_images=num_val_images,
                            blob_radius_pct=blob_radius_pct, weight_decay=weight_decay,
                            lora_rank=lora_rank, lora_alpha=lora_alpha)
@@ -697,9 +726,11 @@ class ModelTrainingVisualization:
 
         if file_prefix:
             filename = f"{file_prefix}_iou_curve.png"
-            fig.savefig(os.path.join(self.models_folder, filename), dpi=self.plot_dpi)  # ✅ Consistent DPI
+            iou_path = os.path.join(self.graphs_folder, filename)
+            fig.savefig(iou_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
             plt.close(fig)
             print(f"IoU plot saved to {filename}")
+            return iou_path
         else:
             plt.close(fig)  # ✅ Ensure cleanup
     # ------------------------------------------------------------------------------------------------------------------
@@ -1100,10 +1131,7 @@ class ModelTrainingVisualization:
         if blob_radius_pct is not None:
             _section_header("Model Parameters")
             param_rows = [("Blob Filter Radius", f"{blob_radius_pct:.1f}% of image diagonal")]
-            if blob_radius_pct < 5.0:
-                param_rows.append(("Blob Radius Warning",
-                    f"Radius {blob_radius_pct:.1f}% may be too aggressive "
-                    "and could discard valid detections. Recommended: 15-25%."))
+
             _meta_table(param_rows)
 
         # --- Annotation Labels ---
@@ -1151,7 +1179,7 @@ class ModelTrainingVisualization:
         if graph_paths:
             valid_graphs = [p for p in graph_paths if p and os.path.isfile(p)]
             if valid_graphs:
-                _section_header("Training Curves")
+                _section_header("Training Graphs")
                 pdf.ln(2)
                 for img_path in valid_graphs:
                     img_w = page_w
@@ -1172,7 +1200,7 @@ class ModelTrainingVisualization:
 
         # --- Save PDF ---
         lr_str = f"_lr{lr:.5f}" if lr is not None else ""
-        pdf_filename = f"{self.formatted_time}_{site_name}_TrainingReport{lr_str}.pdf"
+        pdf_filename = f"{self.formatted_time}_{site_name}_Training_Report{lr_str}.pdf"
         pdf_path = os.path.join(self.models_folder, pdf_filename)
 
         try:
