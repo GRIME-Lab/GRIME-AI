@@ -138,7 +138,7 @@ def unwrap_mask(m):
 class SAM2Trainer:
 
 
-    def __init__(self, cfg: DictConfig = None, parent_widget=None):
+    def __init__(self, cfg: DictConfig = None, parent_widget=None, site_config: dict = None):
         self.parent_widget = parent_widget
         # =========================================================================
         # TEST MODE CONFIGURATION
@@ -182,8 +182,23 @@ class SAM2Trainer:
 
         self.dataset_util = DatasetUtils()
 
-        # load site_config from Hydra or from saved JSON
-        if cfg is None or "site_config" not in cfg:
+        # Site config priority (race-safe):
+        #   1) Use the explicit site_config dict passed in by MLModelTraining.
+        #      This is the dict that MLModelTraining loaded at dispatch time,
+        #      which captures the state immediately after the user's Train click.
+        #      No further file I/O — immune to any later writes to site_config.json.
+        #   2) Fall back to Hydra cfg.site_config if present.
+        #   3) Last resort: re-read site_config.json from disk.
+        if site_config is not None:
+            # Defensive copy so caller's dict isn't mutated by trainer code.
+            import copy as _copy
+            self.site_config = _copy.deepcopy(site_config)
+            print(f"[SAM2Trainer] Using site_config passed in from caller "
+                  f"(holdout_seasons={self.site_config.get('holdout_seasons', [])!r}).")
+        elif cfg is not None and "site_config" in cfg:
+            # Convert the Hydra DictConfig to a standard dict using OmegaConf.to_container.
+            self.site_config = OmegaConf.to_container(cfg.site_config, resolve=True)
+        else:
             settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
             CONFIG_FILENAME = "site_config.json"
             site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
@@ -192,9 +207,8 @@ class SAM2Trainer:
             # Use ModelConfigManager instead of JsonEditor
             mgr = ModelConfigManager(site_configuration_file)
             self.site_config = mgr.load_config(return_type="dict")
-        else:
-            # Convert the Hydra DictConfig to a standard dict using OmegaConf.to_container.
-            self.site_config = OmegaConf.to_container(cfg.site_config, resolve=True)
+            print(f"[SAM2Trainer] WARNING: re-read site_config.json from disk "
+                  f"(no dict was passed in). holdout_seasons={self.site_config.get('holdout_seasons', [])!r}.")
 
         self.site_name = self.site_config['siteName']
         self.learning_rates = self.site_config['learningRates']
@@ -316,13 +330,65 @@ class SAM2Trainer:
         season_type = self.site_config.get("season_type", "Meteorological")
 
         if holdout_seasons:
-            from GRIME_AI.ml_core.seasonal_dropout import filter_seasons, extract_date_from_usgs_filename, get_season_date_range
-            all_image_keys = list(self.dataset.keys())
-            kept_keys, excluded_keys = filter_seasons(all_image_keys, holdout_seasons, season_type)
-            if excluded_keys:
-                print(f"[Seasonal Hold-Out] Excluding {len(excluded_keys)} images from "
-                      f"{', '.join(holdout_seasons)} ({season_type}).")
-                self.dataset = {k: self.dataset[k] for k in kept_keys}
+            from GRIME_AI.ml_core.seasonal_dropout import (
+                filter_seasons, extract_date_from_usgs_filename, get_season_date_range, get_season
+            )
+
+            # self.dataset is keyed by FOLDER, not by image. Each value is a dict with
+            # 'images' (list of full image paths) and 'annotations' (COCO dict with its own
+            # 'images' and 'annotations' arrays). Filter at the image level inside each folder.
+            print(f"[Seasonal Hold-Out] Filtering — holdout_seasons={holdout_seasons!r}, "
+                  f"season_type={season_type!r}, folders={len(self.dataset)}")
+
+            total_kept     = 0
+            total_excluded = 0
+            excluded_image_records = []  # for manifest CSV
+
+            holdout_set = set(holdout_seasons)
+
+            for folder_key, folder_val in self.dataset.items():
+                if not isinstance(folder_val, dict):
+                    continue
+
+                # 1) Filter the 'images' path list
+                img_paths = folder_val.get("images", []) or []
+                kept_paths, excluded_paths = filter_seasons(img_paths, holdout_seasons, season_type)
+                folder_val["images"] = kept_paths
+                total_kept     += len(kept_paths)
+                total_excluded += len(excluded_paths)
+
+                # Record excluded for manifest
+                for p in excluded_paths:
+                    excluded_image_records.append(p)
+
+                # 2) Filter the COCO annotations substructure (images[] and annotations[])
+                ann = folder_val.get("annotations")
+                if isinstance(ann, dict):
+                    excluded_basenames = {
+                        str(p).replace("\\", "/").split("/")[-1] for p in excluded_paths
+                    }
+                    excluded_image_ids = set()
+
+                    coco_images = ann.get("images", []) or []
+                    kept_coco_images = []
+                    for img_rec in coco_images:
+                        fname = img_rec.get("file_name", "")
+                        if fname in excluded_basenames:
+                            excluded_image_ids.add(img_rec.get("id"))
+                        else:
+                            kept_coco_images.append(img_rec)
+                    ann["images"] = kept_coco_images
+
+                    if excluded_image_ids:
+                        coco_anns = ann.get("annotations", []) or []
+                        ann["annotations"] = [
+                            a for a in coco_anns if a.get("image_id") not in excluded_image_ids
+                        ]
+
+            if total_excluded > 0:
+                print(f"[Seasonal Hold-Out] Excluded {total_excluded} images from "
+                      f"{', '.join(holdout_seasons)} ({season_type}). "
+                      f"Kept {total_kept} images.")
 
                 # Save hold-out manifest CSV
                 import csv as _csv
@@ -331,7 +397,7 @@ class SAM2Trainer:
                     self.model_output_folder,
                     f"{season_type.lower()}_{seasons_label}_seasonal_holdouts.csv"
                 )
-                with open(knockout_filename, "w", newline="") as _f:
+                with open(knockout_filename, "w", newline="", encoding="utf-8") as _f:
                     writer = _csv.writer(_f)
                     writer.writerow([
                         "File Date",
@@ -340,10 +406,9 @@ class SAM2Trainer:
                         "Hold-Out Seasons",
                         "Season Date Range",
                     ])
-                    for k in excluded_keys:
-                        bare      = str(k).replace("\\", "/").split("/")[-1]
-                        file_date = extract_date_from_usgs_filename(bare)
-                        from GRIME_AI.ml_core.seasonal_dropout import get_season
+                    for k in excluded_image_records:
+                        bare       = str(k).replace("\\", "/").split("/")[-1]
+                        file_date  = extract_date_from_usgs_filename(bare)
                         img_season = get_season(file_date, season_type) if file_date else ""
                         date_range = get_season_date_range(img_season, season_type) if img_season else ""
                         writer.writerow([
@@ -354,13 +419,19 @@ class SAM2Trainer:
                             date_range,
                         ])
                 print(f"[Seasonal Hold-Out] Manifest saved to: {knockout_filename}")
+            else:
+                print(f"[Seasonal Hold-Out] WARNING: filter ran but excluded 0 images. "
+                      f"Either no images matched {holdout_seasons!r} in this dataset, "
+                      f"or filename date regex failed to parse.")
 
         train_images, val_images = self.dataset_util.split_dataset(
             self.dataset, train_split=train_split, val_split=val_split
         )
+        _diag_folder = os.path.join(self.model_output_folder, "diagnostics")
+        os.makedirs(_diag_folder, exist_ok=True)
         split_dataset_filename = os.path.join(
-            self.model_output_folder,
-            f"{self.formatted_time}_{self.site_name}training_and_validation_sets.json"
+            _diag_folder,
+            f"{self.formatted_time}_{self.site_name}_training_and_validation_sets.json"
         )
         self.dataset_util.save_split_dataset(train_images, val_images, split_dataset_filename)
 
@@ -712,10 +783,7 @@ class SAM2Trainer:
                     print("Centroid collection frozen - will not accumulate in future epochs\n")
 
 
-                # Skip validation during warmup period (first 10% of epochs)
-                validation_warmup_epochs = max(1, int(epochs * 0.1))
-
-                if val_cache and (epoch + 1) > validation_warmup_epochs:
+                if val_cache:
                     is_last_epoch = (epoch + 1 == epochs)
                     avg_val_loss, val_accuracy, miou, avg_val_dice, avg_val_iou = self._validate_one_epoch(
                         val_cache=val_cache,
@@ -766,9 +834,16 @@ class SAM2Trainer:
             # POST-TRAINING: compute suggested blob filter radius and store
             # on self so the caller can retrieve it and prompt the user
             # ----------------------------------------------------------------
-            self.suggested_blob_radius_result = self._compute_suggested_blob_radius(
+            self.suggested_blob_radius_result = self._compute_blob_filter_distribution(
                 train_images, target_label
             )
+            # Update self.blob_filter_radius to the computed fallback fraction so
+            # the training report PDF shows the Mahalanobis-derived value, not the
+            # seed value from site_config.
+            if self.suggested_blob_radius_result is not None:
+                self.blob_filter_radius = self.suggested_blob_radius_result.get(
+                    "fallback_fraction", self.blob_filter_radius
+                )
 
         finally:
             if not self.progress_bar_closed and 'progressBar' in locals():
@@ -795,23 +870,32 @@ class SAM2Trainer:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def _compute_suggested_blob_radius(self, train_images, target_label):
+    def _compute_blob_filter_distribution(self, train_images, target_label):
         """
-        Post-training: estimate the blob filter radius needed at inference by
-        measuring how far each per-image centroid is from the global mean
-        centroid across all training images.
+        Post-training: fit a 2D Gaussian to per-image ground truth centroids
+        and store the mean and covariance matrix in the checkpoint. At inference
+        the blob filter uses Mahalanobis distance rather than a circular radius,
+        so the acceptance region conforms to the actual shape and orientation of
+        centroid variation across the training set.
 
-        The global mean centroid is what gets stored as the prompt centroid in
-        the checkpoint. At inference, any image's detected region could be at a
-        different position than that mean. The 95th percentile of per-image
-        centroid distances from the global mean is therefore the tightest radius
-        that would not reject any legitimate detection in the training set.
+        Falls back to a scalar radius fraction when fewer than 3 images are
+        available or the covariance matrix is singular (collinear centroids).
 
-        Returns (suggested_fraction, suggested_px, diagonal_px) or None.
+        Returns a dict with keys:
+            centroid_mean   : [cx, cy] in pixels
+            centroid_cov    : 2x2 covariance matrix as nested list (or None)
+            n_sigma         : float, Mahalanobis threshold (default 2.5)
+            fallback_fraction: float, scalar fraction for singular/missing cov
+            diagonal_px     : float
+            n_images        : int
+        or None on total failure.
         """
+        import numpy as np
+        from scipy.spatial.distance import mahalanobis
+
         target_id = next((c["id"] for c in self.categories if c["name"] == target_label), None)
         if target_id is None:
-            print(f"[Blob Radius] Category '{target_label}' not found — skipping.")
+            print(f"[Blob Filter] Category '{target_label}' not found — skipping.")
             return None
 
         per_image_centroids = []
@@ -828,27 +912,12 @@ class SAM2Trainer:
             if true_mask.ndim == 3:
                 true_mask = true_mask[..., 0]
             true_mask = true_mask.astype(np.uint8)
-
             ys, xs = np.where(true_mask > 0)
-            per_image_centroids.append((float(np.mean(xs)), float(np.mean(ys))))
+            per_image_centroids.append([float(np.mean(xs)), float(np.mean(ys))])
 
         if not per_image_centroids:
-            print("[Blob Radius] No valid images — skipping computation.")
+            print("[Blob Filter] No valid images — skipping computation.")
             return None
-
-        # Global mean centroid — this is the prompt centroid stored in the checkpoint
-        global_cx = float(np.mean([c[0] for c in per_image_centroids]))
-        global_cy = float(np.mean([c[1] for c in per_image_centroids]))
-
-        # Distance from each per-image centroid to the global mean
-        distances = np.array([
-            float(np.sqrt((cx - global_cx) ** 2 + (cy - global_cy) ** 2))
-            for cx, cy in per_image_centroids
-        ])
-
-        p95_px  = float(np.percentile(distances, 95))
-        p50_px  = float(np.percentile(distances, 50))
-        pmax_px = float(np.max(distances))
 
         try:
             img = np.array(Image.open(train_images[0]).convert("RGB"))
@@ -857,25 +926,65 @@ class SAM2Trainer:
         except Exception:
             diagonal_px = float(np.sqrt(1920 ** 2 + 1080 ** 2))
 
-        suggested_fraction = p95_px / diagonal_px
+        pts = np.array(per_image_centroids)  # shape (N, 2)
+        mean_cx, mean_cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+        centroid_mean = [mean_cx, mean_cy]
 
-        print(f"\n[Blob Radius] Category: '{target_label}'")
+        # Distances from mean — used for fallback scalar and diagnostics
+        distances = np.linalg.norm(pts - np.array([mean_cx, mean_cy]), axis=1)
+        p95_px  = float(np.percentile(distances, 95))
+        p50_px  = float(np.percentile(distances, 50))
+        fallback_fraction = p95_px / diagonal_px
+
+        # Attempt covariance fit — requires at least 3 non-collinear points
+        centroid_cov = None
+        n_sigma = 2.5
+        if len(pts) >= 3:
+            try:
+                cov = np.cov(pts.T)  # 2x2
+                # Verify invertibility
+                inv_cov = np.linalg.inv(cov)
+                # Sanity-check: recompute Mahalanobis distances and confirm
+                # the 95th percentile falls within n_sigma
+                mah_distances = np.array([
+                    mahalanobis(p, [mean_cx, mean_cy], inv_cov)
+                    for p in pts
+                ])
+                # Expand n_sigma to cover 95th percentile of training centroids
+                n_sigma = max(2.5, float(np.percentile(mah_distances, 95)))
+                centroid_cov = cov.tolist()
+                print(f"[Blob Filter] Mahalanobis fit successful.")
+                print(f"  n_sigma (95th pct of training Mahalanobis distances): {n_sigma:.3f}")
+            except np.linalg.LinAlgError:
+                print("[Blob Filter] Covariance matrix singular — using scalar fallback.")
+
+        print(f"\n[Blob Filter] Category: '{target_label}'")
         print(f"  Images analyzed : {len(per_image_centroids)}  (skipped: {skipped})")
-        print(f"  Global centroid : ({global_cx:.1f}, {global_cy:.1f}) px")
+        print(f"  Mean centroid   : ({mean_cx:.1f}, {mean_cy:.1f}) px")
         print(f"  Median distance : {p50_px:.1f} px")
-        print(f"  95th percentile : {p95_px:.1f} px  <- suggested")
-        print(f"  Maximum         : {pmax_px:.1f} px")
+        print(f"  95th pct dist   : {p95_px:.1f} px")
         print(f"  Diagonal        : {diagonal_px:.1f} px")
-        print(f"  Fraction        : {suggested_fraction:.4f} ({suggested_fraction * 100:.2f}%)")
+        print(f"  Fallback frac   : {fallback_fraction:.4f} ({fallback_fraction * 100:.2f}%)")
+        print(f"  Covariance fit  : {'yes' if centroid_cov else 'no (fallback)'}")
 
-        return suggested_fraction, p95_px, diagonal_px
+        return {
+            "centroid_mean":    centroid_mean,
+            "centroid_cov":     centroid_cov,
+            "n_sigma":          n_sigma,
+            "fallback_fraction": fallback_fraction,
+            "diagonal_px":      diagonal_px,
+            "n_images":         len(per_image_centroids),
+        }
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def _update_checkpoints_blob_radius(self, new_fraction):
+    def _update_checkpoints_blob_radius(self, new_fraction, blob_distribution=None):
         """
-        Reopen each saved checkpoint and update blob_filter_radius.
-        Called only after the user confirms they want the computed radius.
+        Reopen each saved checkpoint and update blob filter metadata.
+        Writes blob_filter_radius (scalar fallback fraction) and, when
+        blob_distribution is provided, also writes blob_centroid_mean,
+        blob_centroid_cov, and blob_filter_n_sigma for Mahalanobis filtering
+        at inference.
         """
         for rank, (val_loss, ckpt_path) in enumerate(self.best_checkpoints, start=1):
             if not ckpt_path or not os.path.isfile(ckpt_path):
@@ -883,10 +992,14 @@ class SAM2Trainer:
             try:
                 ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
                 ckpt["blob_filter_radius"] = new_fraction
+                if blob_distribution is not None:
+                    ckpt["blob_centroid_mean"]  = blob_distribution.get("centroid_mean")
+                    ckpt["blob_centroid_cov"]   = blob_distribution.get("centroid_cov")
+                    ckpt["blob_filter_n_sigma"] = blob_distribution.get("n_sigma", 2.5)
                 torch.save(ckpt, ckpt_path)
-                print(f"[Blob Radius] Updated checkpoint #{rank}: {os.path.basename(ckpt_path)}")
+                print(f"[Blob Filter] Updated checkpoint #{rank}: {os.path.basename(ckpt_path)}")
             except Exception as e:
-                print(f"[Blob Radius] Failed to update {ckpt_path}: {e}")
+                print(f"[Blob Filter] Failed to update {ckpt_path}: {e}")
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -977,6 +1090,14 @@ class SAM2Trainer:
                 available = ", ".join(f'{c["name"]}:{c["id"]}' for c in self.categories)
                 raise ValueError(f"Unknown target_label '{target_label}'. Available: {available}")
 
+            # ============================================================
+            # CENTROID DIAGNOSTIC TRACKING (epoch 0 only)
+            # Tracks why each image did or did not contribute a centroid.
+            # Written to a CSV report in the model output folder at end of epoch 0.
+            # ============================================================
+            if epoch == 0 and not hasattr(self, "_centroid_diag_rows"):
+                self._centroid_diag_rows = []   # list of dicts, one per image
+
             # LOAD GROUND TRUTH MASK
             result = self.dataset_util.load_true_mask(image_file, self.annotation_index, mode="binary", target_id=target_id)
             true_mask = result[0] if isinstance(result, tuple) else result
@@ -984,6 +1105,14 @@ class SAM2Trainer:
             # SKIP IF NO USABLE MASK
             if true_mask is None or true_mask.sum() == 0:
                 print(f"No usable mask for target_id={target_id} in {image_file}, skipping.")
+                if epoch == 0:
+                    self._centroid_diag_rows.append({
+                        "image": os.path.basename(image_file),
+                        "outcome": "mask_none_or_empty",
+                        "centroid_px": "",
+                        "centroid_norm": "",
+                        "detail": f"load_true_mask returned None or zero mask for target_id={target_id}"
+                    })
                 continue
 
             if true_mask.ndim == 3:
@@ -995,6 +1124,14 @@ class SAM2Trainer:
                 # Most likely cause: antivirus, indexer, or sync service locking the file.
                 # Log and skip rather than crash.
                 print(f"[WARNING] Image file inaccessible at epoch {epoch}, index {idx} - skipping: {image_file}")
+                if epoch == 0:
+                    self._centroid_diag_rows.append({
+                        "image": os.path.basename(image_file),
+                        "outcome": "file_missing",
+                        "centroid_px": "",
+                        "centroid_norm": "",
+                        "detail": "Image file inaccessible at training time"
+                    })
                 continue
             image = np.array(Image.open(image_file).convert("RGB"))
             predictor.set_image(image)
@@ -1013,19 +1150,37 @@ class SAM2Trainer:
                     cy = float(ys.mean())
                     positive_coords.append([cx, cy])
 
-                    # Only collect centroids during first epoch to prevent memory leak
+                    # Only collect centroids during first epoch to prevent memory leak.
+                    # NOTE: centroid collection happens here from ground truth mask blobs,
+                    # not from predicted blobs, so the blob filter does not affect what
+                    # gets recorded. This ensures the Mahalanobis distribution is built
+                    # from the full ground truth centroid population.
                     if epoch == 0:
-                        # Store normalized centroid for this category
                         centroid_px = (int(round(cx)), int(round(cy)))
                         centroid_norm = _normalize_centroid(cx, cy, w, h)
-
                         self.category_centroids.setdefault(int(target_id), []).append({
                             "centroid_px": centroid_px,
                             "centroid_norm": centroid_norm
                         })
+                        self._centroid_diag_rows.append({
+                            "image": os.path.basename(image_file),
+                            "outcome": "centroid_recorded",
+                            "centroid_px": f"({centroid_px[0]}, {centroid_px[1]})",
+                            "centroid_norm": f"({centroid_norm[0]:.4f}, {centroid_norm[1]:.4f})",
+                            "detail": f"blob {lbl}/{num_labels - 1}  mask_pixels={int(ys.size)}"
+                        })
 
             if not positive_coords:
                 print(f"Skipping {image_file} - no usable centroid for label {target_label}.")
+                if epoch == 0:
+                    self._centroid_diag_rows.append({
+                        "image": os.path.basename(image_file),
+                        "outcome": "no_foreground_blobs",
+                        "centroid_px": "",
+                        "centroid_norm": "",
+                        "detail": f"Mask loaded OK but connectedComponents found 0 blobs  "
+                                  f"mask_sum={int(true_mask.sum())}"
+                    })
                 continue
 
             # ============================================================
@@ -1438,13 +1593,8 @@ class SAM2Trainer:
         """
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
 
-        # Try to infer num_classes from the predictor if available
-        num_classes = None
-        try:
-            if hasattr(predictor.model, "roi_heads"):
-                num_classes = predictor.model.roi_heads.box_predictor.cls_score.out_features
-        except Exception:
-            pass
+        # num_classes is the number of annotation categories defined for this site
+        num_classes = len(self.categories) if self.categories else None
 
         ckpt = {
             "model_state_dict": predictor.model.state_dict(),
@@ -1664,7 +1814,7 @@ class SAM2Trainer:
         progressBar.show()
 
         # 3) Confusion matrix
-        viz.plot_confusion_matrix(
+        cm_png = viz.plot_confusion_matrix(
             y_true=self.val_true_list,
             y_pred=self.val_pred_list,
             site_name=self.site_name,
@@ -1676,7 +1826,7 @@ class SAM2Trainer:
         progressBar.show()
 
         # 4) ROC Curve + AUC
-        viz.plot_roc_curve(
+        roc_png = viz.plot_roc_curve(
             y_true=self.val_true_list,
             y_scores=self.val_score_list,
             site_name=self.site_name,
@@ -1687,7 +1837,7 @@ class SAM2Trainer:
         progressBar.show()
 
         # 5) Precision–Recall
-        viz.plot_precision_recall(
+        pr_png = viz.plot_precision_recall(
             y_true=self.val_true_list,
             y_scores=self.val_score_list,
             site_name=self.site_name,
@@ -1698,7 +1848,7 @@ class SAM2Trainer:
         progressBar.show()
 
         # 6) F1 vs. Threshold
-        viz.plot_f1_score(
+        f1_png = viz.plot_f1_score(
             y_true=self.val_true_list,
             y_scores=self.val_score_list,
             site_name=self.site_name,
@@ -1709,7 +1859,7 @@ class SAM2Trainer:
         progressBar.show()
 
         # 7) Mean IoU curve
-        viz.plot_miou_curve(
+        miou_png = viz.plot_miou_curve(
             epochs=self.epoch_list,
             miou_values=self.miou_values,
             site_name=self.site_name,
@@ -1725,7 +1875,7 @@ class SAM2Trainer:
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()
 
-        viz.plot_dice_curve(
+        dice_png = viz.plot_dice_curve(
             epochs=self.epoch_list,
             dice_values=self.val_dice_values,
             site_name=self.site_name,
@@ -1741,7 +1891,7 @@ class SAM2Trainer:
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()
 
-        viz.plot_iou_curve(
+        iou_png = viz.plot_iou_curve(
             epochs=self.epoch_list,
             iou_values=self.val_iou_values,
             site_name=self.site_name,
@@ -1760,8 +1910,10 @@ class SAM2Trainer:
         progressBar.close()
 
         # ── PDF Diagnostic Report ──────────────────────────────────────────
-        acc_png  = os.path.join(self.model_output_folder, f"{self.formatted_time}_{self.site_name}_AccuracyCurves_lr{lr:.5f}.png")
-        loss_png = os.path.join(self.model_output_folder, f"{self.formatted_time}_{self.site_name}_LossCurves_lr{lr:.5f}.png")
+        acc_png  = os.path.join(viz.graphs_folder, f"{self.formatted_time}_{self.site_name}_AccuracyCurves_lr{lr:.5f}.png")
+        loss_png = os.path.join(viz.graphs_folder, f"{self.formatted_time}_{self.site_name}_LossCurves_lr{lr:.5f}.png")
+        graphs = [g for g in [acc_png, loss_png, cm_png, roc_png, pr_png,
+                           f1_png, miou_png, dice_png, iou_png] if g and os.path.isfile(g)]
         viz.save_training_report(
             train_acc=self.train_accuracy_values,
             val_acc=self.val_accuracy_values,
@@ -1771,17 +1923,19 @@ class SAM2Trainer:
             lr=lr,
             miou_values=self.miou_values,
             dice_values=self.val_dice_values,
-            graph_paths=[acc_png, loss_png],
+            graph_paths=graphs,
             model_type="SAM2",
             num_train_images=getattr(self, "num_train_images", None),
             num_val_images=getattr(self, "num_val_images", None),
             blob_radius_pct=round(self.blob_filter_radius * 100, 1),
             weight_decay=self.weight_decay,
             categories=self.categories,
-            best_epoch=self.epoch_list[int(
-                self.val_accuracy_values.index(max(self.val_accuracy_values))
-            )] if self.val_accuracy_values else None,
-            best_val_acc=max(self.val_accuracy_values) if self.val_accuracy_values else None,
+            best_epoch=self._extract_epoch_from_path(self.best_checkpoints[0][1])
+                if self.best_checkpoints else None,
+            best_val_acc=self.val_accuracy_values[
+                self.epoch_list.index(self._extract_epoch_from_path(self.best_checkpoints[0][1]))
+            ] if self.best_checkpoints and self.val_accuracy_values and
+                self._extract_epoch_from_path(self.best_checkpoints[0][1]) in self.epoch_list else None,
             early_stopped=getattr(self, "early_stopped", False),
             early_stop_epoch=getattr(self, "early_stop_epoch", None),
             training_time_seconds=getattr(self, "training_time_seconds", None),
@@ -1862,10 +2016,44 @@ class SAM2Trainer:
         Keeps only unique centroids within tolerance_px distance.
         Call after first epoch to establish representative centroid set.
         """
+        # ============================================================
+        # WRITE CENTROID DIAGNOSTIC REPORT (epoch 0 data)
+        # ============================================================
+        if hasattr(self, "_centroid_diag_rows") and self._centroid_diag_rows and self.model_output_folder:
+            import csv
+            _diag_folder = os.path.join(self.model_output_folder, "diagnostics")
+            os.makedirs(_diag_folder, exist_ok=True)
+            diag_path = os.path.join(
+                _diag_folder,
+                f"{self.formatted_time}_{self.site_name}_centroid_diagnostic.csv"
+            )
+            fieldnames = ["image", "outcome", "centroid_px", "centroid_norm", "detail"]
+            try:
+                with open(diag_path, "w", newline="", encoding="utf-8") as f_diag:
+                    writer = csv.DictWriter(f_diag, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(self._centroid_diag_rows)
+
+                # Print summary
+                from collections import Counter
+                outcomes = Counter(r["outcome"] for r in self._centroid_diag_rows)
+                total = len(self._centroid_diag_rows)
+                print(f"\n[Centroid Diagnostic] {total} images processed in epoch 0:")
+                for outcome, count in sorted(outcomes.items()):
+                    print(f"  {outcome:<30} : {count}")
+                print(f"  Report written to: {diag_path}")
+            except Exception as e:
+                print(f"[Centroid Diagnostic] Failed to write report: {e}")
+            finally:
+                del self._centroid_diag_rows  # free memory
+
+        print(f"\n[Centroid Deduplication] tolerance_px={tolerance_px}")
         for cat_id, centroids in self.category_centroids.items():
             if not centroids:
+                print(f"  Category {cat_id}: 0 centroids (skipped)")
                 continue
 
+            before_count = len(centroids)
             unique_centroids = []
             for new_centroid in centroids:
                 cx_new, cy_new = new_centroid["centroid_px"]
@@ -1881,9 +2069,8 @@ class SAM2Trainer:
                 if is_unique:
                     unique_centroids.append(new_centroid)
 
-            before_count = len(centroids)
             after_count = len(unique_centroids)
+            removed = before_count - after_count
             self.category_centroids[cat_id] = unique_centroids
-
-            if before_count > after_count:
-                print(f"  Category {cat_id}: Deduplicated {before_count} → {after_count} centroids")
+            print(f"  Category {cat_id}: {before_count} collected  ->  {after_count} unique  "
+                  f"({removed} removed as duplicates within {tolerance_px}px)")

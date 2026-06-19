@@ -142,7 +142,15 @@ class MLModelTraining:
         # --------------------------------------------------------------------
         if mode.lower() == "sam2":
             from GRIME_AI.ml_core.sam2_trainer import SAM2Trainer
-            mySAM2_pipeline = SAM2Trainer(self.cfg, parent_widget=self.parent_widget)
+            # Pass self.site_config (loaded at dispatch time from the user's
+            # Train-click write) directly into the trainer. This eliminates
+            # any race window where another code path could rewrite
+            # site_config.json between the Train click and the trainer's read.
+            mySAM2_pipeline = SAM2Trainer(
+                self.cfg,
+                parent_widget=self.parent_widget,
+                site_config=self.site_config,
+            )
             mySAM2_pipeline.run_training_pipeline()
 
             # Get the best checkpoint path

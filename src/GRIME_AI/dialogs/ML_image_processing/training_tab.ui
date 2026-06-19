@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>821</width>
-    <height>581</height>
+    <height>750</height>
    </rect>
   </property>
   <layout class="QVBoxLayout" name="verticalTabParametersLayout">
@@ -51,6 +51,7 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
+           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -106,6 +107,7 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
+           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -124,6 +126,7 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
+           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -197,6 +200,7 @@
           <font>
            <family>Arial</family>
            <pointsize>10</pointsize>
+           <weight>75</weight>
            <italic>false</italic>
            <bold>true</bold>
           </font>
@@ -322,10 +326,16 @@
        <item>
         <widget class="QGroupBox" name="groupBox_labelSelection">
          <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
            <horstretch>0</horstretch>
            <verstretch>0</verstretch>
           </sizepolicy>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>16777215</width>
+           <height>80</height>
+          </size>
          </property>
          <property name="font">
           <font>
@@ -379,6 +389,7 @@
             <font>
              <family>Arial</family>
              <pointsize>10</pointsize>
+             <weight>75</weight>
              <italic>false</italic>
              <bold>true</bold>
             </font>
@@ -401,6 +412,19 @@
           </widget>
          </item>
         </layout>
+       </item>
+       <item>
+        <spacer name="verticalSpacer_trainingColumn">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>40</height>
+          </size>
+         </property>
+        </spacer>
        </item>
       </layout>
      </item>
@@ -446,7 +470,7 @@
            </font>
           </property>
           <property name="text">
-           <string>Site Name:</string>
+           <string>Model Name:</string>
           </property>
          </widget>
         </item>
@@ -841,213 +865,271 @@
           </item>
          </widget>
         </item>
-        <item row="6" column="0">
-         <widget class="QLabel" name="label_blobFilterRadius">
-          <property name="font">
-           <font>
-            <family>Arial</family>
-            <pointsize>10</pointsize>
-           </font>
-          </property>
-          <property name="toolTip">
-           <string>Minimum distance (in pixels) a predicted blob centroid must be from a training centroid prompt to be kept. Stored internally as a fraction of image diagonal so it scales across different image resolutions.</string>
-          </property>
-          <property name="text">
-           <string>Blob Filter Radius (px):</string>
-          </property>
-         </widget>
-        </item>
-        <item row="6" column="1">
-         <widget class="QSpinBox" name="spinBox_blobFilterRadius">
-          <property name="maximumSize">
-           <size>
-            <width>90</width>
-            <height>16777215</height>
-           </size>
+        <item row="6" column="0" colspan="6" alignment="Qt::AlignLeft">
+         <widget class="QGroupBox" name="groupBox_blobFilter">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
           <property name="font">
            <font>
             <family>Arial</family>
             <pointsize>10</pointsize>
+            <weight>75</weight>
+            <bold>true</bold>
            </font>
           </property>
-          <property name="toolTip">
-           <string>Minimum distance (in pixels) a detected blob centroid must be from the training centroid prompt to be kept.</string>
+          <property name="title">
+           <string>Blob Filter</string>
           </property>
-          <property name="minimum">
-           <number>1</number>
-          </property>
-          <property name="maximum">
-           <number>2000</number>
-          </property>
-          <property name="value">
-           <number>50</number>
-          </property>
+          <layout class="QHBoxLayout" name="horizontalLayout_blobFilter">
+           <item>
+            <widget class="QLabel" name="label_blobFilterRadius">
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+               <weight>50</weight>
+               <bold>false</bold>
+              </font>
+             </property>
+             <property name="toolTip">
+              <string>Minimum distance (in pixels) a predicted blob centroid must be from a training centroid prompt to be kept. Stored internally as a fraction of image diagonal so it scales across resolutions.</string>
+             </property>
+             <property name="text">
+              <string>Radius:</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="spinBox_blobFilterRadius">
+             <property name="maximumSize">
+              <size>
+               <width>90</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+               <weight>50</weight>
+               <bold>false</bold>
+              </font>
+             </property>
+             <property name="toolTip">
+              <string>Minimum distance (in pixels) a detected blob centroid must be from the training centroid prompt to be kept.</string>
+             </property>
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>2000</number>
+             </property>
+             <property name="value">
+              <number>50</number>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QRadioButton" name="radioButton_blobRadiusManual">
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+               <weight>50</weight>
+               <bold>false</bold>
+              </font>
+             </property>
+             <property name="toolTip">
+              <string>Use the value currently in the spinbox.</string>
+             </property>
+             <property name="text">
+              <string>Manual</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QRadioButton" name="radioButton_blobRadiusComputed">
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+               <weight>50</weight>
+               <bold>false</bold>
+              </font>
+             </property>
+             <property name="toolTip">
+              <string>When Train is clicked, analyze the selected training folders and use the 95th-percentile centroid scatter as the blob filter radius. Spinbox will be updated to the computed value.</string>
+             </property>
+             <property name="text">
+              <string>Computed</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
          </widget>
         </item>
-        <item row="6" column="2" colspan="3">
-         <widget class="QLabel" name="label_blobFilterRadiusPct">
+        <item row="7" column="0" colspan="6" alignment="Qt::AlignLeft">
+         <widget class="QGroupBox" name="groupBox_modelTrainingSplits">
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
+          </property>
           <property name="font">
            <font>
             <family>Arial</family>
             <pointsize>10</pointsize>
+            <weight>75</weight>
+            <bold>true</bold>
            </font>
           </property>
-          <property name="toolTip">
-           <string>Equivalent percentage of image diagonal.</string>
+          <property name="title">
+           <string>Model Training Splits</string>
           </property>
-          <property name="text">
-           <string>≈ — % of diagonal</string>
-          </property>
+          <layout class="QHBoxLayout" name="horizontalLayout_splitRow">
+           <item>
+            <widget class="QLabel" name="label_trainSplit">
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+               <weight>50</weight>
+               <bold>false</bold>
+              </font>
+             </property>
+             <property name="toolTip">
+              <string>Percentage of images used for training.</string>
+             </property>
+             <property name="text">
+              <string>Train (%):</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="spinBox_trainSplit">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>70</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>70</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+              </font>
+             </property>
+             <property name="minimum">
+              <number>0</number>
+             </property>
+             <property name="maximum">
+              <number>97</number>
+             </property>
+             <property name="value">
+              <number>80</number>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="line_splitSeparator">
+             <property name="frameShape">
+              <enum>QFrame::VLine</enum>
+             </property>
+             <property name="frameShadow">
+              <enum>QFrame::Sunken</enum>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="label_valSplit">
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+               <weight>50</weight>
+               <bold>false</bold>
+              </font>
+             </property>
+             <property name="toolTip">
+              <string>Percentage of images reserved for validation (10–40%).</string>
+             </property>
+             <property name="text">
+              <string>Validation (%):</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="spinBox_valSplit">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="minimumSize">
+              <size>
+               <width>70</width>
+               <height>0</height>
+              </size>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>70</width>
+               <height>16777215</height>
+              </size>
+             </property>
+             <property name="font">
+              <font>
+               <family>Arial</family>
+               <pointsize>10</pointsize>
+              </font>
+             </property>
+             <property name="minimum">
+              <number>0</number>
+             </property>
+             <property name="maximum">
+              <number>100</number>
+             </property>
+             <property name="value">
+              <number>20</number>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="horizontalSpacer_splitRow">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
          </widget>
-        </item>
-        <item row="7" column="0" colspan="6">
-         <layout class="QHBoxLayout" name="horizontalLayout_splitRow">
-          <property name="spacing">
-           <number>6</number>
-          </property>
-          <property name="leftMargin">
-           <number>0</number>
-          </property>
-          <property name="topMargin">
-           <number>0</number>
-          </property>
-          <property name="rightMargin">
-           <number>0</number>
-          </property>
-          <property name="bottomMargin">
-           <number>0</number>
-          </property>
-          <item>
-           <widget class="QLabel" name="label_trainSplit">
-            <property name="font">
-             <font>
-              <family>Arial</family>
-              <pointsize>10</pointsize>
-             </font>
-            </property>
-            <property name="toolTip">
-             <string>Percentage of images used for training.</string>
-            </property>
-            <property name="text">
-             <string>Train Split (%):</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QSpinBox" name="spinBox_trainSplit">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
-            <property name="minimumSize">
-             <size>
-              <width>70</width>
-              <height>0</height>
-             </size>
-            </property>
-            <property name="maximumSize">
-             <size>
-              <width>70</width>
-              <height>16777215</height>
-             </size>
-            </property>
-            <property name="font">
-             <font>
-              <family>Arial</family>
-              <pointsize>10</pointsize>
-             </font>
-            </property>
-            <property name="minimum">
-             <number>0</number>
-            </property>
-            <property name="maximum">
-             <number>97</number>
-            </property>
-            <property name="value">
-             <number>80</number>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QFrame" name="line_splitSeparator">
-            <property name="frameShape">
-             <enum>QFrame::VLine</enum>
-            </property>
-            <property name="frameShadow">
-             <enum>QFrame::Sunken</enum>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QLabel" name="label_valSplit">
-            <property name="font">
-             <font>
-              <family>Arial</family>
-              <pointsize>10</pointsize>
-             </font>
-            </property>
-            <property name="toolTip">
-             <string>Percentage of images reserved for validation (10–40%).</string>
-            </property>
-            <property name="text">
-             <string>Validation Split (%):</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QSpinBox" name="spinBox_valSplit">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
-            <property name="minimumSize">
-             <size>
-              <width>70</width>
-              <height>0</height>
-             </size>
-            </property>
-            <property name="maximumSize">
-             <size>
-              <width>70</width>
-              <height>16777215</height>
-             </size>
-            </property>
-            <property name="font">
-             <font>
-              <family>Arial</family>
-              <pointsize>10</pointsize>
-             </font>
-            </property>
-            <property name="minimum">
-             <number>0</number>
-            </property>
-            <property name="maximum">
-             <number>100</number>
-            </property>
-            <property name="value">
-             <number>20</number>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <spacer name="horizontalSpacer_splitRow">
-            <property name="orientation">
-             <enum>Qt::Horizontal</enum>
-            </property>
-            <property name="sizeHint" stdset="0">
-             <size>
-              <width>40</width>
-              <height>20</height>
-             </size>
-            </property>
-           </spacer>
-          </item>
-         </layout>
         </item>
         <item row="8" column="0" colspan="6">
          <layout class="QVBoxLayout" name="verticalLayout_holdoutSeasons">
@@ -1058,13 +1140,13 @@
            <number>0</number>
           </property>
           <property name="topMargin">
-           <number>2</number>
+           <number>0</number>
           </property>
           <property name="rightMargin">
            <number>0</number>
           </property>
           <property name="bottomMargin">
-           <number>2</number>
+           <number>0</number>
           </property>
           <item>
            <layout class="QHBoxLayout" name="horizontalLayout_holdoutLabels">
@@ -1073,7 +1155,9 @@
               <property name="font">
                <font>
                 <family>Arial</family>
-                <pointsize>9</pointsize>
+                <pointsize>11</pointsize>
+                <weight>75</weight>
+                <bold>true</bold>
                </font>
               </property>
               <property name="text">
@@ -1089,7 +1173,9 @@
               <property name="font">
                <font>
                 <family>Arial</family>
-                <pointsize>9</pointsize>
+                <pointsize>11</pointsize>
+                <weight>75</weight>
+                <bold>true</bold>
                </font>
               </property>
               <property name="text">
@@ -1473,6 +1559,19 @@
                </item>
               </layout>
              </widget>
+            </item>
+            <item>
+             <spacer name="verticalSpacer_targetModules">
+              <property name="orientation">
+               <enum>Qt::Vertical</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>20</width>
+                <height>40</height>
+               </size>
+              </property>
+             </spacer>
             </item>
            </layout>
           </widget>

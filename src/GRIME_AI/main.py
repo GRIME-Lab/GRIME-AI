@@ -911,7 +911,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
-        logo_path  = splash_dir / "GRIME-AI Logo.jpg"
+        logo_path  = splash_dir / "GRIME-AI Logo with Tagline.png"
         lbl_logo   = QLabel()
         lbl_logo.setAlignment(Qt.AlignCenter)
         if logo_path.exists():
@@ -4766,7 +4766,7 @@ def run_gui():
     # ------------------------------------------------------------------------------------------------------------------
     _splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
     _splash = GRIME_AI_SplashScreen(
-        image_path=os.path.join(_splash_dir, "GRIME-AI Logo.jpg")
+        image_path=os.path.join(_splash_dir, "GRIME-AI Logo with Tagline.png")
     )
     _splash.show()   # blocks briefly until splash is painted, then returns
 

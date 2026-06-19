@@ -847,7 +847,35 @@ class SegmentImagesTab(QWidget):
             
             # Skip model_state_dict (too large to display)
             skip_keys = {'model_state_dict', 'state_dict', 'optimizer', 'optimizer_state_dict'}
-            
+
+            # ── Blob filter mode summary (shown at top of metadata list) ──────
+            import numpy as np
+            import math as _math
+            raw_cov    = checkpoint.get("blob_centroid_cov")
+            n_sigma    = checkpoint.get("blob_filter_n_sigma", 2.5)
+            fallback   = checkpoint.get("blob_filter_radius")
+            diag_px    = _math.sqrt(1024**2 + 576**2)
+            cov_ok = False
+            if raw_cov is not None:
+                try:
+                    cov = np.array(raw_cov, dtype=np.float64)
+                    np.linalg.inv(cov)
+                    cov_ok = True
+                except Exception:
+                    pass
+            if cov_ok:
+                fallback_px = int(round(float(fallback) * diag_px)) if fallback else "?"
+                mode_str = (f"Mahalanobis  (n_sigma={float(n_sigma):.2f}  "
+                            f"fallback={float(fallback)*100:.1f}%  ~{fallback_px}px)")
+            elif fallback:
+                fallback_px = int(round(float(fallback) * diag_px))
+                mode_str = (f"Scalar fallback  ({float(fallback)*100:.1f}%  ~{fallback_px}px)  "
+                            f"-- retrain to enable Mahalanobis")
+            else:
+                mode_str = "Unknown  -- no blob filter metadata in checkpoint"
+            self.listWidget_modelMetadata.addItem(f"Blob Filter Mode: {mode_str}")
+            self.listWidget_modelMetadata.addItem("")   # blank separator
+
             # Iterate through all keys in checkpoint
             for key, value in checkpoint.items():
                 if key in skip_keys:

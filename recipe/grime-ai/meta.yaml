@@ -99,7 +99,7 @@ app:
   name: GRIME-AI
   display_name: "GRIME-AI"
   summary: "GRIME-AI is a tool that facilitates the entire data science workflow for ground-based time-lapse imagery, from data acquisition to model deployment."
-  icon: "../../src/GRIME_AI/resources/splash_screens/GRIME-AI Logo.jpg"
+  icon: "../../src/GRIME_AI/resources/splash_screens/GRIME-AI Logo with Tagline.png"
   type: desk
   own_environment: True
 

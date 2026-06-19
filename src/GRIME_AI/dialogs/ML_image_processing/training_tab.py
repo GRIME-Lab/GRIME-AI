@@ -1,4 +1,6 @@
 import os
+import shutil
+from datetime import datetime
 
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple, Set
@@ -454,10 +456,29 @@ class TrainingTab(QtWidgets.QWidget):
         self.listWidget_selectedFolders.itemDoubleClicked.connect(self.handle_right_item_doubleclick)
         self.listWidget_selectedFolders.itemSelectionChanged.connect(self.updateTrainButtonState)
 
+        # Hold-out seasons: double-click moves items between Available and Hold-Out lists
+        self.listWidget_availableSeasons.itemDoubleClicked.connect(self._on_available_season_doubleclick)
+        self.listWidget_holdoutSeasons.itemDoubleClicked.connect(self._on_holdout_season_doubleclick)
+
+        # Fix height of season list widgets to show exactly 4 rows (max seasons)
+        _row_h = self.listWidget_availableSeasons.sizeHintForRow(0)
+        if _row_h < 1:
+            _row_h = 22  # fallback if no items loaded yet
+        _season_list_h = (_row_h * 4) + self.listWidget_availableSeasons.frameWidth() * 2 + 4
+        self.listWidget_availableSeasons.setFixedHeight(_season_list_h)
+        self.listWidget_holdoutSeasons.setFixedHeight(_season_list_h)
+
+        # DEBUG: log every model-level insert/remove on Hold-Out listbox to catch drag-drops,
+        # programmatic clears, or anything else that modifies the listbox contents.
+        ho_model = self.listWidget_holdoutSeasons.model()
+        ho_model.rowsInserted.connect(self._debug_holdout_rows_inserted)
+        ho_model.rowsAboutToBeRemoved.connect(self._debug_holdout_rows_removed)
+
         self.comboBox_train_label_selection.currentIndexChanged.connect(self.on_train_label_changed)
 
         # Blob filter radius — update companion label whenever value changes
         self.spinBox_blobFilterRadius.valueChanged.connect(self._update_blob_filter_pct_label)
+        self.radioButton_blobRadiusComputed.setChecked(True)
 
         # Train/val split — either spinbox drives the other, always sum to 100
         self.spinBox_valSplit.valueChanged.connect(self._on_val_split_changed)
@@ -1172,6 +1193,31 @@ class TrainingTab(QtWidgets.QWidget):
         self._mgr.update_config(values, save=True)
         self.site_config = self._mgr.load_config(return_type="dict")
 
+    def _backup_site_config_before_run(self):
+        """
+        Snapshot the current on-disk site_config.json to a timestamped backup
+        inside a dedicated subfolder of the Settings directory. Called from
+        train() immediately before the UI values are written to disk, so the
+        prior run's settings are always recoverable.
+
+        Failures are logged but never raised; a backup error must not block
+        a training run.
+        """
+        try:
+            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            config_file = os.path.normpath(os.path.join(settings_folder, "site_config.json"))
+            if not os.path.exists(config_file):
+                print("No existing site_config.json to back up; skipping.")
+                return
+            backup_dir = os.path.join(settings_folder, "site_config_backups")
+            os.makedirs(backup_dir, exist_ok=True)
+            now_str = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+            backup_path = os.path.join(backup_dir, f"{now_str}_site_config.json")
+            shutil.copy2(config_file, backup_path)
+            print(f"Backed up site_config.json to {backup_path}")
+        except Exception as e:
+            print(f"WARNING: site_config.json backup failed: {e}")
+
     def train(self):
         """
         Called when the Train button is clicked.
@@ -1233,6 +1279,14 @@ class TrainingTab(QtWidgets.QWidget):
                 return
 
         # All valid — proceed silently
+
+        # DEBUG: capture exact listbox state at Train-click moment
+        holdouts_at_click = self._get_holdout_seasons()
+        print(f"\n[HOLDOUT DEBUG] Train click — Hold-Out listbox reads: {holdouts_at_click!r}")
+        print(f"[HOLDOUT DEBUG] Train click — siteName lineEdit: "
+              f"{self.lineEdit_siteName.text().strip()!r}")
+
+        self._backup_site_config_before_run()
         self.update_model_config()
         print("\nTrain button clicked. Starting training process...")
         self.ml_train_signal.emit()
@@ -1924,7 +1978,15 @@ class TrainingTab(QtWidgets.QWidget):
         CONFIG_FILENAME = "site_config.json"
         config_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
 
-        settings = JsonEditor().load_json_file(config_file)
+        # Use raw json.load (not JsonEditor) to guarantee complete dict round-trip.
+        # JsonEditor may filter unknown keys, which previously stripped holdout_seasons.
+        with open(config_file, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+
+        # DEBUG: log holdout_seasons state before and after to confirm no fields are lost
+        before_holdout = settings.get("holdout_seasons", "<MISSING>")
+        print(f"[SITE_NAME DEBUG] save_site_name_to_json called. "
+              f"On-disk holdout_seasons before: {before_holdout!r}")
 
         # Update with the current SiteName value
         settings["siteName"] = self.lineEdit_siteName.text()
@@ -1933,6 +1995,9 @@ class TrainingTab(QtWidgets.QWidget):
         with open(config_file, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=4)
 
+        after_holdout = settings.get("holdout_seasons", "<MISSING>")
+        print(f"[SITE_NAME DEBUG] save_site_name_to_json wrote. "
+              f"On-disk holdout_seasons after:  {after_holdout!r}")
         print(f"Updated siteName in {config_file} to '{settings['siteName']}'")
 
     # ------------------------------------------------------------------------
@@ -1997,15 +2062,8 @@ class TrainingTab(QtWidgets.QWidget):
         When the user changes the validation spinbox, update training spinbox.
         Guard flag prevents the reciprocal signal from re-entering.
         """
-        if getattr(self, '_split_updating', False):
-            return
-        self._split_updating = True
-        try:
-            # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
-            # JES self.spinBox_trainSplit.setValue(100 - val_pct)
-            self.spinBox_trainSplit.setValue(val_pct)
-        finally:
-            self._split_updating = False
+        # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
+        pass
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -2014,15 +2072,8 @@ class TrainingTab(QtWidgets.QWidget):
         When the user changes the training spinbox, update validation spinbox.
         Guard flag prevents the reciprocal signal from re-entering.
         """
-        if getattr(self, '_split_updating', False):
-            return
-        self._split_updating = True
-        try:
-            # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
-            # JES self.spinBox_valSplit.setValue(100 - train_pct)
-            self.spinBox_valSplit.setValue(train_pct)
-        finally:
-            self._split_updating = False
+        # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
+        pass
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -2059,12 +2110,42 @@ class TrainingTab(QtWidgets.QWidget):
         lw = self.listWidget_holdoutSeasons
         return [self._season_from_label(lw.item(i).text()) for i in range(lw.count())]
 
+    def _debug_holdout_rows_inserted(self, parent, first, last):
+        """DEBUG: fires when items are added to the Hold-Out listbox (incl. via drag-drop)."""
+        import traceback
+        lw = self.listWidget_holdoutSeasons
+        added = [lw.item(i).text() for i in range(first, last + 1) if lw.item(i)]
+        current = [self._season_from_label(lw.item(i).text()) for i in range(lw.count())]
+        # Show the call site that triggered the insert
+        stack = traceback.extract_stack()
+        caller = stack[-3] if len(stack) >= 3 else stack[-1]
+        print(f"[HOLDOUT DEBUG] rowsInserted: added {added!r} → listbox now {current!r}  "
+              f"(triggered from {caller.name}())")
+
+    def _debug_holdout_rows_removed(self, parent, first, last):
+        """DEBUG: fires when items are removed from the Hold-Out listbox."""
+        import traceback
+        lw = self.listWidget_holdoutSeasons
+        removed = [lw.item(i).text() for i in range(first, last + 1) if lw.item(i)]
+        stack = traceback.extract_stack()
+        caller = stack[-3] if len(stack) >= 3 else stack[-1]
+        print(f"[HOLDOUT DEBUG] rowsAboutToBeRemoved: removing {removed!r}  "
+              f"(triggered from {caller.name}())")
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
     def _set_holdout_seasons(self, holdout_seasons: list) -> None:
         """
         Distribute seasons between available and hold-out listboxes based on
         the provided holdout list. Resets both listboxes. Items are displayed
         with their meteorological date range in parentheses.
         """
+        # DEBUG: log every call so we can see who clears/rebuilds the listbox
+        import traceback
+        caller = traceback.extract_stack()[-2]
+        print(f"[HOLDOUT DEBUG] _set_holdout_seasons({holdout_seasons!r}) called from "
+              f"{caller.filename.split(chr(92))[-1].split('/')[-1]}:{caller.lineno} in {caller.name}()")
+
         holdout_set = set(holdout_seasons)
         self.listWidget_availableSeasons.clear()
         self.listWidget_holdoutSeasons.clear()
@@ -2075,63 +2156,96 @@ class TrainingTab(QtWidgets.QWidget):
             else:
                 self.listWidget_availableSeasons.addItem(label)
 
+        # DEBUG: confirm final state
+        final = [self._season_from_label(self.listWidget_holdoutSeasons.item(i).text())
+                 for i in range(self.listWidget_holdoutSeasons.count())]
+        print(f"[HOLDOUT DEBUG]   → Hold-Out listbox now contains: {final!r}")
+
+    def _on_available_season_doubleclick(self, item) -> None:
+        """
+        Double-clicking an item in the Available Seasons listbox moves it
+        to the Hold-Out Seasons listbox. Preserves the canonical season
+        ordering on the destination side.
+        """
+        if item is None:
+            return
+        season = self._season_from_label(item.text())
+        current = self._get_holdout_seasons()
+        if season in current:
+            return
+        current.append(season)
+        # Re-sort to canonical season order so Winter/Spring/Summer/Fall stays consistent
+        ordered = [s for s in self._SEASON_ORDER if s in current]
+        self._set_holdout_seasons(ordered)
+
+    def _on_holdout_season_doubleclick(self, item) -> None:
+        """
+        Double-clicking an item in the Hold-Out Seasons listbox moves it
+        back to the Available Seasons listbox.
+        """
+        if item is None:
+            return
+        season = self._season_from_label(item.text())
+        current = self._get_holdout_seasons()
+        if season not in current:
+            return
+        current.remove(season)
+        self._set_holdout_seasons(current)
+
     # ------------------------------------------------------------------------
     def _update_blob_filter_pct_label(self):
         """
         Recompute and display the blob filter radius as a percentage of image
-        diagonal next to the spinbox, e.g. '≈ 2.24% of diagonal'.
+        diagonal.
+
+        NOTE: the standalone label_blobFilterRadiusPct widget was removed from
+        the .ui in favor of writing the equivalent percent into the spinbox
+        tooltip via _update_blob_radius_tooltip(). This stub exists only because
+        other code paths still call this method by name; the tooltip path is
+        called from those same code paths.
         """
-        fraction = self._blob_pixels_to_fraction()
-        pct = fraction * 100.0
-        self.label_blobFilterRadiusPct.setText(f"≈ {pct:.2f}% of diagonal")
+        try:
+            self._update_blob_radius_tooltip()
+        except AttributeError:
+            # Tooltip helper not yet wired; safe to ignore.
+            pass
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def prompt_blob_radius_update(self, trainer):
         """
-        Called from main.py after training completes. Reads the suggested blob
-        radius from the trainer and shows a QMessageBox.question. If the user
-        accepts, updates the spinbox and rewrites all saved checkpoints.
+        Called from main.py after training completes. Automatically saves the
+        active blob filter radius to all checkpoints with no user prompt.
+
+        If Computed mode is selected, the Mahalanobis distribution (mean,
+        covariance, n_sigma) from the trainer is written to all checkpoints
+        alongside the scalar fallback fraction. If Manual mode is selected,
+        only the scalar fraction from the spinbox is written.
         """
-        result = getattr(trainer, "suggested_blob_radius_result", None)
-        if result is None:
-            return
+        use_computed = self.radioButton_blobRadiusComputed.isChecked()
 
-        suggested_fraction, suggested_px, diagonal_px = result
-        seed_fraction = trainer.blob_filter_radius
-        seed_px = int(round(seed_fraction * diagonal_px))
-        seed_pct = seed_fraction * 100.0
-        suggested_pct = suggested_fraction * 100.0
-
-        msg = (
-            "Blob Filter Radius Analysis\n\n"
-            "Seed radius (used during training):\n"
-            "  {} px  ({:.2f}% of diagonal)\n\n"
-            "Computed suggested radius (95th percentile of centroid variation):\n"
-            "  {} px  ({:.2f}% of diagonal)\n\n"
-            "Note: the saved checkpoints were validated using the seed radius. "
-            "Updating the radius without retraining means inference behaviour "
-            "may differ from what validation metrics reflect.\n\n"
-            "Would you like to update the spinbox and all saved checkpoints "
-            "to use the computed radius?"
-        ).format(seed_px, seed_pct, int(round(suggested_px)), suggested_pct)
-
-        reply = QMessageBox.question(
-            self,
-            "Update Blob Filter Radius?",
-            msg,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes
-        )
-
-        if reply == QMessageBox.Yes:
-            trainer._update_checkpoints_blob_radius(suggested_fraction)
-            trainer.blob_filter_radius = suggested_fraction
+        if use_computed:
+            dist = getattr(trainer, "suggested_blob_radius_result", None)
+            if dist is None:
+                print("[Blob Filter] Computed mode selected but no result available. "
+                      "Spinbox and checkpoints unchanged.")
+                return
+            fallback_fraction = dist.get("fallback_fraction", trainer.blob_filter_radius)
+            diagonal_px       = dist.get("diagonal_px", 1.0)
+            suggested_px      = fallback_fraction * diagonal_px
+            trainer._update_checkpoints_blob_radius(fallback_fraction,
+                                                     blob_distribution=dist)
+            trainer.blob_filter_radius = fallback_fraction
             self.spinBox_blobFilterRadius.setValue(int(round(suggested_px)))
             self._update_blob_filter_pct_label()
-            print("[Blob Radius] Spinbox and checkpoints updated to "
-                  "{} px ({:.2f}% of diagonal).".format(
-                      int(round(suggested_px)), suggested_pct))
+            cov_status = "Mahalanobis" if dist.get("centroid_cov") else "scalar fallback"
+            print("[Blob Filter] Computed distribution saved automatically "
+                  "({}, {} px fallback).".format(cov_status, int(round(suggested_px))))
         else:
-            print("[Blob Radius] User kept seed radius of {} px.".format(seed_px))
+            manual_fraction = self._blob_pixels_to_fraction()
+            trainer._update_checkpoints_blob_radius(manual_fraction)
+            trainer.blob_filter_radius = manual_fraction
+            print("[Blob Filter] Manual radius saved automatically: "
+                  "{} px ({:.2f}% of diagonal).".format(
+                      self.spinBox_blobFilterRadius.value(), manual_fraction * 100.0))
 
