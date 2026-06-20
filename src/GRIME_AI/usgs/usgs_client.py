@@ -103,13 +103,14 @@ class USGSClient:
         start_time,
         end_time,
         folder: str,
-        progress: Optional[ProgressFn] = None
+        progress: Optional[ProgressFn] = None,
+        cancel_check=None
     ) -> Tuple[int, int]:
         """
         Download images for a site into the given folder.
         Returns (downloaded_count, missing_count).
         """
-        return self._svc.download_images(site_name, start_date, end_date, start_time, end_time, folder, progress)
+        return self._svc.download_images(site_name, start_date, end_date, start_time, end_time, folder, progress=progress, cancel_check=cancel_check)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
