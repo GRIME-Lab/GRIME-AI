@@ -333,52 +333,69 @@ class PhenocamDownloadWorker(QtCore.QThread):
         super().__init__(parent)
         self.site_name, self.start_dt = site_name, start_dt
         self.end_dt, self.save_folder = end_dt, save_folder
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
     def run(self):
         import urllib.request, os, datetime as dt_mod
         from GRIME_AI.phenocam.GRIME_AI_PhenoCam import GRIME_AI_PhenoCam
-        # All PhenoCam filename timestamps are local time (both NEON via PhenoCam
-        # and strictly PhenoCam sites), so the user's local start/end times are
-        # compared directly — no UTC conversion needed.
+
         start_date, end_date = self.start_dt.date(), self.end_dt.date()
         start_time, end_time = self.start_dt.time(), self.end_dt.time()
-        t_min = dt_mod.time(0, 0)
-        t_max = dt_mod.time(23, 59)
+
+        image_list = []
+        total_days = (end_date - start_date).days + 1
+
         current, day_idx = start_date, 0
         while current <= end_date:
+            if self._cancelled:
+                self.finished.emit(-1)
+                return
+
             day_idx += 1
-            # Use exact time bounds only on first/last day; full day for middle days
-            if current == start_date and current == end_date:
-                t0, t1 = start_time, end_time
-            elif current == start_date:
-                t0, t1 = start_time, t_max
-            elif current == end_date:
-                t0, t1 = t_min, end_time
-            else:
-                t0, t1 = t_min, t_max
-            url = (f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
-                   f"{current.year}/{str(current.month).zfill(2)}/{str(current.day).zfill(2)}")
+            t0, t1 = start_time, end_time
+
+            url = (
+                f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
+                f"{current.year}/{str(current.month).zfill(2)}/{str(current.day).zfill(2)}"
+            )
+
             try:
                 image_list.extend(
-                    GRIME_AI_PhenoCam().getVisibleImages(url, t0, t1).getVisibleList())
-            except Exception:
-                pass
-            self.progress.emit(day_idx, delta, f"Scanning {current.strftime('%Y-%m-%d')}...")
+                    GRIME_AI_PhenoCam().getVisibleImages(url, t0, t1).getVisibleList()
+                )
+            except Exception as e:
+                print(f"[PhenocamDownloadWorker] Error scanning {current}: {e}")
+
+            self.progress.emit(day_idx, total_days, f"Scanning {current.strftime('%Y-%m-%d')}...")
             current += dt_mod.timedelta(days=1)
+
         if not image_list:
             self.finished.emit(0)
             return
+
         os.makedirs(self.save_folder, exist_ok=True)
+
         total, downloaded = len(image_list), 0
         for i, img in enumerate(image_list):
+            if self._cancelled:
+                self.finished.emit(-1)
+                return
+
             filename = os.path.basename(img.fullPathAndFilename)
             dest = os.path.join(self.save_folder, filename)
+
             if not os.path.isfile(dest):
                 try:
                     urllib.request.urlretrieve(img.fullPathAndFilename, dest)
                     downloaded += 1
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[PhenocamDownloadWorker] Error downloading {filename}: {e}")
+
             self.progress.emit(i + 1, total, f"Downloading {filename}")
+
         self.finished.emit(downloaded)
 
 
@@ -1464,33 +1481,52 @@ class MainWindow(QMainWindow):
                 pass
 
     def _phenocam_download_clicked(self):
+        # If a PhenoCam download is already running, use the same button to cancel it.
+        if (
+                hasattr(self, "_phenocam_worker")
+                and self._phenocam_worker is not None
+                and self._phenocam_worker.isRunning()
+        ):
+            self._phenocam_worker.cancel()
+            self.phenocam_status_label.setText("Cancelling download...")
+            self.phenocam_download_btn.setEnabled(False)
+            return
+
         site_name = self._phenocam_get_selected_sitename()
         if not site_name:
             GRIME_AI_QMessageBox("PhenoCam Download",
                                  "Please select a site first.").displayMsgBox()
             return
+
         save_folder = self.phenocam_folder_edit.text().strip()
         if not save_folder:
             GRIME_AI_QMessageBox("PhenoCam Download",
                                  "Please specify a download folder.").displayMsgBox()
             return
+
         start_dt = self._phenocam_get_start_datetime()
-        end_dt   = self._phenocam_get_end_datetime()
+        end_dt = self._phenocam_get_end_datetime()
+
         if start_dt >= end_dt:
             GRIME_AI_QMessageBox("PhenoCam Download",
                                  "Start must be before End.").displayMsgBox()
             return
+
         try:
             JsonEditor().update_json_entry("Phenocam_Root_Folder", save_folder)
         except Exception:
             pass
-        self.phenocam_download_btn.setEnabled(False)
+
+        self.phenocam_download_btn.setText("Cancel Download")
+        self.phenocam_download_btn.setEnabled(True)
         self.phenocam_progress_bar.setValue(0)
         self.phenocam_progress_bar.setVisible(True)
         self.phenocam_status_label.setVisible(True)
         self.phenocam_status_label.setText("Starting...")
+
         worker = PhenocamDownloadWorker(
-            site_name, start_dt, end_dt, save_folder, parent=self)
+            site_name, start_dt, end_dt, save_folder, parent=self
+        )
         worker.progress.connect(self._phenocam_download_progress)
         worker.finished.connect(self._phenocam_download_finished)
         self._phenocam_worker = worker
@@ -1502,11 +1538,22 @@ class MainWindow(QMainWindow):
         self.phenocam_status_label.setText(label)
 
     def _phenocam_download_finished(self, count):
-        self.phenocam_progress_bar.setValue(100)
+        self.phenocam_download_btn.setText("Download Images")
         self.phenocam_download_btn.setEnabled(True)
         self._phenocam_worker = None
-        msg = (f"Download complete. {count} new image(s) saved." if count > 0
-               else "No new images found for the selected date range.")
+
+        if count == -1:
+            self.phenocam_status_label.setText("Download cancelled.")
+            GRIME_AI_QMessageBox("PhenoCam Download", "Download cancelled.").displayMsgBox()
+            return
+
+        self.phenocam_progress_bar.setValue(100)
+
+        msg = (
+            f"Download complete. {count} new image(s) saved."
+            if count > 0
+            else "No new images found for the selected date range."
+        )
         self.phenocam_status_label.setText(msg)
         GRIME_AI_QMessageBox("PhenoCam Download", msg).displayMsgBox()
 
@@ -1516,7 +1563,15 @@ class MainWindow(QMainWindow):
     def _usgs_progress(self, idx: int, total: int, label: str | None) -> None:
         """Progress callback for USGSClient operations."""
         if not hasattr(self, "_usgsProgress"):
-            self._usgsProgress = QProgressWheel(parent=self)
+            self._usgs_cancel_requested = False
+
+            def request_cancel():
+                self._usgs_cancel_requested = True
+
+            self._usgsProgress = QProgressWheel(
+                parent=self,
+                on_close=request_cancel
+            )
             self._usgsProgress.setRange(0, total)
             self._usgsProgress.setWindowTitle("USGS Operation")
             self._usgsProgress.show()
@@ -2579,6 +2634,8 @@ class MainWindow(QMainWindow):
             if not os.path.exists(saveFolder):
                 os.makedirs(saveFolder)
 
+            self._usgs_cancel_requested = False
+
             downloaded, missing = self.usgs.download_images(
                 site,
                 startDate,
@@ -2586,7 +2643,8 @@ class MainWindow(QMainWindow):
                 startTime,
                 endTime,
                 saveFolder,
-                progress=self._usgs_progress
+                progress=self._usgs_progress,
+                cancel_check = lambda: self._usgs_cancel_requested
             )
 
             saveFolder = os.path.join(downloadsFilePath, "data")
@@ -4433,23 +4491,36 @@ def DP1_20002_downloadImages(self, imageList, downloadsFilePath):
     if not imageList:
         return
 
-    progressBarDownloads = QProgressWheel()
+    cancel_requested = {"value": False}
+
+    def request_cancel():
+        cancel_requested["value"] = True
+
+    progressBarDownloads = QProgressWheel(on_close=request_cancel)
     progressBarDownloads.setRange(0, len(imageList) + 1)
     progressBarDownloads.setWindowTitle('Download & Save Images...')
     progressBarDownloads.show()
 
     for i, image in enumerate(imageList):
+        if cancel_requested["value"]:
+            print("NEON image download cancelled by user.")
+            break
+
         progressBarDownloads.setValue(float(i) / float(len(imageList) + 1) * len(imageList))
 
         filename = os.path.basename(image.fullPathAndFilename)
         if not os.path.exists(downloadsFilePath):
             os.makedirs(downloadsFilePath)
+
         completeFilename = os.path.join(downloadsFilePath, filename)
 
         if not os.path.isfile(completeFilename):
             urllib.request.urlretrieve(image.fullPathAndFilename, completeFilename)
 
-    progressBarDownloads.close()
+        QCoreApplication.processEvents()
+
+    if progressBarDownloads and progressBarDownloads.isVisible():
+        progressBarDownloads.close()
 
 #jes LET THE CALLING FUNCTION BE RESPONSIBLE FOR REPORTING DOWNLOAD COMPLETION.
 #jes MODIFY THIS IN A FUTURE RELEASE TO RETURN A PASS/FAIL MESSAGE TO THE FUNCTION THAT INVOKED THIS FUNCTION.

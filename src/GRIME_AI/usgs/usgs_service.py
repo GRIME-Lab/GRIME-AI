@@ -207,7 +207,7 @@ class USGSService:
     # ------------------------------------------------------------------------------------
     def download_images(self, site_name: str, start_date: date, end_date: date,
                         start_time: time, end_time: time, save_folder: str,
-                        progress: Optional[callable] = None) -> Tuple[int, int]:
+                        progress: Optional[callable] = None, cancel_check=None) -> Tuple[int, int]:
         """
         Download images. Now optimized to use cached filenames from get_image_count.
         Falls back to old method if cache unavailable.
@@ -242,6 +242,9 @@ class USGSService:
         for idx, image in enumerate(names):
             if progress:
                 progress(idx, total, image)
+            if cancel_check and cancel_check():
+                print("USGS image download cancelled by user.")
+                break
             if not image or image == "[]":
                 continue
             try:
@@ -268,7 +271,8 @@ class USGSService:
     # ------------------------------------------------------------------------------------
     def download_images_from_list(self, site_name: str, names: List[str],
                                   save_folder: str,
-                                  progress: Optional[callable] = None) -> Tuple[int, int]:
+                                  progress: Optional[callable] = None,
+                                  cancel_check=None) -> Tuple[int, int]:
         """
         Download a pre-filtered list of image filenames.
         Used by USGS_HIVIS.download_images() to avoid re-querying the API
@@ -280,6 +284,9 @@ class USGSService:
         for idx, image in enumerate(names):
             if progress:
                 progress(idx, total, image)
+            if cancel_check and cancel_check():
+                print("USGS image download cancelled by user.")
+                break
             if not image or image == "[]":
                 continue
             try:
