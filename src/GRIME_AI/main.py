@@ -342,6 +342,9 @@ class PhenocamDownloadWorker(QtCore.QThread):
         import urllib.request, os, datetime as dt_mod
         from GRIME_AI.phenocam.GRIME_AI_PhenoCam import GRIME_AI_PhenoCam
 
+        # All PhenoCam filename timestamps are local time (both NEON via PhenoCam
+        # and strictly PhenoCam sites), so the user's local start/end times are
+        # compared directly — no UTC conversion needed.
         start_date, end_date = self.start_dt.date(), self.end_dt.date()
         start_time, end_time = self.start_dt.time(), self.end_dt.time()
 
@@ -1563,15 +1566,7 @@ class MainWindow(QMainWindow):
     def _usgs_progress(self, idx: int, total: int, label: str | None) -> None:
         """Progress callback for USGSClient operations."""
         if not hasattr(self, "_usgsProgress"):
-            self._usgs_cancel_requested = False
-
-            def request_cancel():
-                self._usgs_cancel_requested = True
-
-            self._usgsProgress = QProgressWheel(
-                parent=self,
-                on_close=request_cancel
-            )
+            self._usgsProgress = QProgressWheel(parent=self)
             self._usgsProgress.setRange(0, total)
             self._usgsProgress.setWindowTitle("USGS Operation")
             self._usgsProgress.show()
