@@ -18,10 +18,20 @@ description = "GRIME-AI is a tool that facilitates the entire data science workf
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-keywords = ["geoinformatics", "image-analysis"]
+keywords = ["geoinformatics", "image-analysis", "hydrology", "artificial-intelligence", "computer-vision", "timelapse-imagery"]
 classifiers = [
   "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+  "Intended Audience :: Education",
   "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Scientific/Engineering :: Hydrology",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Visualization",
+  "Topic :: Scientific/Engineering :: Image Processing",
+  "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 
 [tool.setuptools]
