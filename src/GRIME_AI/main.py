@@ -93,16 +93,20 @@ except Exception:
     pass
 
 
+# ------------------------------------------------------------------------------
+# Configure environment variables first. Especially those that imports rely upon
+# ------------------------------------------------------------------------------
 import os
 # Must be set before Hydra starts to get the full stack trace if an error occurs.
 # This works programmtically in case the user does not have privileges to modify their operating system environment
 # because it only modifies the environment of the current Python process and its children.
 os.environ["HYDRA_FULL_ERROR"] = "1"
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 
 import sys
 import argparse
 import shutil
-import getpass
 
 # ----------------------------------------------------------------------------
 # ----------------------------------------------------------------------------
@@ -164,14 +168,14 @@ from GRIME_AI.usgs.usgs_client import USGSClient
 # lazy: from GRIME_AI.dialogs.mask_editor.GRIME_AI_MaskEditorDlg import GRIME_AI_MaskEditorDlg
 # lazy: from GRIME_AI.dialogs.composite_slice.GRIME_AI_CompositeSliceDlg import GRIME_AI_CompositeSliceDlg
 # lazy: from GRIME_AI.dialogs.release_notes.GRIME_AI_ReleaseNotesDlg import GRIME_AI_ReleaseNotesDlg
+# lazy: from GRIME_AI.dialogs.extract_coco_masks.GRIME_AI_ExportCOCOMasksDlg import GRIME_AI_ExportCOCOMasksDlg
+# lazy: from GRIME_AI.dialogs.image_organizer.GRIME_AI_ImageOrganizerDlg import GRIME_AI_ImageOrganizerDlg
+# lazy: from GRIME_AI.dialogs.temporal_averaging.GRIME_AI_TemporalAveragingDlg import GRIME_AI_TemporalAveragingDlg
 from GRIME_AI.dialogs.triage.GRIME_AI_TriageOptionsDlg import GRIME_AI_TriageOptionsDlg
 from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
 from GRIME_AI.GRIME_AI_Vegetation_Indices import GRIME_AI_Vegetation_Indices, GreennessIndex
-# lazy: from GRIME_AI.dialogs.extract_coco_masks.GRIME_AI_ExportCOCOMasksDlg import GRIME_AI_ExportCOCOMasksDlg
 from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 from GRIME_AI.GRIME_AI_ImageData import imageData
-# lazy: from GRIME_AI.dialogs.image_organizer.GRIME_AI_ImageOrganizerDlg import GRIME_AI_ImageOrganizerDlg
-# lazy: from GRIME_AI.dialogs.temporal_averaging.GRIME_AI_TemporalAveragingDlg import GRIME_AI_TemporalAveragingDlg
 from GRIME_AI.GRIME_AI_ProductTable import GRIME_AI_ProductTable
 from GRIME_AI.GRIME_AI_QLabel import DrawingMode
 from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
@@ -198,8 +202,6 @@ from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
 # ----------------------------------------------------------------------------
 from GRIME_AI.geomaps.google_maps_viewer import GoogleMapWidget
 from GRIME_AI.geomaps.openstreetmap_viewer import OpenStreetMapWidget
-
-from GRIME_AI.QLabel_drawing_modes import DrawingMode
 
 # ----------------------------------------------------------------------------------------------------------------------
 # HYDRA (for SAM2)
