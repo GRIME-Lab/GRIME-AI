@@ -38,6 +38,11 @@
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
+import os
+# Configure Qt High DPI behavior for consistent UI scaling across displays.
+os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
+os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+
 try:
     # TRY TO IMPORT THE VERSION CONSTANT FROM VERSION.PY
     from GRIME_AI.version import SW_VERSION
