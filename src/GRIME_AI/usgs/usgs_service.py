@@ -1,12 +1,10 @@
 import os
 import json
 import urllib.request
-from urllib.parse import quote
 import requests
 import pandas as pd
-from typing import Dict, List, Optional, Tuple
-from datetime import date, time, datetime, timedelta
-import socket
+
+from typing import Dict, Optional
 
 from .usgs_types import CameraInfo, LatestImage
 
