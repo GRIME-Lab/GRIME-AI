@@ -7,9 +7,14 @@ import pandas as pd
 from typing import Dict, Optional
 
 from .usgs_types import CameraInfo, LatestImage
+from GRIME_AI.dialogs.api_keys import APIKeyManager
 
-ENDPOINT = "https://jj5utwupk5.execute-api.us-east-1.amazonaws.com"
-IMAGE_ENDPOINT = "https://usgs-nims-images.s3.amazonaws.com/overlay"
+# Legacy AWS endpoint - kept as fallback until USGS decommissions it (after July 2026)
+ENDPOINT_LEGACY  = "https://jj5utwupk5.execute-api.us-east-1.amazonaws.com"
+# New NIMS API endpoint (api.waterdata.usgs.gov)
+ENDPOINT_NEW     = "https://api.waterdata.usgs.gov/nims/v0"
+# S3 image base - overlayDir from /cameras confirms this per-camera
+IMAGE_ENDPOINT   = "https://usgs-nims-images.s3.amazonaws.com/overlay"
 
 
 # ================================================================================
@@ -123,6 +128,16 @@ class USGSService:
         self._nwis_id: Optional[str] = None
         self._cam_id: Optional[str] = None
         self._cam_name: Optional[str] = None
+        self._api_key: str = ""
+
+        # Load endpoint and API key from settings
+        try:
+            _mgr = APIKeyManager()
+            self._api_key   = _mgr.get_usgs_key() or ""
+            self._endpoint  = _mgr.get_usgs_endpoint() or ENDPOINT_NEW
+        except Exception as _e:
+            print(f"[USGSService] Could not load settings: {_e}")
+            self._endpoint  = ENDPOINT_NEW
 
         # ============================================================================
         # REFERENCE TO USGS_HIVIS FOR CACHE ACCESS
@@ -132,25 +147,76 @@ class USGSService:
 
     # --------------------------------------------------------------------------------
     # --------------------------------------------------------------------------------
+    def set_api_key(self, key: str) -> None:
+        """Store the USGS Water Data API key. Pass empty string to clear."""
+        self._api_key = key or ""
+
+    # --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+    def set_endpoint(self, endpoint: str) -> None:
+        """Update the NIMS API base endpoint at runtime."""
+        self._endpoint = endpoint.rstrip("/") if endpoint else ENDPOINT_NEW
+
+    # --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+    def _api_headers(self) -> dict:
+        """Return X-Api-Key header if a key is set, else empty dict.
+        USGS downloads work without a key; the key only raises rate limits.
+        """
+        if self._api_key:
+            return {"X-Api-Key": self._api_key}
+        return {}
+
+    # --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
     def initialize(self) -> None:
-        uri = f"{ENDPOINT}/prod/cameras?enabled=true"
+        """Fetch the camera list.  Tries the new NIMS endpoint first,
+        falls back to the legacy AWS Lambda endpoint if it fails.
+        The active endpoint is whatever was loaded from APIKeyManager
+        (defaults to ENDPOINT_NEW).
+        """
+        cam_dict: Dict[str, dict] = {}
 
-        # WITH urllib, IT THROWS AN EXCEPTION INSTEAD OF RETURNING AN ERROR CODE WHEN IT DETECTS A NETWORK FAILURE
-        try:
-            data = urllib.request.urlopen(uri).read()
+        endpoints_to_try = [
+            (self._endpoint, "new"),
+            (ENDPOINT_LEGACY, "legacy"),
+        ]
+        # Avoid trying the same URL twice if the user has set the endpoint to legacy
+        if self._endpoint == ENDPOINT_LEGACY:
+            endpoints_to_try = [(ENDPOINT_LEGACY, "legacy")]
 
-            camera_data = json.loads(data.decode("utf-8"))
+        for endpoint, label in endpoints_to_try:
+            try:
+                if "api.waterdata.usgs.gov" in endpoint:
+                    # New NIMS API - returns a list directly, no locus/hideCam filter
+                    uri = f"{endpoint}/cameras"
+                    resp = requests.get(uri, headers=self._api_headers(), timeout=15)
+                    resp.raise_for_status()
+                    camera_data = resp.json()
+                    for element in camera_data:
+                        cam_id = element.get("camId")
+                        if isinstance(cam_id, str):
+                            cam_dict[cam_id] = element
+                else:
+                    # Legacy AWS Lambda endpoint
+                    uri = f"{endpoint}/prod/cameras?enabled=true"
+                    data = urllib.request.urlopen(uri, timeout=15).read()
+                    camera_data = json.loads(data.decode("utf-8"))
+                    for element in camera_data:
+                        if element.get("locus") == "aws" and not element.get("hideCam", True):
+                            cam_id = element.get("camId")
+                            if isinstance(cam_id, str):
+                                cam_dict[cam_id] = element
 
-            cam_dict: Dict[str, dict] = {}
-            for element in camera_data:
-                if element.get("locus") == "aws" and not element.get("hideCam", True):
-                    cam_id = element.get("camId")
-                    if isinstance(cam_id, str):
-                        cam_dict[cam_id] = element
-            self._camera_dict = cam_dict
-        except Exception as e:
-            self._camera_dict = {}
+                print(f"[USGSService] Loaded {len(cam_dict)} cameras from {label} endpoint")
+                self._camera_dict = cam_dict
+                break  # success - no need to try fallback
 
+            except Exception as e:
+                print(f"[USGSService] {label} endpoint failed: {e}")
+                cam_dict = {}
+
+        self._camera_dict = cam_dict
         self._site_count = len(self._camera_dict)
 
     # --------------------------------------------------------------------------------
@@ -506,7 +572,12 @@ class USGSService:
         """
         import time as time_module
 
-        url = f"{ENDPOINT}/prod/listFiles?camId={site_name}{after}{before}"
+        if "api.waterdata.usgs.gov" in self._endpoint:
+            # New NIMS API - ISO 8601 timestamps, no /prod/ prefix
+            url = f"{self._endpoint}/listFiles?camId={site_name}{after}{before}"
+        else:
+            # Legacy AWS Lambda endpoint
+            url = f"{self._endpoint}/prod/listFiles?camId={site_name}{after}{before}"
 
         # ============================================================================
         # RETRY LOGIC FOR NETWORK ISSUES
@@ -516,7 +587,7 @@ class USGSService:
 
         for attempt in range(max_retries):
             try:
-                resp = requests.get(url, timeout=30)
+                resp = requests.get(url, headers=self._api_headers(), timeout=30)
                 resp.raise_for_status()
                 return resp.text
 

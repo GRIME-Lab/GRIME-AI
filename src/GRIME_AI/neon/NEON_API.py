@@ -36,8 +36,9 @@ from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
 from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
 from GRIME_AI.nitrateData import nitrateData
 from GRIME_AI.siteData import siteData
+from GRIME_AI.dialogs.api_keys import APIKeyManager
 
-SERVER = 'https://data.neonscience.org/api/v0/'
+SERVER = 'https://data.neonscience.org/api/v0/'  # default; overridden per-instance by APIKeyManager
 
 # https://www.neonscience.org/sites/default/files/NEON_Field_Site_Metadata_20240423.csv
 
@@ -234,6 +235,31 @@ class  NEON_API:
         self.instance = 1
         self.className = "NEON API"
         self.dest = ""
+        self._token: str = ""
+        self._server: str = SERVER
+        try:
+            _mgr = APIKeyManager()
+            self._token  = _mgr.get_neon_token() or ""
+            self._server = _mgr.get_neon_endpoint() or SERVER
+        except Exception as _e:
+            print(f"[NEON_API] Could not load API settings: {_e}")
+
+    # ------------------------------------------------------------------------
+    def set_token(self, token) -> None:
+        """Update the NEON API token at runtime (called from MainWindow after dialog save)."""
+        self._token = token or ""
+
+    # ------------------------------------------------------------------------
+    def set_server(self, server) -> None:
+        """Update the NEON API base URL at runtime (called from MainWindow after dialog save)."""
+        self._server = (server or SERVER).rstrip("/") + "/"
+
+    # ------------------------------------------------------------------------
+    def _auth_headers(self) -> dict:
+        """Return the X-API-Token header dict if a token is set, else empty dict."""
+        if self._token:
+            return {"X-API-Token": self._token}
+        return {}
 
 
     # ======================================================================================================================
@@ -241,7 +267,7 @@ class  NEON_API:
     # contains the product description, sites for which the product is available among other information.
     # ======================================================================================================================
     def QueryProductInfo(self, productCode):
-        product_request = requests.get(SERVER + 'products/' + productCode)
+        product_request = requests.get(self._server + 'products/' + productCode, headers=self._auth_headers())
         product_json = product_request.json()
 
         return product_json
@@ -254,7 +280,7 @@ class  NEON_API:
 
         try:
             # Make request, using the sites endpoint
-            site_request = requests.get(server + 'sites/' + siteCode)
+            site_request = requests.get(server + 'sites/' + siteCode, headers=self._auth_headers())
 
             # Convert to Python JSON object
             site_json = site_request.json()
@@ -390,7 +416,7 @@ class  NEON_API:
 
         try:
             # Download zip files for the product into Scratchpad
-            result = zips_by_product(
+            _zbp_kwargs = dict(
                 dpid=strProduct,
                 site=SiteCode,
                 savepath=scratchPath,
@@ -400,6 +426,9 @@ class  NEON_API:
                 include_provisional=True,
                 check_size=False
             )
+            if self._token:
+                _zbp_kwargs["token"] = self._token
+            result = zips_by_product(**_zbp_kwargs)
             print("zips_by_product returned:", result)
 
             progressBar.setValue(40)
@@ -524,13 +553,13 @@ class  NEON_API:
     def getAvailableMonths(self, SITE, PRODUCTCODE):
         availableMonths = []
 
-        url = SERVER + 'sites/' + SITE
+        url = self._server + 'sites/' + SITE
 
         nRetry = 3
         bSuccess = False
         while (nRetry > 0) and (bSuccess == False):
             try:
-                site_json = requests.get(url).json()
+                site_json = requests.get(url, headers=self._auth_headers()).json()
 
                 # Get available months of Ecosystem structure data products for TEAK site
                 # Loop through the 'dataProducts' list items (each one is a dictionary) at the site
@@ -552,9 +581,9 @@ class  NEON_API:
     def getProductAbstract(self, SITE, PRODUCTCODE):
         productAbstract = []
 
-        url = SERVER + 'products/' + PRODUCTCODE
+        url = self._server + 'products/' + PRODUCTCODE
 
-        product_json = requests.get(url).json()
+        product_json = requests.get(url, headers=self._auth_headers()).json()
 
         try:
             productAbstract = product_json['data']['productAbstract']
