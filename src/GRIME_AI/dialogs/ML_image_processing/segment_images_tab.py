@@ -18,14 +18,16 @@ from datetime import datetime
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal
 from PyQt5 import QtWidgets
-from PyQt5.QtWidgets import QWidget, QFileDialog, QMessageBox, QSizePolicy
+from PyQt5.QtWidgets import QWidget, QFileDialog, QMessageBox, QSizePolicy, QTableWidget, QToolButton, QSplitter, QSplitterHandle, QVBoxLayout
 from PyQt5.uic import loadUi
 
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
 from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from GRIME_AI.utils.resource_utils import ui_path
-from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE
+from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
+from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtCore import Qt
 
 # import torch if using torch metadata extraction
 try:
@@ -77,6 +79,74 @@ def _normalize_labels(raw):
 # ===   ===   ===   ===   ===   ===   ===         class SegmentImagesTab         ===   ===   ===   ===   ===   ===   ===
 # ======================================================================================================================
 # ======================================================================================================================
+class ToggleSplitterHandle(QSplitterHandle):
+    """Splitter handle with a small toggle button to collapse/expand the right panel."""
+
+    def __init__(self, orientation, parent):
+        super().__init__(orientation, parent)
+        self._collapsed_sizes = None
+
+        self._btn = QToolButton(self)
+        self._btn.setFixedSize(20, 48)
+        self._btn.setText("◀")
+        self._btn.setToolTip("Hide/show metadata panel")
+        self._btn.setStyleSheet("""
+QToolButton {
+    background-color: palette(button);
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    font-size: 10px;
+    color: palette(buttontext);
+}
+QToolButton:hover { background-color: palette(highlight); color: white; }
+""")
+        self._btn.clicked.connect(self._toggle)
+        self._btn.raise_()
+        self._btn.show()
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        return QtCore.QSize(max(sh.width(), 20), sh.height())
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        bw, bh = self._btn.width(), self._btn.height()
+        x = (self.width() - bw) // 2
+        y = max(0, (self.height() - bh) // 2)
+        self._btn.move(x, y)
+        self._btn.raise_()
+
+    def paintEvent(self, event):
+        # Paint a visible divider line behind the button
+        from PyQt5.QtGui import QPainter, QColor
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), self.palette().color(self.palette().Button))
+        painter.setPen(QColor("#999999"))
+        cx = self.width() // 2
+        painter.drawLine(cx, 0, cx, self.height())
+        painter.end()
+
+    def _toggle(self):
+        splitter = self.splitter()
+        sizes = splitter.sizes()
+        if sizes[1] > 0:
+            self._collapsed_sizes = sizes[1]
+            splitter.setSizes([sum(sizes), 0])
+            self._btn.setText("▶")
+        else:
+            restore = self._collapsed_sizes or 250
+            total = sum(sizes)
+            splitter.setSizes([total - restore, restore])
+            self._btn.setText("◀")
+
+
+class _ToggleSplitter(QSplitter):
+    """QSplitter that uses ToggleSplitterHandle for the main left/right split."""
+
+    def createHandle(self):
+        return ToggleSplitterHandle(self.orientation(), self)
+
+
 class SegmentImagesTab(QWidget):
     """
     Direct port of the Segment Images tab UI and logic.
@@ -324,14 +394,8 @@ class SegmentImagesTab(QWidget):
     # ------------------------------------------------------------------------------------------------------------------
     def setup_ui_properties(self):
         """Set size policies and layout stretch factors."""
-        self.pushButton_Segment.setStyleSheet(
-            'QPushButton {background-color: steelblue; color: white; }'
-            'QPushButton:disabled {background-color: gray; color: black; }'
-        )
-        self.pushButton_Segment.setMinimumSize(150, 40)
-        self.pushButton_Segment.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-        # Keep local widget policies similar to original dialog
+        self.pushButton_Segment.setMinimumHeight(38)
+        self.pushButton_Segment.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         try:
             self.listWidget_labels.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -339,13 +403,7 @@ class SegmentImagesTab(QWidget):
             pass
 
         try:
-            self.splitter_right_panel.setSizes([1000, 1000])  # equal initial split
-        except Exception:
-            pass
-
-        try:
-            self.pushButton_Segment.setMinimumSize(150, 40)
-            self.pushButton_Segment.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.splitter_right_panel.setSizes([1000])
         except Exception:
             pass
 
@@ -378,13 +436,123 @@ class SegmentImagesTab(QWidget):
         self.pushButton_Add_Folder_Recursive.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
 
         self.pushButton_Remove_Folder.clicked.connect(self.remove_selected_folder)
-        self.pushButton_Remove_Folder.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
+        self.pushButton_Remove_Folder.setStyleSheet(BUTTON_CSS_YELLOW_OUTLINE)
 
         self.pushButton_Clear_Folders.clicked.connect(self.clear_all_folders)
-        self.pushButton_Clear_Folders.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
+        self.pushButton_Clear_Folders.setStyleSheet(BUTTON_CSS_RED_OUTLINE)
 
         self.pushButton_Segment.clicked.connect(self.segment_images)
-        self.pushButton_Segment.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
+        self.pushButton_Segment.setText("▶  Segment Images")
+        self.pushButton_Segment.setStyleSheet("""
+QPushButton {
+    background-color: steelblue;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-size: 12pt;
+    font-weight: bold;
+}
+QPushButton:hover { background-color: #5a93c2; }
+QPushButton:disabled {
+    background-color: gray;
+    color: #ccc;
+}
+""")
+
+        # ── Rounded corners and styling — set per-widget for guaranteed rendering ──
+        # Per-widget setStyleSheet with a self-referencing selector (e.g.
+        # QGroupBox#name { ... }) has higher specificity than any parent cascade
+        # or qdarkstyle rule, so corners and title positioning render correctly
+        # in both light and dark mode.
+
+        GROUPBOX_LIGHT = """
+QGroupBox {{
+    border: 1px solid #aaa;
+    border-radius: 6px;
+    margin-top: 18px;
+    padding-top: 6px;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background-color: palette(window);
+    color: palette(windowtext);
+}}
+"""
+        LISTWIDGET_LIGHT = """
+QListWidget {{
+    border: 1px solid #aaa;
+    border-radius: 6px;
+}}
+"""
+        TABLEWIDGET_LIGHT = """
+QTableWidget {{
+    border: 1px solid #aaa;
+    border-radius: 6px;
+}}
+"""
+        LINEEDIT_LIGHT = """
+QLineEdit {
+    border: 1px solid #888;
+    border-radius: 6px;
+    padding: 2px 6px;
+}
+QLineEdit:focus {
+    border: 1px solid #3b6a93;
+}
+"""
+        for gb in self.findChildren(QtWidgets.QGroupBox):
+            gb.setStyleSheet(GROUPBOX_LIGHT)
+        for lw in self.findChildren(QtWidgets.QListWidget):
+            lw.setStyleSheet(LISTWIDGET_LIGHT)
+        for tw in self.findChildren(QtWidgets.QTableWidget):
+            tw.setStyleSheet(TABLEWIDGET_LIGHT)
+        self.lineEdit_segmentation_model_file.setStyleSheet(LINEEDIT_LIGHT)
+        self.lineEdit_output_folder.setStyleSheet(LINEEDIT_LIGHT)
+
+        # ── Right margin on left panel so it doesn't butt against metadata ────
+        try:
+            self.widget_left_panel.layout().setContentsMargins(4, 4, 8, 4)
+        except Exception:
+            pass
+
+        # ── Dark mode support ─────────────────────────────────────────────────
+        self._apply_dark_mode_if_active()
+
+        # ── Splitter initial sizes (left panel gets most space) ───────────────
+        try:
+            # Re-parent splitter_main children into a _ToggleSplitter so the
+            # custom toggle handle is used without requiring a .ui change.
+            old = self.splitter_main
+            toggle_splitter = _ToggleSplitter(QtCore.Qt.Horizontal, self)
+            toggle_splitter.setObjectName("splitter_main")
+            toggle_splitter.setChildrenCollapsible(False)
+
+            # Move children across
+            while old.count():
+                w = old.widget(0)
+                w.setParent(None)
+                toggle_splitter.addWidget(w)
+
+            # Swap into the parent layout
+            layout = old.parent().layout()
+            idx = layout.indexOf(old)
+            layout.removeWidget(old)
+            old.deleteLater()
+            layout.insertWidget(idx, toggle_splitter)
+
+            self.splitter_main = toggle_splitter
+            self.splitter_main.setHandleWidth(20)
+            self.splitter_main.setSizes([650, 250])
+        except Exception as e:
+            print(f"Toggle splitter setup failed: {e}")
+            try:
+                self.splitter_main.setSizes([650, 250])
+            except Exception:
+                pass
 
         # Line edits and checkboxes → flush config on change
         self.lineEdit_segmentation_model_file.textChanged.connect(self.onModelPathChanged)
@@ -419,6 +587,88 @@ class SegmentImagesTab(QWidget):
             pass
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _apply_dark_mode_if_active(self):
+        """Apply a dark palette and per-widget dark stylesheet if in dark mode."""
+        try:
+            app_palette = self.palette()
+            window_color = app_palette.color(QPalette.Window)
+            is_dark = window_color.lightness() < 128
+            if is_dark:
+                dark = QPalette()
+                dark.setColor(QPalette.Window,          QColor(45,  45,  45))
+                dark.setColor(QPalette.WindowText,      QColor(220, 220, 220))
+                dark.setColor(QPalette.Base,            QColor(30,  30,  30))
+                dark.setColor(QPalette.AlternateBase,   QColor(50,  50,  50))
+                dark.setColor(QPalette.Text,            QColor(220, 220, 220))
+                dark.setColor(QPalette.Button,          QColor(55,  55,  55))
+                dark.setColor(QPalette.ButtonText,      QColor(220, 220, 220))
+                dark.setColor(QPalette.Highlight,       QColor(42,  130, 218))
+                dark.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+                dark.setColor(QPalette.ToolTipBase,     QColor(30,  30,  30))
+                dark.setColor(QPalette.ToolTipText,     QColor(220, 220, 220))
+                dark.setColor(QPalette.PlaceholderText, QColor(140, 140, 140))
+                self.setPalette(dark)
+
+                # Detect the actual window background from qdarkstyle's palette
+                # so the title background matches exactly.
+                bg = app_palette.color(QPalette.Window).name()
+
+                GROUPBOX_DARK = f"""
+QGroupBox {{
+    border: 1px solid #555;
+    border-radius: 6px;
+    margin-top: 18px;
+    padding-top: 6px;
+    color: #dcdcdc;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background-color: {bg};
+    color: #dcdcdc;
+}}
+"""
+                LISTWIDGET_DARK = """
+QListWidget {
+    border: 1px solid #555;
+    border-radius: 6px;
+    background-color: #1e1e1e;
+    color: #dcdcdc;
+}
+"""
+                TABLEWIDGET_DARK = """
+QTableWidget {
+    border: 1px solid #555;
+    border-radius: 6px;
+    background-color: #1e1e1e;
+    color: #dcdcdc;
+}
+"""
+                LINEEDIT_DARK = """
+QLineEdit {
+    border: 1px solid #555;
+    border-radius: 6px;
+    padding: 2px 6px;
+    background-color: #1e1e1e;
+    color: #dcdcdc;
+}
+QLineEdit:focus {
+    border: 1px solid #5a93c2;
+}
+"""
+                for gb in self.findChildren(QtWidgets.QGroupBox):
+                    gb.setStyleSheet(GROUPBOX_DARK)
+                for lw in self.findChildren(QtWidgets.QListWidget):
+                    lw.setStyleSheet(LISTWIDGET_DARK)
+                for tw in self.findChildren(QtWidgets.QTableWidget):
+                    tw.setStyleSheet(TABLEWIDGET_DARK)
+                self.lineEdit_segmentation_model_file.setStyleSheet(LINEEDIT_DARK)
+                self.lineEdit_output_folder.setStyleSheet(LINEEDIT_DARK)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------------------------------------------------------
     def set_segment_model(self, model_name: str, checked: bool):
         """Update selected_segment_model when a radio button is toggled on."""
@@ -839,23 +1089,31 @@ class SegmentImagesTab(QWidget):
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def populate_model_metadata(self, model_path):
-        """Load and display ALL metadata from torch checkpoint."""
-        self.listWidget_modelMetadata.clear()
-        
+        """Load and display ALL metadata from torch checkpoint as a two-column table."""
+        from PyQt5.QtWidgets import QTableWidgetItem
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QFont, QColor
+
+        self.listWidget_modelMetadata.setRowCount(0)
+
         try:
             checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
-            
-            # Skip model_state_dict (too large to display)
-            skip_keys = {'model_state_dict', 'state_dict', 'optimizer', 'optimizer_state_dict'}
 
-            # ── Blob filter mode summary (shown at top of metadata list) ──────
+            skip_keys = {'model_state_dict', 'state_dict', 'optimizer', 'optimizer_state_dict'}
+            blob_keys = {'blob_centroid_cov', 'blob_centroid_mean', 'blob_filter_n_sigma',
+                         'blob_filter_radius', 'blob_filter_mode'}
+
+            # ── GroupBox title — just "Model Metadata" ────────────────────────
+            self.groupBox_modelMetadata.setTitle("Model Metadata")
+
+            # ── Blob filter analysis ──────────────────────────────────────────
             import numpy as np
             import math as _math
-            raw_cov    = checkpoint.get("blob_centroid_cov")
-            n_sigma    = checkpoint.get("blob_filter_n_sigma", 2.5)
-            fallback   = checkpoint.get("blob_filter_radius")
-            diag_px    = _math.sqrt(1024**2 + 576**2)
-            cov_ok = False
+            raw_cov  = checkpoint.get("blob_centroid_cov")
+            n_sigma  = checkpoint.get("blob_filter_n_sigma", 2.5)
+            fallback = checkpoint.get("blob_filter_radius")
+            diag_px  = _math.sqrt(1024**2 + 576**2)
+            cov_ok   = False
             if raw_cov is not None:
                 try:
                     cov = np.array(raw_cov, dtype=np.float64)
@@ -863,25 +1121,48 @@ class SegmentImagesTab(QWidget):
                     cov_ok = True
                 except Exception:
                     pass
-            if cov_ok:
-                fallback_px = int(round(float(fallback) * diag_px)) if fallback else "?"
-                mode_str = (f"Mahalanobis  (n_sigma={float(n_sigma):.2f}  "
-                            f"fallback={float(fallback)*100:.1f}%  ~{fallback_px}px)")
-            elif fallback:
-                fallback_px = int(round(float(fallback) * diag_px))
-                mode_str = (f"Scalar fallback  ({float(fallback)*100:.1f}%  ~{fallback_px}px)  "
-                            f"-- retrain to enable Mahalanobis")
-            else:
-                mode_str = "Unknown  -- no blob filter metadata in checkpoint"
-            self.listWidget_modelMetadata.addItem(f"Blob Filter Mode: {mode_str}")
-            self.listWidget_modelMetadata.addItem("")   # blank separator
 
-            # Iterate through all keys in checkpoint
+            # ── Helper: add a row ─────────────────────────────────────────────
+            def _add_row(label, value, label_align=Qt.AlignLeft, bold_label=False):
+                row = self.listWidget_modelMetadata.rowCount()
+                self.listWidget_modelMetadata.insertRow(row)
+
+                key_item = QTableWidgetItem(str(label))
+                key_item.setFlags(Qt.ItemIsEnabled)
+                key_item.setTextAlignment(label_align | Qt.AlignVCenter)
+                if bold_label:
+                    f = QFont()
+                    f.setBold(True)
+                    key_item.setFont(f)
+
+                val_item = QTableWidgetItem(str(value))
+                val_item.setFlags(Qt.ItemIsEnabled)
+                val_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+                self.listWidget_modelMetadata.setItem(row, 0, key_item)
+                self.listWidget_modelMetadata.setItem(row, 1, val_item)
+
+            def _add_sub_row(label, value):
+                """Indented sub-property row, label right-aligned."""
+                row = self.listWidget_modelMetadata.rowCount()
+                self.listWidget_modelMetadata.insertRow(row)
+
+                key_item = QTableWidgetItem(f"    {label}")
+                key_item.setFlags(Qt.ItemIsEnabled)
+                key_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                key_item.setForeground(QColor("#666666"))
+
+                val_item = QTableWidgetItem(str(value))
+                val_item.setFlags(Qt.ItemIsEnabled)
+                val_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+                self.listWidget_modelMetadata.setItem(row, 0, key_item)
+                self.listWidget_modelMetadata.setItem(row, 1, val_item)
+
+            # ── Main metadata rows (skip blob keys — handled separately) ──────
             for key, value in checkpoint.items():
-                if key in skip_keys:
+                if key in skip_keys or key in blob_keys:
                     continue
-                
-                # Format the value for display
                 if value is None:
                     display_value = "None"
                 elif isinstance(value, (int, str)):
@@ -894,12 +1175,30 @@ class SegmentImagesTab(QWidget):
                     display_value = f"{{dict with {len(value)} keys}}"
                 else:
                     display_value = f"{type(value).__name__}"
-                
-                # Add to listbox
-                self.listWidget_modelMetadata.addItem(f"{key}: {display_value}")
-                
+                _add_row(key, display_value)
+
+            # ── Mahalanobis blob filter section ───────────────────────────────
+            if cov_ok:
+                fallback_px = int(round(float(fallback) * diag_px)) if fallback else "?"
+                _add_row("Mahalanobis blob filter", "", bold_label=True)
+                _add_sub_row("n_sigma",   f"{float(n_sigma):.2f}")
+                _add_sub_row("fallback",  f"{float(fallback)*100:.1f}%  (~{fallback_px}px)")
+                _add_sub_row("cov matrix", "[2×2 items]")
+            elif fallback:
+                fallback_px = int(round(float(fallback) * diag_px))
+                _add_row("Scalar blob filter", "", bold_label=True)
+                _add_sub_row("radius", f"{float(fallback)*100:.1f}%  (~{fallback_px}px)")
+            else:
+                _add_row("Blob filter", "No metadata in checkpoint")
+
+            self.listWidget_modelMetadata.resizeColumnToContents(0)
+            self.listWidget_modelMetadata.horizontalHeader().setStretchLastSection(True)
+
         except Exception as e:
-            self.listWidget_modelMetadata.addItem(f"Error: {e}")
+            row = self.listWidget_modelMetadata.rowCount()
+            self.listWidget_modelMetadata.insertRow(row)
+            self.listWidget_modelMetadata.setItem(row, 0, QTableWidgetItem("Error"))
+            self.listWidget_modelMetadata.setItem(row, 1, QTableWidgetItem(str(e)))
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

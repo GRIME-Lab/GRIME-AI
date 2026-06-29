@@ -76,3 +76,33 @@ QPushButton:disabled {
   background-color: gray;
   color: black;
 }"""
+
+BUTTON_CSS_RED_OUTLINE = """
+QPushButton {
+  background-color: transparent;
+  color: darkred;
+  border: 2px solid darkred;
+  padding: 6px 14px;
+  border-radius: 6px;
+}
+QPushButton:hover { background-color: rgba(139, 0, 0, 0.08); }
+QPushButton:disabled {
+  background-color: transparent;
+  color: gray;
+  border: 2px solid gray;
+}"""
+
+BUTTON_CSS_YELLOW_OUTLINE = """
+QPushButton {
+  background-color: transparent;
+  color: #b89000;
+  border: 2px solid #f0c000;
+  padding: 6px 14px;
+  border-radius: 6px;
+}
+QPushButton:hover { background-color: rgba(240, 192, 0, 0.08); }
+QPushButton:disabled {
+  background-color: transparent;
+  color: gray;
+  border: 2px solid gray;
+}"""
