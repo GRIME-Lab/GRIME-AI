@@ -10,7 +10,13 @@ from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtWidgets import QFileDialog, QListWidgetItem, QAbstractItemView, QSizePolicy, QListWidget, QMessageBox, QTreeWidget, QTreeWidgetItem
 
 from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_DARK_RED, BUTTON_CSS_YELLOW
+from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_DARK_RED, BUTTON_CSS_YELLOW, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
+from PyQt5.QtGui import QPalette, QColor, QIcon
+
+try:
+    from GRIME_AI.dialogs.ML_image_processing.chain_link_resources import get_icon as _get_chain_icon
+except Exception:
+    _get_chain_icon = None
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
 from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
@@ -227,6 +233,16 @@ class TrainingTab(QtWidgets.QWidget):
         ui_path = Path(__file__).parent / "training_tab.ui"
         uic.loadUi(str(ui_path), self)
 
+        # Expose named layouts as attributes (uic only creates widget attrs)
+        try:
+            gb = self.groupBox_imageFolders
+            hl = gb.layout()  # horizontalListLayout
+            self.horizontalListLayout    = hl
+            self.verticalLayout_available = hl.itemAt(0).layout()
+            self.verticalLayout_selected  = hl.itemAt(2).layout()
+        except Exception:
+            pass
+
         # Replace default QListWidgets with drag/drop versions while preserving object names and layout positions
         self._install_drag_drop_lists()
 
@@ -286,33 +302,86 @@ class TrainingTab(QtWidgets.QWidget):
     def setup_ui_properties(self):
         """Set size policies and layout stretch factors."""
         self.listWidget_availableFolders.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.listWidget_availableFolders.setMinimumHeight(200)
+        self.listWidget_availableFolders.setMinimumHeight(120)
 
         self.listWidget_selectedFolders.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.listWidget_selectedFolders.setMinimumHeight(200)
+        self.listWidget_selectedFolders.setMinimumHeight(120)
+
+        # Pin labels to top, trees fill remaining space
+        try:
+            self.verticalLayout_available.setStretch(0, 0)  # label — fixed
+            self.verticalLayout_available.setStretch(1, 1)  # tree  — expand
+            self.verticalLayout_selected.setStretch(0, 0)
+            self.verticalLayout_selected.setStretch(1, 1)
+            self.verticalLayout_available.setAlignment(QtCore.Qt.AlignTop)
+            self.verticalLayout_selected.setAlignment(QtCore.Qt.AlignTop)
+        except Exception:
+            pass
 
         self.adjustSize()
-
         self.setMinimumSize(self.size())
 
-        self.verticalTabParametersLayout.setStretch(0, 1)
-        self.verticalTabParametersLayout.setStretch(1, 0)
-        self.horizontalMainLayout.setStretch(0, 1)
-        self.horizontalMainLayout.setStretch(1, 3)
+        self.verticalTabParametersLayout.setStretch(0, 0)  # path bar — fixed
+        self.verticalTabParametersLayout.setStretch(1, 1)  # folder groupbox — expand
+        self.verticalTabParametersLayout.setStretch(2, 0)  # bottom cols — fixed
+
         self.horizontalListLayout.setStretch(0, 1)
         self.horizontalListLayout.setStretch(1, 0)
         self.horizontalListLayout.setStretch(2, 1)
 
-        # Column stretch for Training Parameters grid (6 columns):
-        # col 0 = left labels (fixed), col 1 = left controls (fixed),
-        # col 2 = centre gap (stretches), col 3 = right labels (fixed),
-        # col 4 = right controls (fixed), col 5 = right gap (stretches)
-        self.gridLayout_2.setColumnStretch(0, 0)
-        self.gridLayout_2.setColumnStretch(1, 0)
-        self.gridLayout_2.setColumnStretch(2, 1)
-        self.gridLayout_2.setColumnStretch(3, 0)
-        self.gridLayout_2.setColumnStretch(4, 0)
-        self.gridLayout_2.setColumnStretch(5, 1)
+        # Bottom three columns: col1 | col2 (params+blob) | col3 (lora+splits)
+        self.horizontalMainLayout.setStretch(0, 1)
+        self.horizontalMainLayout.setStretch(1, 2)
+        self.horizontalMainLayout.setStretch(2, 1)
+
+        # Cap spinbox widths so they don't stretch full column width
+        for sb in [
+            self.spinBox_epochs, self.spinBox_batchSize,
+            self.spinBox_saveFrequency, self.spinBox_validationFrequency,
+            self.spinBox_patience, self.spinBox_blobFilterRadius,
+            self.spinBox_loraRank, self.spinBox_loraAlpha,
+            self.spinBox_trainSplit, self.spinBox_valSplit,
+        ]:
+            sb.setMaximumWidth(90)
+
+        self.doubleSpinBox_weightDecay.setMaximumWidth(110)
+        self.doubleSpinBox_loraDropout.setMaximumWidth(110)
+
+        # Chain link toggle for Training Splits
+        self._split_linked = True
+        self._split_guard  = False
+
+        self._btn_split_link = QtWidgets.QPushButton()
+        self._btn_split_link.setCheckable(True)
+        self._btn_split_link.setChecked(True)
+        self._btn_split_link.setFixedSize(28, 28)
+        self._btn_split_link.setToolTip("Linked: changing one value sets the other to its complement (100 - n).\nClick to unlink.")
+        # Load icons from resource module; fall back to text if unavailable
+        if _get_chain_icon:
+            self._icon_linked   = QIcon(_get_chain_icon("linked"))
+            self._icon_unlinked = QIcon(_get_chain_icon("unlinked"))
+            self._btn_split_link.setIcon(self._icon_linked)
+            self._btn_split_link.setIconSize(QtCore.QSize(20, 20))
+        else:
+            self._btn_split_link.setText("🔗")
+        self._btn_split_link.setStyleSheet("""
+QPushButton {
+    font-size: 14px;
+    border: 1px solid #aaa;
+    border-radius: 6px;
+    background: transparent;
+}
+QPushButton:checked {
+    border: 2px solid steelblue;
+    background: rgba(70,130,180,0.15);
+}
+QPushButton:hover { background: rgba(128,128,128,0.15); }
+""")
+        self._btn_split_link.toggled.connect(self._on_split_link_toggled)
+        try:
+            self.horizontalLayout_splitRow.addWidget(self._btn_split_link)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -393,29 +462,34 @@ class TrainingTab(QtWidgets.QWidget):
     # ------------------------------------------------------------------------
     def _install_clickable_labels(self) -> None:
         """
-        Replace the plain QLabel headers above each tree with ClickableLabel
-        instances that toggle expand/collapse on their linked tree.
+        Insert bold clickable labels above each folder tree using the known
+        named layouts, and ensure tree content starts at the top.
         """
-        for label_name, base_text, tree in [
-            ("label_availableFolders", "Available Image Folders", self.listWidget_availableFolders),
-            ("label_selectedFolders",  "Selected Image Folders",  self.listWidget_selectedFolders),
+        for layout_name, tree, base_text in [
+            ("verticalLayout_available", self.listWidget_availableFolders, "Available Image Folders"),
+            ("verticalLayout_selected",  self.listWidget_selectedFolders,  "Selected Image Folders"),
         ]:
-            old_label = getattr(self, label_name)
-            layout, index = self._find_container_layout_and_index(old_label)
-            if layout is None or index < 0:
-                print(f"Could not locate layout slot for {label_name}; skipping.")
+            tree.setHeaderHidden(True)
+            tree.setUniformRowHeights(True)
+            tree.setRootIsDecorated(False)
+
+            layout = getattr(self, layout_name, None)
+            if layout is None:
                 continue
 
-            new_label = ClickableLabel(base_text, tree, old_label.parent())
-            new_label.setObjectName(label_name)
-            new_label.setAlignment(QtCore.Qt.AlignCenter)
-            new_label.setStyleSheet("font: bold 10pt;")
+            # Find the tree's position in its layout
+            idx = -1
+            for j in range(layout.count()):
+                it = layout.itemAt(j)
+                if it and it.widget() == tree:
+                    idx = j
+                    break
 
-            layout.insertWidget(index, new_label)
-            layout.removeWidget(old_label)
-            old_label.hide()
-            old_label.deleteLater()
-            setattr(self, label_name, new_label)
+            if idx >= 0:
+                lbl = ClickableLabel(base_text, tree, tree.parent())
+                lbl.setAlignment(QtCore.Qt.AlignCenter)
+                lbl.setStyleSheet("font: bold 10pt;")
+                layout.insertWidget(idx, lbl)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -430,7 +504,7 @@ class TrainingTab(QtWidgets.QWidget):
         self.pushButton_moveRight.clicked.connect(self.move_to_right)
         self.pushButton_moveLeft.clicked.connect(self.move_to_available)
         self.pushButton_validate.clicked.connect(self.validate_label_consistency)
-        self.pushButton_validate.setStyleSheet(BUTTON_CSS_YELLOW)
+        self.pushButton_validate.setStyleSheet(BUTTON_CSS_YELLOW_OUTLINE)
         self.lineEdit_siteName.editingFinished.connect(self.save_site_name_to_json)
 
         self.pushButton_browse_model_training_images_folder.clicked.connect(self.browse_model_training_images_folder)
@@ -446,7 +520,7 @@ class TrainingTab(QtWidgets.QWidget):
         self.pushButton_moveLeft.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
 
         self.pushButton_reset.clicked.connect(self.reset_lists)
-        self.pushButton_reset.setStyleSheet(BUTTON_CSS_DARK_RED)
+        self.pushButton_reset.setStyleSheet(BUTTON_CSS_RED_OUTLINE)
 
         self.pushButton_train.clicked.connect(self.train)
         self.pushButton_train.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
@@ -2057,23 +2131,51 @@ class TrainingTab(QtWidgets.QWidget):
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def _on_split_link_toggled(self, linked: bool) -> None:
+        """Toggle chain link — when linked spinboxes are complementary; when unlinked, independent."""
+        self._split_linked = linked
+        if _get_chain_icon:
+            self._btn_split_link.setIcon(
+                getattr(self, '_icon_linked', QIcon()) if linked
+                else getattr(self, '_icon_unlinked', QIcon())
+            )
+        else:
+            self._btn_split_link.setText("🔗" if linked else "⛓")
+        self._btn_split_link.setToolTip(
+            "Linked: changing one value sets the other to its complement (100 - n).\nClick to unlink."
+            if linked else
+            "Unlinked: spinboxes are independent.\nClick to link."
+        )
+        if linked:
+            self._split_guard = True
+            try:
+                self.spinBox_valSplit.setValue(100 - self.spinBox_trainSplit.value())
+            finally:
+                self._split_guard = False
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
     def _on_val_split_changed(self, val_pct: int) -> None:
-        """
-        When the user changes the validation spinbox, update training spinbox.
-        Guard flag prevents the reciprocal signal from re-entering.
-        """
-        # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
-        pass
+        """When validation changes, update training only if linked."""
+        if getattr(self, '_split_guard', False) or not getattr(self, '_split_linked', False):
+            return
+        self._split_guard = True
+        try:
+            self.spinBox_trainSplit.setValue(100 - val_pct)
+        finally:
+            self._split_guard = False
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def _on_train_split_changed(self, train_pct: int) -> None:
-        """
-        When the user changes the training spinbox, update validation spinbox.
-        Guard flag prevents the reciprocal signal from re-entering.
-        """
-        # JES - JACOB BLAIS/NAU ASKED THAT THE TRAINING/VALIDATION SPLIT BE INDEPENDENT OF THE OTHER
-        pass
+        """When training changes, update validation only if linked."""
+        if getattr(self, '_split_guard', False) or not getattr(self, '_split_linked', False):
+            return
+        self._split_guard = True
+        try:
+            self.spinBox_valSplit.setValue(100 - train_pct)
+        finally:
+            self._split_guard = False
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------

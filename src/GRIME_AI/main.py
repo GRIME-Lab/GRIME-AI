@@ -218,6 +218,7 @@ from omegaconf import OmegaConf, DictConfig
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 from GRIME_AI.neon.NEON_API import NEON_API
+from GRIME_AI.dialogs.api_keys import APIKeyManager, APIKeyDialog
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -770,6 +771,17 @@ class MainWindow(QMainWindow):
             print(f"[ERROR] Failed to add SAGE to Tools menu: {e}")
             traceback.print_exc()
 
+        try:
+            self._action_api_keys = QAction("API Keys\u2026", self)
+            self._action_api_keys.setStatusTip("Configure NEON and USGS API keys")
+            self._action_api_keys.triggered.connect(self.menubar_api_keys)
+            self.menuTools.addSeparator()
+            self.menuTools.addAction(self._action_api_keys)
+            print("[INFO] API Keys added to Tools menu successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to add API Keys to Tools menu: {e}")
+            traceback.print_exc()
+
         # ------------------------------------------------------------------------------------------------------------------
         # VIEW MENU — dark/light mode toggle
         # ------------------------------------------------------------------------------------------------------------------
@@ -893,6 +905,31 @@ class MainWindow(QMainWindow):
         self._neon_startup_fetcher = NEONStartupFetcher(self._neon_api, parent=self)
         self._neon_startup_fetcher.result.connect(self._on_neon_startup_result)
         self._neon_startup_fetcher.start()
+
+        # Load persisted API keys and inject into clients at startup
+        try:
+            _key_mgr  = APIKeyManager()
+            _neon_tok = _key_mgr.get_neon_token()
+            _usgs_key = _key_mgr.get_usgs_key()
+            if _neon_tok and hasattr(self._neon_api, "set_token"):
+                self._neon_api.set_token(_neon_tok)
+            _neon_ep = _key_mgr.get_neon_endpoint()
+            if _neon_ep and hasattr(self._neon_api, "set_server"):
+                self._neon_api.set_server(_neon_ep)
+            if _usgs_key and hasattr(self.usgs, "set_api_key"):
+                self.usgs.set_api_key(_usgs_key)
+            _usgs_ep = _key_mgr.get_usgs_endpoint()
+            if _usgs_ep and hasattr(self.usgs, "set_endpoint"):
+                self.usgs.set_endpoint(_usgs_ep)
+        except Exception as _e:
+            print(f"[WARN] Could not load API keys at startup: {_e}")
+
+        # Warn if NEON token is missing (mandatory as of June 30 2026)
+        try:
+            if not APIKeyManager().get_neon_token():
+                QTimer.singleShot(1500, self._warn_neon_token_missing)
+        except Exception as _e:
+            print(f"[WARN] Could not check NEON token at startup: {_e}")
 
         # Show main window
         self.show()
@@ -3012,6 +3049,58 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     # ==================================================================================================================
     # ==================================================================================================================
+    def menubar_api_keys(self):
+        """Open the API Key Manager dialog for NEON and USGS keys."""
+        dlg = APIKeyDialog(parent=self)
+        if dlg.exec_() == APIKeyDialog.Accepted:
+            mgr       = APIKeyManager()
+            neon_tok  = mgr.get_neon_token()
+            usgs_key  = mgr.get_usgs_key()
+            usgs_ep   = mgr.get_usgs_endpoint()
+            # Propagate new keys/endpoint into live clients without requiring a restart
+            neon_ep   = mgr.get_neon_endpoint()
+            if hasattr(self, "_neon_api") and self._neon_api is not None:
+                if hasattr(self._neon_api, "set_token"):
+                    self._neon_api.set_token(neon_tok)
+                if hasattr(self._neon_api, "set_server"):
+                    self._neon_api.set_server(neon_ep)
+            if hasattr(self, "usgs") and self.usgs is not None:
+                if hasattr(self.usgs, "set_api_key"):
+                    self.usgs.set_api_key(usgs_key)
+                if hasattr(self.usgs, "set_endpoint"):
+                    self.usgs.set_endpoint(usgs_ep)
+
+
+    # ==================================================================================================================
+    # ==================================================================================================================
+    # ==================================================================================================================
+    def _warn_neon_token_missing(self):
+        """Show a non-blocking startup warning when no NEON API token is configured."""
+        from PyQt5.QtWidgets import QMessageBox
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("NEON API Token Required")
+        msg.setText(
+            "<b>No NEON API token is configured.</b><br><br>"
+            "As of June 30, 2026, a NEON account token is required "
+            "to download NEON data products and imagery.<br><br>"
+            "NEON data access will be unavailable until a token is added."
+        )
+        msg.setInformativeText(
+            'Get a free token at <a href="https://data.neonscience.org/myaccount">'  
+            'data.neonscience.org</a>, then add it via <b>Tools → API Keys…</b>'
+        )
+        msg.setTextFormat(QtCore.Qt.RichText)
+        open_btn  = msg.addButton("Open API Keys…", QMessageBox.AcceptRole)
+        msg.addButton("Dismiss", QMessageBox.RejectRole)
+        msg.exec_()
+        if msg.clickedButton() == open_btn:
+            self.menubar_api_keys()
+
+
+    # ==================================================================================================================
+    # ==================================================================================================================
+    # ==================================================================================================================
     def menubar_ImageOrganizer(self):
 
         # --------------------------------------------------------------------------------------------------------------
@@ -4998,7 +5087,33 @@ def my_main():
         roi_parser.print_help()  # Help for roi subparser
         sys.exit(0)  # Exit after displaying help
 
+    # API key arguments (session-only; not written to api_keys.ini)
+    neon_grp = parser.add_mutually_exclusive_group()
+    neon_grp.add_argument(
+        "--neon-token", metavar="TOKEN",
+        help="NEON API token (session-only, not saved to disk)"
+    )
+    neon_grp.add_argument(
+        "--neon-token-file", metavar="PATH",
+        help="Path to a .txt file containing your NEON API token"
+    )
+    usgs_grp = parser.add_mutually_exclusive_group()
+    usgs_grp.add_argument(
+        "--usgs-api-key", metavar="KEY",
+        help="USGS Water Data API key (session-only, not saved to disk)"
+    )
+    usgs_grp.add_argument(
+        "--usgs-api-key-file", metavar="PATH",
+        help="Path to a .txt file containing your USGS Water Data API key"
+    )
+
     args = parser.parse_args()
+
+    # Apply any CLI-supplied API key overrides (session-only)
+    try:
+        APIKeyManager().apply_cli_overrides(args)
+    except Exception as _e:
+        print(f"[WARN] Could not apply CLI API key overrides: {_e}")
 
     # Check if no arguments were provided
     if len(sys.argv) == 1:

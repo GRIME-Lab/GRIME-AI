@@ -3,6 +3,7 @@ from PyQt5.QtGui import QPixmap
 
 from .usgs_service import USGSService
 from .usgs_types import CameraInfo
+from GRIME_AI.dialogs.api_keys import APIKeyManager
 
 # Progress callback signature: (index, total, label)
 ProgressFn = Callable[[int, int, Optional[str]], None]
@@ -25,6 +26,11 @@ class USGSClient:
     def __init__(self, service: Optional[USGSService] = None):
         self._svc = service or USGSService()
         self._initialized = False
+        try:
+            _key = APIKeyManager().get_usgs_key() or ""
+            self._svc.set_api_key(_key)
+        except Exception as _e:
+            print(f"[USGSClient] Could not load API key: {_e}")
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -32,6 +38,18 @@ class USGSClient:
         """Initialize the underlying service (fetch camera dictionary)."""
         self._svc.initialize()
         self._initialized = True
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def set_api_key(self, key) -> None:
+        """Update the USGS API key at runtime (called from MainWindow after dialog save)."""
+        self._svc.set_api_key(key or "")
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def set_endpoint(self, endpoint) -> None:
+        """Update the NIMS API endpoint at runtime (called from MainWindow after dialog save)."""
+        self._svc.set_endpoint(endpoint or "")
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
