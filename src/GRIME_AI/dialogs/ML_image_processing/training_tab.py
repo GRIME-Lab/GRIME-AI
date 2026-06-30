@@ -307,7 +307,22 @@ class TrainingTab(QtWidgets.QWidget):
         self.listWidget_selectedFolders.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.listWidget_selectedFolders.setMinimumHeight(120)
 
-        # Pin labels to top, trees fill remaining space
+        # Device — GPU is mandatory for training; auto-detect, no user choice
+        self.comboBox_device.clear()
+        try:
+            import torch
+            gpu_available = torch.cuda.is_available()
+        except Exception:
+            gpu_available = False
+
+        if gpu_available:
+            self.comboBox_device.addItem("gpu")
+        else:
+            self.comboBox_device.addItem("gpu (not detected)")
+            self.pushButton_train.setEnabled(False)
+            self.pushButton_train.setToolTip(
+                "No CUDA-capable GPU detected. Training requires a GPU."
+            )
         try:
             self.verticalLayout_available.setStretch(0, 0)  # label — fixed
             self.verticalLayout_available.setStretch(1, 1)  # tree  — expand
@@ -1104,11 +1119,14 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         # Always refresh the companion label
         self._update_blob_filter_pct_label()
 
-        # Train/val split — val_split stored as fraction (e.g. 0.2), displayed as integer percent
-        val_pct = int(round(float(cfg.get("val_split", 0.2)) * 100))
-        val_pct = max(10, min(40, val_pct))  # clamp to spinbox range
+        # Train/val split — both stored as fractions, loaded independently
+        val_pct   = int(round(float(cfg.get("val_split",   0.2)) * 100))
+        train_pct = int(round(float(cfg.get("train_split", 0.8)) * 100))
+        # Back-compat: older configs only have val_split; derive train from it
+        if "train_split" not in cfg:
+            train_pct = 100 - val_pct
         self.spinBox_valSplit.setValue(val_pct)
-        self.spinBox_trainSplit.setValue(100 - val_pct)
+        self.spinBox_trainSplit.setValue(train_pct)
 
         # YOLO base weights — select saved value in combobox if present
         saved_weights = cfg.get("yolo_base_weights", "")
@@ -1182,7 +1200,8 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             "patience": int(self.spinBox_patience.value()),
             "device": self.comboBox_device.currentText(),
             "blob_filter_radius": self._blob_pixels_to_fraction(),
-            "val_split": round(self.spinBox_valSplit.value() / 100.0, 2),
+            "val_split":   round(self.spinBox_valSplit.value()   / 100.0, 2),
+            "train_split": round(self.spinBox_trainSplit.value() / 100.0, 2),
             "yolo_base_weights": (
                 self.comboBox_yoloWeights.currentText()
                 if self.comboBox_yoloWeights.isEnabled() else ""

@@ -264,7 +264,7 @@
           <item row="9" column="0"><widget class="QLabel" name="label_patience"><property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property><property name="text"><string>Patience:</string></property></widget></item>
           <item row="9" column="1"><widget class="QSpinBox" name="spinBox_patience"><property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property><property name="minimum"><number>1</number></property><property name="maximum"><number>100</number></property><property name="value"><number>3</number></property></widget></item>
           <item row="10" column="0"><widget class="QLabel" name="label_device"><property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property><property name="text"><string>Device:</string></property></widget></item>
-          <item row="10" column="1"><widget class="QComboBox" name="comboBox_device"><property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property><item><property name="text"><string>cpu</string></property></item><item><property name="text"><string>gpu</string></property></item></widget></item>
+          <item row="10" column="1"><widget class="QComboBox" name="comboBox_device"><property name="enabled"><bool>false</bool></property><property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property><property name="toolTip"><string>Training requires a GPU. Detected automatically — not user-selectable.</string></property></widget></item>
          </layout>
         </widget>
        </item>
