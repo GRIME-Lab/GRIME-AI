@@ -1161,6 +1161,14 @@ class MainWindow(QMainWindow):
         for coords in self.NEON_siteList:
             self.osm_widget.add_pin(coords.latitude, coords.longitude, color="yellow")
 
+        # POPULATE THE MAP WITH BLUE PINS FOR SD MESONET STATIONS
+        try:
+            from geomaps.SDMESONET import SDMesonet
+            sd_df = SDMesonet().get_dataframe()
+            self.osm_widget.add_sdmesonet_pins(sd_df)
+        except Exception as e:
+            print(f"SD Mesonet pins skipped: {e}")
+
         # ADD A PIN FOR FLAGSTAFF, AZ WHERE NORTHERN ARIZONA UNIVERSITY IS LOCATED.
         self.osm_widget.add_pin(35.1878, -111.6528, color="blue", label="Northern Arizona University")
 

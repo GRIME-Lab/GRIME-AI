@@ -83,7 +83,12 @@ class MaskVisualizer:
         if isinstance(seg, dict):
             try:
                 counts = seg.get("counts", None)
-                seg_for_decode = seg if "size" in seg else {"counts": counts, "size": [h, w]}
+                size = seg.get("size", [h, w])
+                if isinstance(counts, list):
+                    # uncompressed RLE -> compressed (maskutils.decode needs bytes counts)
+                    seg_for_decode = maskutils.frPyObjects({"counts": counts, "size": size}, size[0], size[1])
+                else:
+                    seg_for_decode = seg if "size" in seg else {"counts": counts, "size": [h, w]}
                 m = maskutils.decode(seg_for_decode)
                 if m is None:
                     return None

@@ -24,6 +24,24 @@ def get_category_id(annotations: dict, target_label: str) -> int:
     return name_to_id[target]
 
 
+def _seg_to_mask(segmentation, height, width):
+    """Decode polygon, uncompressed RLE, or compressed RLE to an H×W mask."""
+    if isinstance(segmentation, dict):                     # RLE dict
+        counts = segmentation.get("counts")
+        if isinstance(counts, (bytes, str)):               # compressed RLE
+            rle = segmentation
+        else:                                              # uncompressed RLE
+            rle = coco_mask.frPyObjects(segmentation, height, width)
+    else:                                                  # polygon(s)
+        rle = coco_mask.frPyObjects(segmentation, height, width)
+        if isinstance(rle, list):
+            rle = coco_mask.merge(rle)
+    mask = coco_mask.decode(rle)
+    if mask.ndim == 3:
+        mask = np.any(mask, axis=2)
+    return mask.astype(np.uint8)
+
+
 class DatasetUtils:
     # ------------------------------------------------------------------------
     def __init__(self):
@@ -168,10 +186,7 @@ class DatasetUtils:
             for ann in anns:
                 if target_id is not None and ann["category_id"] != target_id:
                     continue
-                rle = coco_mask.frPyObjects(ann["segmentation"], height, width)
-                mask = coco_mask.decode(rle)
-                if mask.ndim == 3:
-                    mask = np.any(mask, axis=2)
+                mask = _seg_to_mask(ann["segmentation"], height, width)
                 combined = np.logical_or(combined, mask).astype(np.uint8)
                 if target_id is not None and ann["category_id"] == target_id:
                     found_target = True
@@ -180,10 +195,7 @@ class DatasetUtils:
         elif mode == "categorical":
             categorical = np.zeros((height, width), dtype=np.uint8)
             for ann in anns:
-                rle = coco_mask.frPyObjects(ann["segmentation"], height, width)
-                mask = coco_mask.decode(rle)
-                if mask.ndim == 3:
-                    mask = np.any(mask, axis=2)
+                mask = _seg_to_mask(ann["segmentation"], height, width)
                 categorical[mask.astype(bool)] = ann["category_id"]
             return categorical
 

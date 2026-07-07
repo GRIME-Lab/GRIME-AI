@@ -477,22 +477,21 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
     # ------------------------------------------------------------------------
     def _install_clickable_labels(self) -> None:
         """
-        Insert bold clickable labels above each folder tree using the known
-        named layouts, and ensure tree content starts at the top.
+        Insert a plain bold QLabel above each folder tree as a title,
+        and hide the tree's own column header.
         """
         for layout_name, tree, base_text in [
             ("verticalLayout_available", self.listWidget_availableFolders, "Available Image Folders"),
             ("verticalLayout_selected",  self.listWidget_selectedFolders,  "Selected Image Folders"),
         ]:
             tree.setHeaderHidden(True)
-            tree.setUniformRowHeights(True)
-            tree.setRootIsDecorated(False)
+            tree.setRootIsDecorated(True)
+            tree.setUniformRowHeights(False)
 
             layout = getattr(self, layout_name, None)
             if layout is None:
                 continue
 
-            # Find the tree's position in its layout
             idx = -1
             for j in range(layout.count()):
                 it = layout.itemAt(j)
@@ -501,10 +500,12 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
                     break
 
             if idx >= 0:
-                lbl = ClickableLabel(base_text, tree, tree.parent())
+                lbl = QtWidgets.QLabel(base_text, tree.parent())
                 lbl.setAlignment(QtCore.Qt.AlignCenter)
                 lbl.setStyleSheet("font: bold 10pt;")
                 layout.insertWidget(idx, lbl)
+                layout.setStretch(idx,     0)
+                layout.setStretch(idx + 1, 1)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -1026,6 +1027,8 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             avail_dd.setObjectName("listWidget_availableFolders")
             avail_dd.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
             avail_dd.setHeaderHidden(True)
+            avail_dd.setRootIsDecorated(True)
+            avail_dd.setUniformRowHeights(False)
             avail_dd.setDragEnabled(True)
             avail_dd.setDragDropMode(QAbstractItemView.DragOnly)
 
@@ -1046,6 +1049,8 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             sel_dd.setObjectName("listWidget_selectedFolders")
             sel_dd.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
             sel_dd.setHeaderHidden(True)
+            sel_dd.setRootIsDecorated(True)
+            sel_dd.setUniformRowHeights(False)
             sel_dd.setAcceptDrops(True)
             sel_dd.setDragDropMode(QAbstractItemView.DropOnly)
 
