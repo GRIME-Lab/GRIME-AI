@@ -7,6 +7,13 @@ from PyQt5 import QtWidgets, QtGui, QtCore
 import pycocotools.mask as maskutils
 
 from GRIME_AI.dialogs.ML_image_processing.mask_visualizer import MaskVisualizer
+from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+
+_JSON_KEY = "COCO_Viewer_JSON_Path"
+_K_OPACITY = "COCO_Viewer_Opacity"
+_K_BORDER_ON = "COCO_Viewer_BorderEnabled"
+_K_BORDER_W = "COCO_Viewer_BorderWidth"
+_K_SHOW_ALL = "COCO_Viewer_ShowAllMasks"
 
 # ====================================================================================
 # ====================================================================================
@@ -50,6 +57,7 @@ class CocoViewerTab(QtWidgets.QWidget):
         # UI: File selection
         self.file_edit = QtWidgets.QLineEdit()
         self.file_edit.setPlaceholderText("Select instances_default.json...")
+        self.file_edit.editingFinished.connect(self._on_file_edit_changed)
         self.browse_button = QtWidgets.QPushButton("Browse JSON")
         self.browse_button.clicked.connect(self.browse_json)
 
@@ -73,8 +81,57 @@ class CocoViewerTab(QtWidgets.QWidget):
         self.mask_list.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.mask_list.currentRowChanged.connect(self.on_mask_selected)
 
-        # Stack mask_type_label above mask_list
+        # Mask Options groupbox (above the mask list)
+        self.toggle_button = QtWidgets.QPushButton("Show All Masks")
+        self.toggle_button.clicked.connect(self.toggle_masks)
+        self.toggle_button.setStyleSheet(
+            "QPushButton { background-color: #4682B4; color: white; "
+            "border: none; padding: 6px; border-radius: 4px; }"
+            "QPushButton:hover { background-color: #3a6d99; }"
+        )
+
+        self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.opacity_slider.setRange(0, 100)
+        self.opacity_slider.setValue(100)
+        self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        self.opacity_value_label = QtWidgets.QLabel("100%")
+
+        opacity_row = QtWidgets.QHBoxLayout()
+        opacity_row.addWidget(QtWidgets.QLabel("Opacity:"))
+        opacity_row.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_value_label)
+
+        self.border_enabled_check = QtWidgets.QCheckBox()
+        self.border_enabled_check.setChecked(True)
+        self.border_enabled_check.setToolTip("Draw selected-mask border")
+        self.border_enabled_check.stateChanged.connect(self._on_border_toggled)
+        self._border_enabled = True
+
+        self.border_spin = QtWidgets.QSpinBox()
+        self.border_spin.setRange(1, 3)
+        self.border_spin.setValue(2)
+        self.border_spin.valueChanged.connect(self._on_border_thickness_changed)
+        self.border_spin.setEnabled(False)
+        self.border_enabled_check.setEnabled(False)
+        self._border_thickness = 2
+
+        border_row = QtWidgets.QHBoxLayout()
+        border_row.addWidget(self.border_enabled_check)
+        border_row.addWidget(QtWidgets.QLabel("Border Width:"))
+        border_row.addWidget(self.border_spin)
+        border_row.addStretch()
+
+        mask_options_layout = QtWidgets.QVBoxLayout()
+        mask_options_layout.addWidget(self.toggle_button)
+        mask_options_layout.addLayout(opacity_row)
+        mask_options_layout.addLayout(border_row)
+
+        self.mask_options_group = QtWidgets.QGroupBox("Mask Options")
+        self.mask_options_group.setLayout(mask_options_layout)
+
+        # Stack: Mask Options, then mask_type_label, then mask_list
         list_layout = QtWidgets.QVBoxLayout()
+        list_layout.addWidget(self.mask_options_group)
         list_layout.addWidget(self.mask_type_label)
         list_layout.addWidget(self.mask_list)
 
@@ -86,25 +143,39 @@ class CocoViewerTab(QtWidgets.QWidget):
         # Navigation controls
         self.button_left = QtWidgets.QPushButton("Previous Mask")
         self.button_right = QtWidgets.QPushButton("Next Mask")
-        self.toggle_button = QtWidgets.QPushButton("Show All Masks")
-        self.toggle_button.clicked.connect(self.toggle_masks)
-
         self.button_left.clicked.connect(self.show_prev)
         self.button_right.clicked.connect(self.show_next)
 
         controls_layout = QtWidgets.QHBoxLayout()
         controls_layout.addWidget(self.button_left)
         controls_layout.addWidget(self.button_right)
-        controls_layout.addWidget(self.toggle_button)
+        self._mask_opacity = 1.0
 
         # Diagnostics and stats
         self.status = QtWidgets.QLabel()
         self.stats_label = QtWidgets.QLabel()
 
+        # Thumbnail filmstrip beneath the image canvas
+        self.filmstrip = QtWidgets.QListWidget()
+        self.filmstrip.setViewMode(QtWidgets.QListView.IconMode)
+        self.filmstrip.setFlow(QtWidgets.QListView.LeftToRight)
+        self.filmstrip.setWrapping(False)
+        self.filmstrip.setMovement(QtWidgets.QListView.Static)
+        self.filmstrip.setResizeMode(QtWidgets.QListView.Adjust)
+        self.filmstrip.setIconSize(QtCore.QSize(120, 72))
+        self.filmstrip.setFixedHeight(104)
+        self.filmstrip.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.filmstrip.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.filmstrip.setSpacing(2)
+        self.filmstrip.currentRowChanged.connect(self.on_filmstrip_selected)
+        self._film_pending = []
+        self._film_token = 0
+
         # Assemble layout
         layout = QtWidgets.QVBoxLayout(self)
         layout.addLayout(file_layout)
         layout.addLayout(image_and_list_layout)
+        layout.addWidget(self.filmstrip)
         layout.addLayout(controls_layout)
         layout.addWidget(self.status)
         layout.addWidget(self.stats_label)
@@ -171,7 +242,44 @@ class CocoViewerTab(QtWidgets.QWidget):
         )
         if annotation_file:
             self.file_edit.setText(annotation_file)
+            JsonEditor().update_json_entry(_JSON_KEY, annotation_file)
             self.load_json_and_images(annotation_file)
+
+    def _on_file_edit_changed(self):
+        path = self.file_edit.text().strip()
+        if path and os.path.isfile(path):
+            JsonEditor().update_json_entry(_JSON_KEY, path)
+            self.load_json_and_images(path)
+
+    def showEvent(self, event):
+        """Restore the last-used JSON path and mask options when shown."""
+        super().showEvent(event)
+        if not getattr(self, "_options_restored", False):
+            self._restore_mask_options()
+            self._options_restored = True
+        if not self.file_edit.text().strip():
+            saved = JsonEditor().getValue(_JSON_KEY)
+            if saved and os.path.isfile(saved):
+                self.file_edit.setText(saved)
+                self.load_json_and_images(saved)
+
+    def _restore_mask_options(self):
+        je = JsonEditor()
+        op = je.getValue(_K_OPACITY)
+        if op is not None:
+            self.opacity_slider.setValue(int(op))
+            self._mask_opacity = int(op) / 100.0
+        bw = je.getValue(_K_BORDER_W)
+        if bw is not None:
+            self.border_spin.setValue(int(bw))
+            self._border_thickness = int(bw)
+        bo = je.getValue(_K_BORDER_ON)
+        if bo is not None:
+            self.border_enabled_check.setChecked(bool(bo))
+            self._border_enabled = bool(bo)
+        sa = je.getValue(_K_SHOW_ALL)
+        if bool(sa) and not self.show_all_masks:
+            self.toggle_masks()   # flips state, updates labels + gating
 
     # --------------------------------------------------------------------------------
     # --------------------------------------------------------------------------------
@@ -248,6 +356,7 @@ class CocoViewerTab(QtWidgets.QWidget):
             )
 
         if self.image_ids:
+            self.populate_filmstrip()
             self.show_image()
         else:
             self.label.setText("No images found.")
@@ -332,6 +441,52 @@ class CocoViewerTab(QtWidgets.QWidget):
 
     # --------------------------------------------------------------------------------
     # --------------------------------------------------------------------------------
+    def populate_filmstrip(self):
+        """Fill the filmstrip with one thumbnail per image, in image_ids order."""
+        self.filmstrip.blockSignals(True)
+        self.filmstrip.clear()
+        self.filmstrip.blockSignals(False)
+
+        self._film_token += 1
+        token = self._film_token
+        self._film_pending = []
+
+        for idx, img_id in enumerate(self.image_ids):
+            name = self.images[img_id]["file_name"]
+            item = QtWidgets.QListWidgetItem(QtGui.QIcon(), "")
+            item.setToolTip(name)
+            item.setSizeHint(QtCore.QSize(self.filmstrip.iconSize().width() + 8,
+                                          self.filmstrip.iconSize().height() + 8))
+            self.filmstrip.addItem(item)
+            self._film_pending.append((item, os.path.join(self.folder, name), token))
+
+        QtCore.QTimer.singleShot(30, lambda: self._load_film_batch(token))
+
+    def _load_film_batch(self, token):
+        if token != self._film_token:
+            return
+        size = self.filmstrip.iconSize()
+        for _ in range(min(16, len(self._film_pending))):
+            item, path, tok = self._film_pending.pop(0)
+            if tok != self._film_token or not os.path.isfile(path):
+                continue
+            pix = QtGui.QPixmap(path)
+            if pix.isNull():
+                continue
+            item.setIcon(QtGui.QIcon(pix.scaled(size, QtCore.Qt.KeepAspectRatio,
+                                                QtCore.Qt.SmoothTransformation)))
+        if self._film_pending:
+            QtCore.QTimer.singleShot(30, lambda: self._load_film_batch(token))
+
+    def on_filmstrip_selected(self, row):
+        if row is None or row < 0 or row >= len(self.image_ids):
+            return
+        if row == self.current_image_index:
+            return
+        self.current_image_index = row
+        self.current_mask_index = 0
+        self.show_image()
+
     def show_image(self):
         """
         Render the current image with masks (single or all) into the label.
@@ -348,48 +503,62 @@ class CocoViewerTab(QtWidgets.QWidget):
             self.label.setText(f"Could not load {img_info['file_name']}")
             return
 
+        # Keep filmstrip selection in sync without re-triggering navigation
+        if self.filmstrip.currentRow() != self.current_image_index:
+            self.filmstrip.blockSignals(True)
+            self.filmstrip.setCurrentRow(self.current_image_index)
+            self.filmstrip.blockSignals(False)
+            item = self.filmstrip.item(self.current_image_index)
+            if item:
+                self.filmstrip.scrollToItem(item)
+
         anns = self.annotations.get(img_id, [])
 
         # Preserve current selection before rebuilding the list
         prev_selected = self.mask_list.currentRow()
 
-        # Populate list box with mask labels
+        # Populate list box with mask labels; row 0 is always "No mask"
         self.mask_list.blockSignals(True)
         self.mask_list.clear()
+        self.mask_list.addItem("No mask")
         for ann in anns:
             cid = ann.get("category_id")
             cat_name = self.categories.get(cid, "Unknown")
             self.mask_list.addItem(f"{cat_name} (ID {cid})")
 
-        if anns:
+        if anns and not getattr(self, "_show_no_mask", False):
             if self.show_all_masks:
-                if 0 <= prev_selected < len(anns):
-                    self.mask_list.setCurrentRow(prev_selected)
-                    item = self.mask_list.item(prev_selected)
-                    if item:
-                        self.mask_list.scrollToItem(item, QtWidgets.QAbstractItemView.PositionAtCenter)
+                target = prev_selected if 1 <= prev_selected < self.mask_list.count() else 1
+                self.mask_list.setCurrentRow(target)
+                item = self.mask_list.item(target)
+                if item:
+                    self.mask_list.scrollToItem(item, QtWidgets.QAbstractItemView.PositionAtCenter)
             else:
-                self.mask_list.setCurrentRow(self.current_mask_index)
-                item = self.mask_list.item(self.current_mask_index)
+                self.mask_list.setCurrentRow(self.current_mask_index + 1)
+                item = self.mask_list.item(self.current_mask_index + 1)
                 if item:
                     item.setSelected(True)
                     self.mask_list.setFocus()
                     self.mask_list.scrollToItem(item, QtWidgets.QAbstractItemView.PositionAtCenter)
         else:
-            self.mask_list.clearSelection()
+            self.mask_list.setCurrentRow(0)
         self.mask_list.blockSignals(False)
 
-        if not anns:
-            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        base_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        show_none = (not self.show_all_masks
+                     and (getattr(self, "_show_no_mask", False)
+                          or self.mask_list.currentRow() == 0)) or not anns
+
+        if show_none:
+            rgb = base_rgb
             self.mask_type_label.setText("Mask type: None")
         else:
             if self.show_all_masks:
                 overlayed = self.overlay_all_masks(img, anns)
-                selected_row = self.mask_list.currentRow()
-                if 0 <= selected_row < len(anns):
+                selected_row = self.mask_list.currentRow() - 1
+                if 0 <= selected_row < len(anns) and getattr(self, "_border_enabled", True):
                     ann = anns[selected_row]
-                    overlayed = self.draw_mask_border(overlayed, ann, color=(0, 255, 255), thickness=4)
-                    # Check type of segmentation
+                    overlayed = self.draw_mask_border(overlayed, ann, color=(0, 255, 255), thickness=self._border_thickness)
                     seg = ann.get("segmentation", [])
                     if isinstance(seg, list):
                         self.mask_type_label.setText("Mask type: Polygon")
@@ -407,6 +576,9 @@ class CocoViewerTab(QtWidgets.QWidget):
                 elif isinstance(seg, dict):
                     self.mask_type_label.setText("Mask type: RLE")
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            if self._mask_opacity < 1.0:
+                rgb = cv2.addWeighted(rgb, self._mask_opacity,
+                                      base_rgb, 1.0 - self._mask_opacity, 0)
 
         # Cache once and update once
         self._last_rgb = rgb
@@ -428,7 +600,7 @@ class CocoViewerTab(QtWidgets.QWidget):
                 polys = seg if isinstance(seg[0], (list, tuple)) else [seg[0]]
                 for poly in polys:
                     pts = np.array(poly, dtype=np.float32).reshape(-1, 2).astype(np.int32)
-                    cv2.polylines(img, [pts], True, color, thickness, lineType=cv2.LINE_AA)
+                    cv2.polylines(img, [pts], True, color, thickness, lineType=cv2.LINE_8)
             except Exception:
                 pass
         elif isinstance(seg, dict):
@@ -446,7 +618,7 @@ class CocoViewerTab(QtWidgets.QWidget):
                     m8 = (m > 0).astype(np.uint8)
                     contours, _ = cv2.findContours(m8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                     if contours:
-                        cv2.drawContours(img, contours, -1, color, thickness, lineType=cv2.LINE_AA)
+                        cv2.drawContours(img, contours, -1, color, thickness, lineType=cv2.LINE_8)
             except Exception:
                 pass
         return img
@@ -463,12 +635,37 @@ class CocoViewerTab(QtWidgets.QWidget):
         if row is None or row < 0:
             return
         anns = self.annotations.get(self.image_ids[self.current_image_index], [])
+        if row == 0:            # "No mask"
+            self._show_no_mask = True
+            self.show_image()
+            return
+        self._show_no_mask = False
         if not anns:
             return
         if self.show_all_masks:
             self.show_image()
         else:
-            self.current_mask_index = max(0, min(row, len(anns) - 1))
+            self.current_mask_index = max(0, min(row - 1, len(anns) - 1))
+            self.show_image()
+
+    def _on_opacity_changed(self, value):
+        self._mask_opacity = value / 100.0
+        self.opacity_value_label.setText(f"{value}%")
+        JsonEditor().update_json_entry(_K_OPACITY, value)
+        if self.image_ids:
+            self.show_image()
+
+    def _on_border_thickness_changed(self, value):
+        self._border_thickness = value
+        JsonEditor().update_json_entry(_K_BORDER_W, value)
+        if self.image_ids:
+            self.show_image()
+
+    def _on_border_toggled(self, state):
+        self._border_enabled = bool(state)
+        self.border_spin.setEnabled(self._border_enabled and self.show_all_masks)
+        JsonEditor().update_json_entry(_K_BORDER_ON, self._border_enabled)
+        if self.image_ids:
             self.show_image()
 
     # --------------------------------------------------------------------------------
@@ -514,7 +711,9 @@ class CocoViewerTab(QtWidgets.QWidget):
         Update the button text accordingly.
         """
         self.show_all_masks = not self.show_all_masks
+        JsonEditor().update_json_entry(_K_SHOW_ALL, self.show_all_masks)
         if self.show_all_masks:
+            self._show_no_mask = False
             self.toggle_button.setText("Show Individual Masks")
             self.button_left.setText("Previous Image")
             self.button_right.setText("Next Image")
@@ -523,9 +722,13 @@ class CocoViewerTab(QtWidgets.QWidget):
             self.button_left.setText("Previous Mask")
             self.button_right.setText("Next Mask")
         self.show_image()
+        self._sync_border_controls_enabled()
 
-    # --------------------------------------------------------------------------------
-    # --------------------------------------------------------------------------------
+    def _sync_border_controls_enabled(self):
+        on = self.show_all_masks
+        self.border_enabled_check.setEnabled(on)
+        self.border_spin.setEnabled(on and self.border_enabled_check.isChecked())
+
     def _update_label_pixmap(self):
         """
         Update the QLabel pixmap from the last RGB frame using current label size.

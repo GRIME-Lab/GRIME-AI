@@ -3,8 +3,18 @@ import threading
 import http.server
 import socketserver
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QApplication
-from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage
 from PyQt5.QtCore import QUrl, QTimer, pyqtSignal
+from PyQt5.QtGui import QDesktopServices
+
+
+class _ExternalLinkPage(QWebEnginePage):
+    """Opens clicked hyperlinks in the system browser instead of the map view."""
+    def acceptNavigationRequest(self, url, nav_type, is_main_frame):
+        if nav_type == QWebEnginePage.NavigationTypeLinkClicked:
+            QDesktopServices.openUrl(url)
+            return False
+        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
 
 class OpenStreetMapWidget(QWidget):
@@ -13,6 +23,7 @@ class OpenStreetMapWidget(QWidget):
     def __init__(self, parent=None, timeout_ms=10000):
         super().__init__(parent)
         self.view = QWebEngineView(self)
+        self.view.setPage(_ExternalLinkPage(self.view))
 
         # Ensure JS and remote access are enabled
         s = self.view.settings()
@@ -229,6 +240,42 @@ class OpenStreetMapWidget(QWidget):
             """
             self.view.page().runJavaScript(js)
         self._queue_or_run(_impl, lat, lng, zoom, add_marker, label, color)
+
+    def add_sdmesonet_pins(self, df):
+        """Drop a blue pin per SD Mesonet station; popup shows full station info."""
+        if df is None or df.empty:
+            return
+        from urllib.parse import urljoin
+        base = "https://climate.sdstate.edu/information/stations/"
+        for _, r in df.iterrows():
+            lat, lon = r.get("lat"), r.get("lon")
+            if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+                continue
+
+            station = r.get("station") or "SD Mesonet"
+            url = r.get("station_url") or ""
+            if url:
+                station_html = f'<a href="{urljoin(base, url)}" title="Open SD Mesonet page">{station}</a>'
+            else:
+                station_html = str(station)
+
+            fields = [
+                ("Station", station_html),
+                ("NWSLI", r.get("nwsli")),
+                ("Detail", r.get("detail")),
+                ("County", r.get("county")),
+                ("Start", r.get("start")),
+                ("Lat", r.get("lat")),
+                ("Lon", r.get("lon")),
+                ("Elv(Feet)", r.get("elv_ft")),
+                ("Time Zone", r.get("utc_offset")),
+                ("Camera", "Active" if r.get("active") else "Inactive"),
+            ]
+            label = "<br>".join(
+                f"<b>{k}:</b> {v}" for k, v in fields
+                if v not in ("", None) and str(v) != "nan"
+            )
+            self.add_pin(lat, lon, color="blue", label=label)
 
     def add_geojson(self, geojson_str):
         def _impl(geojson_str):

@@ -314,10 +314,9 @@ class SAM2Trainer:
             self.annotation_index = self.dataset_util.build_annotation_index(self.dataset)
 
 
-        # Split dataset — ratio is user-configured; default 0.2 if not present
-        val_split = float(self.site_config.get("val_split", 0.2))
-        val_split = max(0.10, min(0.40, val_split))  # clamp to valid range
-        train_split = round(1.0 - val_split, 2)
+        # Split dataset — both ratios are user-configured and independent
+        val_split   = float(self.site_config.get("val_split",   0.2))
+        train_split = float(self.site_config.get("train_split", round(1.0 - val_split, 2)))
 
         # Seasonal hold-out: remove images from one or more hold-out seasons before splitting.
         # Config key is "holdout_seasons" (list). Legacy single-value key "knockout_season"
