@@ -227,6 +227,9 @@ class ClickableLabel(QtWidgets.QLabel):
 # ============================================================================
 class TrainingTab(QtWidgets.QWidget):
     ml_train_signal = QtCore.pyqtSignal()
+    # Emitted when the USER commits a change to the training images folder
+    # (Browse or edit-finished) so the main window can reconcile with the recipe.
+    trainingImagesCommitted_Signal = QtCore.pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -528,6 +531,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         if model_training_image_folder:
             self.lineEdit_model_training_images_path.setText(model_training_image_folder)
         self.lineEdit_model_training_images_path.editingFinished.connect(self.populate_available_folders)
+        self.lineEdit_model_training_images_path.editingFinished.connect(self._training_images_committed)
 
         self.pushButton_moveRight.clicked.connect(self.move_to_right)
         self.pushButton_moveRight.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
@@ -935,6 +939,13 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             JsonEditor().update_json_entry("Model_Training_Images_Folder", folder)
 
             self.updateTrainButtonState()
+            self._training_images_committed()
+
+    def _training_images_committed(self):
+        # Ask the main window to reconcile this training-images change with
+        # the active recipe (prompt to update the recipe or keep for session).
+        self.trainingImagesCommitted_Signal.emit(
+            self.lineEdit_model_training_images_path.text())
 
     # ------------------------------------------------------------------------
     # Setup helpers

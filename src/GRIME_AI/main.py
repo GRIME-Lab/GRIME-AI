@@ -663,6 +663,18 @@ class MainWindow(QMainWindow):
 
         self.populate_controls()
 
+        # On startup, re-apply the active recipe so its saved folders are the
+        # source of truth. Any per-session override from the previous run (e.g.
+        # an image folder changed in Data Exploration but not saved back to the
+        # recipe) is discarded — persisting it requires saving it to the recipe.
+        try:
+            _active_recipe = self._get_recipe_store().get_active()
+            if _active_recipe is not None:
+                self.apply_recipe(_active_recipe)
+        except Exception as _e:
+            print(f"[WARN] Startup recipe re-apply skipped: {_e}")
+            traceback.print_exc()
+
         # ----------------------------------------------------------------------------------------------------
         # ----------------------------------------------------------------------------------------------------
         #JES file_utils = GRIME_AI_Save_Utils()
@@ -776,6 +788,19 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[ERROR] Failed to add API Keys to Tools menu: {e}")
             traceback.print_exc()
+
+
+        try:
+            self._action_recipe_manager = QAction("Recipe Manager\u2026", self)
+            self._action_recipe_manager.setStatusTip("Manage per-site folder recipes (root, composites, videos, USGS, NEON)")
+            self._action_recipe_manager.triggered.connect(self.menubar_recipe_manager)
+            self.menuTools.addSeparator()
+            self.menuTools.addAction(self._action_recipe_manager)
+            print("[INFO] Recipe Manager added to Tools menu successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to add Recipe Manager to Tools menu: {e}")
+            traceback.print_exc()
+
 
         # ------------------------------------------------------------------------------------------------------------------
         # VIEW MENU — dark/light mode toggle
@@ -2755,6 +2780,16 @@ class MainWindow(QMainWindow):
         hyperparameterDlg.ml_train_signal.connect(train_main)
         hyperparameterDlg.ml_segment_signal.connect(segment_main)
 
+        # Training-images folder change -> offer to update the active recipe
+        try:
+            hyperparameterDlg.training_tab.trainingImagesCommitted_Signal.connect(
+                frame.on_training_images_committed)
+            hyperparameterDlg.finished.connect(
+                lambda *_: frame.on_training_images_committed(
+                    hyperparameterDlg.training_tab.lineEdit_model_training_images_path.text()))
+        except Exception as _e:
+            print(f"[WARN] Could not wire training-images recipe prompt: {_e}")
+
         #hyperparameterDlg.accepted.connect(closehyperparameterDlg)
         #hyperparameterDlg.rejected.connect(closehyperparameterDlg)
 
@@ -3072,6 +3107,157 @@ class MainWindow(QMainWindow):
                     self.usgs.set_api_key(usgs_key)
                 if hasattr(self.usgs, "set_endpoint"):
                     self.usgs.set_endpoint(usgs_ep)
+
+
+    # ==================================================================================================================
+    # RECIPE MANAGER — per-site folder recipes
+    # ==================================================================================================================
+    def menubar_recipe_manager(self):
+        """Open the Recipe Manager. A recipe bundles the per-site folders
+        (root, composite slices, videos/GIFs, USGS, NEON downloads) so you can
+        switch study sites without editing folder paths by hand."""
+        try:
+            from GRIME_AI.recipe_manager import RecipeManagerDialog
+            dlg = RecipeManagerDialog(self._get_recipe_store(), self)
+            dlg.recipeActivated.connect(self.apply_recipe)
+            dlg.exec_()
+        except Exception as e:
+            print(f"[ERROR] Failed to open Recipe Manager: {e}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "Recipe Manager", str(e))
+
+    def _get_recipe_store(self):
+        """Return the single shared RecipeStore instance (created lazily), so
+        the Recipe Manager and the image-folder write-back use the same store."""
+        from GRIME_AI.recipe_manager import RecipeStore
+        if not hasattr(self, "recipe_store") or self.recipe_store is None:
+            self.recipe_store = RecipeStore()
+        return self.recipe_store
+
+    def _reconcile_folder_with_recipe(self, new_path, attr, label):
+        """Shared prompt: if a recipe is active and `new_path` differs from the
+        recipe's `attr`, offer to write it back (persist) or keep it for this
+        session only. Used by both the Data Exploration image folder and the
+        ML training-images folder."""
+        try:
+            new_path = (new_path or "").strip()
+            if not new_path:
+                return
+            last = getattr(self, "_last_prompt_paths", None)
+            if last is None:
+                last = self._last_prompt_paths = {}
+            if last.get(attr) == new_path:
+                print(f"[INFO] {label} commit: already reconciled this path; skipping.")
+                return
+            store = self._get_recipe_store()
+            active = store.get_active()
+            if active is None:
+                print(f"[INFO] {label} commit: no active recipe; nothing to reconcile.")
+                return
+            current = (getattr(active, attr, "") or "").strip()
+            if os.path.normpath(new_path) == os.path.normpath(current or "."):
+                print(f"[INFO] {label} commit: matches active recipe; no prompt.")
+                return
+            print(f"[INFO] {label} commit: prompting to update recipe "
+                  f"'{active.name}' ({current!r} -> {new_path!r}).")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Question)
+            box.setWindowTitle("Update Recipe?")
+            box.setText(f"You changed the {label} folder while recipe "
+                        f"\u201c{active.name}\u201d is active.")
+            box.setInformativeText(
+                "Update the recipe to use this folder, or keep the change just "
+                "for this session?")
+            update_btn = box.addButton("Update Recipe", QMessageBox.AcceptRole)
+            box.addButton("Just This Session", QMessageBox.RejectRole)
+            box.exec_()
+            last[attr] = new_path  # remember either way so we do not nag again
+            if box.clickedButton() is update_btn:
+                import datetime
+                setattr(active, attr, new_path)
+                active.modified = datetime.datetime.now().isoformat(timespec="seconds")
+                store.save()
+                try:
+                    self.statusBar().showMessage(
+                        f"Recipe '{active.name}' updated with the new {label} folder.", 5000)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[ERROR] reconcile {label} folder failed: {e}")
+            traceback.print_exc()
+
+    def on_images_folder_committed(self, new_path):
+        """Data Exploration image folder was changed by the user."""
+        self._reconcile_folder_with_recipe(new_path, "image_input", "image")
+
+    def on_training_images_committed(self, new_path):
+        """ML training-images folder was changed by the user (Training tab)."""
+        self._reconcile_folder_with_recipe(new_path, "ml_images", "training images")
+
+    def apply_recipe(self, recipe):
+        """Push an activated recipe's folder paths into the live UI and JSON
+        config so downloads and outputs land in the selected site's folders."""
+        try:
+            # A freshly activated recipe re-enables folder-change prompting.
+            self._last_prompt_paths = {}
+            # Image input folder -> Data Exploration images folder
+            if recipe.image_input:
+                JsonEditor().update_json_entry("Local_Image_Folder", recipe.image_input)
+                if hasattr(self, "fileFolderDlg") and self.fileFolderDlg is not None:
+                    try:
+                        self.fileFolderDlg.setImageFolderPath(recipe.image_input)
+                    except Exception:
+                        pass
+
+            # Data input folder
+            if recipe.data_input:
+                JsonEditor().update_json_entry("Data_Input_Folder", recipe.data_input)
+
+            # Machine Learning training images -> Training tab
+            if recipe.ml_images:
+                JsonEditor().update_json_entry("Model_Training_Images_Folder", recipe.ml_images)
+                try:
+                    if hyperparameterDlg is not None and hasattr(hyperparameterDlg, "training_tab"):
+                        hyperparameterDlg.training_tab.lineEdit_model_training_images_path.setText(recipe.ml_images)
+                except Exception:
+                    pass
+
+            # USGS download root
+            if recipe.usgs:
+                if hasattr(self, "edit_USGSSaveFilePath"):
+                    self.edit_USGSSaveFilePath.setText(recipe.usgs)
+                JsonEditor().update_json_entry("USGS_Root_Folder", recipe.usgs)
+
+            # NEON download root
+            if recipe.neon:
+                if hasattr(self, "edit_NEONSaveFilePath"):
+                    self.edit_NEONSaveFilePath.setText(recipe.neon)
+                if hasattr(self, "edit_NEON_TableInput"):
+                    self.edit_NEON_TableInput.setText(recipe.neon)
+                JsonEditor().update_json_entry("NEON_Root_Folder", recipe.neon)
+
+            # Composite / video / GIF outputs have no dedicated widgets yet;
+            # persist to JSON so the output pipeline (GRIME_AI_Save_Utils)
+            # can redirect them. Videos and GIFs use separate folders.
+            if recipe.composites:
+                JsonEditor().update_json_entry("Composite_Slices_Folder", recipe.composites)
+            if recipe.videos:
+                JsonEditor().update_json_entry("Videos_Folder", recipe.videos)
+            if recipe.gifs:
+                JsonEditor().update_json_entry("GIFs_Folder", recipe.gifs)
+
+            # Site root (informational; downstream code may key off this).
+            if recipe.root:
+                JsonEditor().update_json_entry("Recipe_Site_Root", recipe.root)
+
+            try:
+                self.statusBar().showMessage(f"Recipe '{recipe.name}' applied.", 5000)
+            except Exception:
+                pass
+            print(f"[INFO] Recipe applied: {recipe.name}")
+        except Exception as e:
+            print(f"[ERROR] Failed to apply recipe: {e}")
+            traceback.print_exc()
 
 
     # ==================================================================================================================
