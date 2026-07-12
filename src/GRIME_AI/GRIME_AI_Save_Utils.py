@@ -67,6 +67,21 @@ class GRIME_AI_Save_Utils:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    # RECIPE OVERRIDE — honor the active recipe's output folder (Recipe Manager)
+    # ------------------------------------------------------------------------------------------------------------------
+    def _recipe_override(self, json_key: str):
+        """Return the active recipe's folder for `json_key` (as written by the
+        Recipe Manager on 'Set Active'), or None if no recipe folder is set.
+        Falls back silently so behavior is unchanged when no recipe is active."""
+        try:
+            from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+            value = JsonEditor().getValue(json_key)
+        except Exception:
+            value = None
+        return value.strip() if isinstance(value, str) and value.strip() else None
+
+
     def create_composite_slices_folder(self, image_file_folder: str) -> str:
         """
         Given any image_file_folder path, builds and creates:
@@ -88,7 +103,10 @@ class GRIME_AI_Save_Utils:
 
         # 3. Build the complete compositeSlices path
         #JES target = Path(artifacts_base) / last_folder / "CompositeSlices"
-        target = os.path.join(normalized, "CompositeSlices")
+        # Prefer the active recipe's Composite Slices folder; otherwise fall
+        # back to the default under Documents/GRIME-AI (not the images folder).
+        target = self._recipe_override("Composite_Slices_Folder") \
+            or os.path.join(self.get_users_GRIME_AI_folder(), "composite_slices")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         os.makedirs(target, exist_ok=True)
@@ -118,7 +136,10 @@ class GRIME_AI_Save_Utils:
 
         # 3. Build the complete compositeSlices path
         #JES target = Path(artifacts_base) / last_folder / "Videos"
-        target = os.path.join(normalized, "Videos")
+        # Prefer the active recipe's Videos folder; otherwise fall back to the
+        # default under Documents/GRIME-AI (not the images folder).
+        target = self._recipe_override("Videos_Folder") \
+            or os.path.join(self.get_users_GRIME_AI_folder(), "videos")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         #JES target.mkdir(parents=True, exist_ok=True)
@@ -149,7 +170,10 @@ class GRIME_AI_Save_Utils:
 
         # 3. Build the complete compositeSlices path
         #JES target = Path(artifacts_base) / last_folder / "gif"
-        target = os.path.join(normalized, "gif")
+        # Prefer the active recipe's GIFs folder; otherwise fall back to the
+        # default under Documents/GRIME-AI (not the images folder).
+        target = self._recipe_override("GIFs_Folder") \
+            or os.path.join(self.get_users_GRIME_AI_folder(), "gifs")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         #JES target.mkdir(parents=True, exist_ok=True)

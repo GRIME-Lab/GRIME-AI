@@ -48,6 +48,9 @@ class GRIME_AI_FileUtilitiesDlg(QDialog):
     fetchImageList_Signal = pyqtSignal(str, int)
     create_composite_slice_signal = pyqtSignal()
     triage_images_signal = pyqtSignal(str)
+    # Emitted when the USER commits an image-folder change (Browse or
+    # edit-finished) so the main window can offer to update the active recipe.
+    imageFolderCommitted_Signal = pyqtSignal(str)
 
     # ------------------------------------------------------------------------------------------------------------------
     # INIT
@@ -80,6 +83,11 @@ class GRIME_AI_FileUtilitiesDlg(QDialog):
 
         self.pushButton_BrowseImageFolder.clicked.connect(self.pushButtonBrowseImageFolderClicked)
         self.lineEdit_images_folder.textChanged.connect(self.image_folder_changed)
+        # A committed edit (Enter / focus-out) is a user action; programmatic
+        # setText (e.g. recipe activation) does NOT fire editingFinished.
+        self.lineEdit_images_folder.editingFinished.connect(self._image_folder_committed)
+        if hasattr(parent, "on_images_folder_committed"):
+            self.imageFolderCommitted_Signal.connect(parent.on_images_folder_committed)
 
         self.pushButton_triage_images.clicked.connect(self.pushButton_triage_images_clicked)
         self.pushButton_triage_images.setStyleSheet('QPushButton {background-color: steelblue; color: white;}')
@@ -108,6 +116,9 @@ class GRIME_AI_FileUtilitiesDlg(QDialog):
         # BEFORE CLOSING THE DIALOG BOX, SAVE THE FOLDERS TO THE SETTINGS FILE
         image_folder = self.lineEdit_images_folder.text()
         JsonEditor().update_json_entry("Local_Image_Folder", image_folder)
+        # A pending, uncommitted edit (typed then closed without focus-out) still
+        # needs to reconcile with the active recipe.
+        self._image_folder_committed()
 
 
     @pyqtSlot()
@@ -115,6 +126,11 @@ class GRIME_AI_FileUtilitiesDlg(QDialog):
         # LET THE MAIN APPLICATION KNOW THAT THE FOLDER PATH FOR THE IMAGES HAS CHANGED BY SENDING IT THE PATH
         image_folder = self.lineEdit_images_folder.text()
         JsonEditor().update_json_entry("Local_Image_Folder", image_folder)
+
+    def _image_folder_committed(self):
+        # Fired on a user-committed edit; ask the main window to reconcile
+        # the change with the active recipe (if any).
+        self.imageFolderCommitted_Signal.emit(self.lineEdit_images_folder.text())
 
 
     def pushButtonFetchImageListClicked(self):
@@ -157,6 +173,7 @@ class GRIME_AI_FileUtilitiesDlg(QDialog):
 
         if os.path.exists(folder):
             self.lineEdit_images_folder.setText(folder)
+            self._image_folder_committed()
             #self.radioButtonHardDriveImages.setChecked(True)
             #self.checkBoxCreateEXIFFile.setEnabled(True)
 
