@@ -626,7 +626,8 @@ class RecipeManagerDialog(QDialog):
 
     def _add(self) -> None:
         """Commit the current draft into the list. Requires a unique, non-empty
-        name. Does not change which recipe is active."""
+        name. The very first recipe added is made active automatically; otherwise
+        the active recipe is unchanged (use Set Active)."""
         if not self._drafting or not self._current:
             return
         name = self._current.name.strip()
@@ -639,13 +640,20 @@ class RecipeManagerDialog(QDialog):
                                 f"A recipe named '{name}' already exists.")
             self.name_edit.setFocus()
             return
+        first_recipe = not self.store.recipes   # empty store -> this is the first
         self._current.name = name
         now = _now_iso()
         self._current.created = now
         self._current.modified = now
         self.store.add(self._current)
+        if first_recipe:
+            self.store.active_name = name       # first recipe becomes active
         self._mark_dirty()
         self._refresh_list(select=name)  # clears drafting, selects the new item
+        if first_recipe:
+            active = self.store.get(name)
+            if active is not None:
+                self.recipeActivated.emit(active)
 
     def _duplicate(self) -> None:
         if self._drafting or not self._current:
@@ -660,6 +668,12 @@ class RecipeManagerDialog(QDialog):
         self._refresh_list(select=clone.name)
 
     def _delete(self) -> None:
+        # Ctrl+Alt while clicking Delete = delete ALL recipes (with confirmation).
+        from PyQt5.QtWidgets import QApplication
+        mods = QApplication.keyboardModifiers()
+        if (mods & Qt.ControlModifier) and (mods & Qt.AltModifier):
+            self._delete_all()
+            return
         if self._drafting or not self._current:
             return
         if QMessageBox.question(
@@ -667,9 +681,52 @@ class RecipeManagerDialog(QDialog):
             f"Delete recipe '{self._current.name}'?",
         ) != QMessageBox.Yes:
             return
-        self.store.remove(self._current.name)
+        deleted_name = self._current.name
+        was_active = (self.store.active_name == deleted_name)
+        self.store.remove(deleted_name)   # nulls active_name if it was active
+        self._mark_dirty()
+
+        new_active = None
+        if was_active and self.store.recipes:
+            if len(self.store.recipes) == 1:
+                new_active = self.store.recipes[0].name        # sole survivor
+            else:
+                new_active = self._choose_active_after_delete()  # 2+ remain
+            self.store.active_name = new_active
+
+        self._refresh_list(select=new_active)
+        if new_active:
+            active = self.store.get(new_active)
+            if active is not None:
+                self.recipeActivated.emit(active)
+
+    def _delete_all(self) -> None:
+        """Delete every recipe (Ctrl+Alt + Delete). Confirmed; no-op on 'No'."""
+        if not self.store.recipes:
+            return
+        if QMessageBox.question(
+            self, "Delete All Recipes",
+            "Do you want to proceed with deleting all recipes?",
+        ) != QMessageBox.Yes:
+            return
+        self.store.recipes = []
+        self.store.active_name = None
         self._mark_dirty()
         self._refresh_list()
+
+    def _choose_active_after_delete(self) -> Optional[str]:
+        """The active recipe was deleted and 2+ remain: ask which becomes active.
+        Falls back to the first remaining if the user cancels, so there is always
+        an active recipe."""
+        names = self.store.names()
+        if not names:
+            return None
+        from PyQt5.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getItem(
+            self, "Select Active Recipe",
+            "The active recipe was deleted.\nChoose the new active recipe:",
+            names, 0, False)
+        return name if (ok and name) else names[0]
 
     def _set_active(self) -> None:
         if self._drafting or not self._current:
@@ -769,6 +826,16 @@ class RecipeManagerDialog(QDialog):
             elif resp == QMessageBox.Cancel:
                 event.ignore()
                 return
+            else:  # Discard: revert the in-memory store to the last saved state.
+                prev_active = self.store.active_name
+                self.store.load()   # reload from disk, dropping unsaved changes
+                self._dirty = False
+                # If discarding restored a different active recipe, re-apply it so
+                # the app reflects the reverted state rather than a discarded pick.
+                if self.store.active_name and self.store.active_name != prev_active:
+                    restored = self.store.get(self.store.active_name)
+                    if restored is not None:
+                        self.recipeActivated.emit(restored)
         event.accept()
 
 
