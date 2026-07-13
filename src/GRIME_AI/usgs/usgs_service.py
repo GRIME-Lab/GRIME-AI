@@ -188,12 +188,15 @@ class USGSService:
         for endpoint, label in endpoints_to_try:
             try:
                 if "api.waterdata.usgs.gov" in endpoint:
-                    # New NIMS API - returns a list directly, no locus/hideCam filter
+                    # New NIMS API - returns a list directly; apply hideCam filter (no locus field)
                     uri = f"{endpoint}/cameras"
                     resp = requests.get(uri, headers=self._api_headers(), timeout=15)
                     resp.raise_for_status()
                     camera_data = resp.json()
                     for element in camera_data:
+                        # Skip hidden cameras: show only when hideCam is present and False.
+                        if element.get("hideCam", True):
+                            continue
                         cam_id = element.get("camId")
                         if isinstance(cam_id, str):
                             cam_dict[cam_id] = element
