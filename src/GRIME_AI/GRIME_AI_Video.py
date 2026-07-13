@@ -130,6 +130,14 @@ class GRIME_AI_Video:
     # ======================================================================================================================
     def createVideo(self, rootFolder):
 
+        # Guard: a source image folder is required (mirrors createGIF).
+        if not rootFolder or not os.path.isdir(rootFolder):
+            msgBox = GRIME_AI_QMessageBox('Image Folder Error',
+                                          'Please specify a valid image folder!',
+                                          buttons=QMessageBox.Close)
+            msgBox.displayMsgBox()
+            return
+
         out = None
 
         myGRIMe_Color = GRIME_AI_Color()

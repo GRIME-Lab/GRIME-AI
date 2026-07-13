@@ -626,7 +626,7 @@ class MainWindow(QMainWindow):
         ui_path = os.path.join(os.path.dirname(__file__), "resources", "ui", "neonAIgui.ui")
         uic.loadUi(ui_path, self)
 
-        self.setWindowTitle("GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr.")
+        self.setWindowTitle("GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
         self.tabWidget.setTabVisible(1, False)
         #self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowStaysOnTopHint)
 
@@ -667,6 +667,18 @@ class MainWindow(QMainWindow):
         utils.create_GRIME_folders()
 
         self.populate_controls()
+
+        # On startup, re-apply the active recipe so its saved folders are the
+        # source of truth. Any per-session override from the previous run (e.g.
+        # an image folder changed in Data Exploration but not saved back to the
+        # recipe) is discarded — persisting it requires saving it to the recipe.
+        try:
+            _active_recipe = self._get_recipe_store().get_active()
+            if _active_recipe is not None:
+                self.apply_recipe(_active_recipe)
+        except Exception as _e:
+            print(f"[WARN] Startup recipe re-apply skipped: {_e}")
+            traceback.print_exc()
 
         # ----------------------------------------------------------------------------------------------------
         # ----------------------------------------------------------------------------------------------------
@@ -781,6 +793,19 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[ERROR] Failed to add API Keys to Tools menu: {e}")
             traceback.print_exc()
+
+
+        try:
+            self._action_recipe_manager = QAction("Recipe Manager\u2026", self)
+            self._action_recipe_manager.setStatusTip("Manage per-site folder recipes (root, composites, videos, USGS, NEON)")
+            self._action_recipe_manager.triggered.connect(self.menubar_recipe_manager)
+            self.menuTools.addSeparator()
+            self.menuTools.addAction(self._action_recipe_manager)
+            print("[INFO] Recipe Manager added to Tools menu successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to add Recipe Manager to Tools menu: {e}")
+            traceback.print_exc()
+
 
         # ------------------------------------------------------------------------------------------------------------------
         # VIEW MENU — dark/light mode toggle
@@ -1064,7 +1089,12 @@ class MainWindow(QMainWindow):
 
         # Add USGS pins to map now that we have the camera dictionary
         for name, coords in self.cameraDictionary.items():
-            self.osm_widget.add_pin(coords["lat"], coords["lng"], color="usgs_green", label=name)
+            try:
+                self.osm_widget.add_pin(
+                    coords["lat"], coords["lng"], color="usgs_green",
+                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)))
+            except Exception as _e:
+                print(f"[WARN] USGS pin {name!r} skipped: {_e}")
 
         self._usgs_startup_ready = True
         self._check_and_dismiss_splash()
@@ -1132,7 +1162,16 @@ class MainWindow(QMainWindow):
             return
         self.phenocam_site_dictionary = data
         for site_id, info in self.phenocam_site_dictionary.items():
-            self.osm_widget.add_pin(info["lat"], info["lon"], color="yellow", label=site_id)
+            try:
+                from urllib.parse import urljoin
+                _pc_base = "https://phenocam.nau.edu"
+                _link = info.get("link") if hasattr(info, "get") else None
+                href = urljoin(_pc_base, _link) if _link else f"{_pc_base}/webcam/sites/{site_id}/"
+                self.osm_widget.add_pin(
+                    info["lat"], info["lon"], color="yellow",
+                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base))
+            except Exception as _e:
+                print(f"[WARN] PhenoCam pin {site_id!r} skipped: {_e}")
         self.populate_phenocam_tree()
         self.setup_phenocam_right_panel()
 
@@ -1146,6 +1185,68 @@ class MainWindow(QMainWindow):
                 self._splash.dismiss()
                 self._splash = None
 
+    def _osm_pin_label(self, title, data=None, href=None, base_url=None):
+        """Build a MESONET-style HTML popup label. `title` becomes a hyperlink
+        when `href` is given; `data` (any mapping) adds prettified metadata rows.
+        Field values that are URLs (or site-relative paths, resolved against
+        `base_url`) are rendered as clickable links."""
+        from urllib.parse import urljoin
+        key_labels = {
+            "lat": "Latitude", "lon": "Longitude", "lng": "Longitude",
+            "nwsli": "NWSLI", "elv_ft": "Elevation (ft)", "utc_offset": "Time Zone",
+            "site_no": "Site Number", "site_number": "Site Number",
+            "state": "State", "county": "County", "status": "Status",
+            "description": "Description", "url": "URL", "name": "Name",
+            "sitename": "Site Name", "siteid": "Site ID",
+            "elevation": "Elevation", "network": "Network", "link": "Link",
+        }
+        def pretty(k):
+            return key_labels.get(str(k).lower(),
+                                  str(k).replace("_", " ").strip().title())
+
+        def as_link(s):
+            # Only linkify when a base_url is supplied (e.g. PhenoCam). This keeps
+            # other sources' labels exactly as before and avoids breaking the popup
+            # JS on odd values.
+            if not base_url:
+                return None
+            if s.startswith(("http://", "https://")):
+                full = s
+            elif s.startswith("/"):
+                full = urljoin(base_url, s)
+            else:
+                return None
+            # Reject anything that could break the anchor / popup JS.
+            if any(c in full for c in ' "\'<>\n\r'):
+                return None
+            return f'<a href="{full}" title="Open link">{full}</a>'
+
+        head = (f'<a href="{href}" title="Open site page">{title}</a>'
+                if href else str(title))
+        rows = [f"<b>{head}</b>"]
+        if data is not None and hasattr(data, "items"):
+            for k, v in data.items():
+                if v in ("", None):
+                    continue
+                # Collapse newlines so a value can never break the popup JS string.
+                s = str(v).replace("\r", " ").replace("\n", " ").strip()
+                if not s or s.lower() == "nan":
+                    continue
+                rows.append(f"<b>{pretty(k)}:</b> {as_link(s) or s}")
+        return "<br>".join(rows)
+
+    def _usgs_href(self, coords):
+        """Best-effort NWIS monitoring-location link from a USGS camera record."""
+        try:
+            get = coords.get if hasattr(coords, "get") else (lambda *_: None)
+            for k in ("site_no", "site_number", "siteNumber", "nwis_id"):
+                v = get(k)
+                if v:
+                    return f"https://waterdata.usgs.gov/monitoring-location/{str(v).strip()}/"
+        except Exception:
+            pass
+        return None
+
     def init_openstreetmap(self, cameraDictionary, redList=None, geojson_str=None):
         osm_tab = self.findChild(QWidget, "tab_GoogleMaps")
 
@@ -1155,16 +1256,33 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.osm_widget)
 
         # POPULATE THE MAP WITH PINS FOR USGS HIVIS CAMERA SITES
-        for name, coords in self.cameraDictionary.items():
-            self.osm_widget.add_pin(coords["lat"], coords["lng"], color="usgs_green", label=name)
+        try:
+            for name, coords in self.cameraDictionary.items():
+                self.osm_widget.add_pin(
+                    coords["lat"], coords["lng"], color="usgs_green",
+                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)))
+        except Exception as _e:
+            print(f"[WARN] USGS pins skipped: {_e}")
 
         # POPULATE THE MAP WITH PINS FOR PHENOCAM CAMERA SITES REFERENCED BY NEON
-        for site_id, info in self.phenocam_site_dictionary.items():
-            self.osm_widget.add_pin(info["lat"], info["lon"], color="gold", label=site_id)
+        try:
+            for site_id, info in self.phenocam_site_dictionary.items():
+                from urllib.parse import urljoin
+                _pc_base = "https://phenocam.nau.edu"
+                _link = info.get("link") if hasattr(info, "get") else None
+                href = urljoin(_pc_base, _link) if _link else f"{_pc_base}/webcam/sites/{site_id}/"
+                self.osm_widget.add_pin(
+                    info["lat"], info["lon"], color="gold",
+                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base))
+        except Exception as _e:
+            print(f"[WARN] PhenoCam pins skipped: {_e}")
 
-        # POPULATE THE MAP WITH PINS FOR PHENOCAM CAMERA SITES REFERENCED BY NEON
-        for coords in self.NEON_siteList:
-            self.osm_widget.add_pin(coords.latitude, coords.longitude, color="yellow")
+        # POPULATE THE MAP WITH PINS FOR NEON FIELD SITES
+        try:
+            for coords in self.NEON_siteList:
+                self.osm_widget.add_pin(coords.latitude, coords.longitude, color="yellow")
+        except Exception as _e:
+            print(f"[WARN] NEON pins skipped: {_e}")
 
         # POPULATE THE MAP WITH BLUE PINS FOR SD MESONET STATIONS
         try:
@@ -2760,6 +2878,16 @@ class MainWindow(QMainWindow):
         hyperparameterDlg.ml_train_signal.connect(train_main)
         hyperparameterDlg.ml_segment_signal.connect(segment_main)
 
+        # Training-images folder change -> offer to update the active recipe
+        try:
+            hyperparameterDlg.training_tab.trainingImagesCommitted_Signal.connect(
+                frame.on_training_images_committed)
+            hyperparameterDlg.finished.connect(
+                lambda *_: frame.on_training_images_committed(
+                    hyperparameterDlg.training_tab.lineEdit_model_training_images_path.text()))
+        except Exception as _e:
+            print(f"[WARN] Could not wire training-images recipe prompt: {_e}")
+
         #hyperparameterDlg.accepted.connect(closehyperparameterDlg)
         #hyperparameterDlg.rejected.connect(closehyperparameterDlg)
 
@@ -3077,6 +3205,157 @@ class MainWindow(QMainWindow):
                     self.usgs.set_api_key(usgs_key)
                 if hasattr(self.usgs, "set_endpoint"):
                     self.usgs.set_endpoint(usgs_ep)
+
+
+    # ==================================================================================================================
+    # RECIPE MANAGER — per-site folder recipes
+    # ==================================================================================================================
+    def menubar_recipe_manager(self):
+        """Open the Recipe Manager. A recipe bundles the per-site folders
+        (root, composite slices, videos/GIFs, USGS, NEON downloads) so you can
+        switch study sites without editing folder paths by hand."""
+        try:
+            from GRIME_AI.recipe_manager import RecipeManagerDialog
+            dlg = RecipeManagerDialog(self._get_recipe_store(), self)
+            dlg.recipeActivated.connect(self.apply_recipe)
+            dlg.exec_()
+        except Exception as e:
+            print(f"[ERROR] Failed to open Recipe Manager: {e}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "Recipe Manager", str(e))
+
+    def _get_recipe_store(self):
+        """Return the single shared RecipeStore instance (created lazily), so
+        the Recipe Manager and the image-folder write-back use the same store."""
+        from GRIME_AI.recipe_manager import RecipeStore
+        if not hasattr(self, "recipe_store") or self.recipe_store is None:
+            self.recipe_store = RecipeStore()
+        return self.recipe_store
+
+    def _reconcile_folder_with_recipe(self, new_path, attr, label):
+        """Shared prompt: if a recipe is active and `new_path` differs from the
+        recipe's `attr`, offer to write it back (persist) or keep it for this
+        session only. Used by both the Data Exploration image folder and the
+        ML training-images folder."""
+        try:
+            new_path = (new_path or "").strip()
+            if not new_path:
+                return
+            last = getattr(self, "_last_prompt_paths", None)
+            if last is None:
+                last = self._last_prompt_paths = {}
+            if last.get(attr) == new_path:
+                print(f"[INFO] {label} commit: already reconciled this path; skipping.")
+                return
+            store = self._get_recipe_store()
+            active = store.get_active()
+            if active is None:
+                print(f"[INFO] {label} commit: no active recipe; nothing to reconcile.")
+                return
+            current = (getattr(active, attr, "") or "").strip()
+            if os.path.normpath(new_path) == os.path.normpath(current or "."):
+                print(f"[INFO] {label} commit: matches active recipe; no prompt.")
+                return
+            print(f"[INFO] {label} commit: prompting to update recipe "
+                  f"'{active.name}' ({current!r} -> {new_path!r}).")
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Question)
+            box.setWindowTitle("Update Recipe?")
+            box.setText(f"You changed the {label} folder while recipe "
+                        f"\u201c{active.name}\u201d is active.")
+            box.setInformativeText(
+                "Update the recipe to use this folder, or keep the change just "
+                "for this session?")
+            update_btn = box.addButton("Update Recipe", QMessageBox.AcceptRole)
+            box.addButton("Just This Session", QMessageBox.RejectRole)
+            box.exec_()
+            last[attr] = new_path  # remember either way so we do not nag again
+            if box.clickedButton() is update_btn:
+                import datetime
+                setattr(active, attr, new_path)
+                active.modified = datetime.datetime.now().isoformat(timespec="seconds")
+                store.save()
+                try:
+                    self.statusBar().showMessage(
+                        f"Recipe '{active.name}' updated with the new {label} folder.", 5000)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[ERROR] reconcile {label} folder failed: {e}")
+            traceback.print_exc()
+
+    def on_images_folder_committed(self, new_path):
+        """Data Exploration image folder was changed by the user."""
+        self._reconcile_folder_with_recipe(new_path, "image_input", "image")
+
+    def on_training_images_committed(self, new_path):
+        """ML training-images folder was changed by the user (Training tab)."""
+        self._reconcile_folder_with_recipe(new_path, "ml_images", "training images")
+
+    def apply_recipe(self, recipe):
+        """Push an activated recipe's folder paths into the live UI and JSON
+        config so downloads and outputs land in the selected site's folders."""
+        try:
+            # A freshly activated recipe re-enables folder-change prompting.
+            self._last_prompt_paths = {}
+            # Image input folder -> Data Exploration images folder
+            if recipe.image_input:
+                JsonEditor().update_json_entry("Local_Image_Folder", recipe.image_input)
+                if hasattr(self, "fileFolderDlg") and self.fileFolderDlg is not None:
+                    try:
+                        self.fileFolderDlg.setImageFolderPath(recipe.image_input)
+                    except Exception:
+                        pass
+
+            # Data input folder
+            if recipe.data_input:
+                JsonEditor().update_json_entry("Data_Input_Folder", recipe.data_input)
+
+            # Machine Learning training images -> Training tab
+            if recipe.ml_images:
+                JsonEditor().update_json_entry("Model_Training_Images_Folder", recipe.ml_images)
+                try:
+                    if hyperparameterDlg is not None and hasattr(hyperparameterDlg, "training_tab"):
+                        hyperparameterDlg.training_tab.lineEdit_model_training_images_path.setText(recipe.ml_images)
+                except Exception:
+                    pass
+
+            # USGS download root
+            if recipe.usgs:
+                if hasattr(self, "edit_USGSSaveFilePath"):
+                    self.edit_USGSSaveFilePath.setText(recipe.usgs)
+                JsonEditor().update_json_entry("USGS_Root_Folder", recipe.usgs)
+
+            # NEON download root
+            if recipe.neon:
+                if hasattr(self, "edit_NEONSaveFilePath"):
+                    self.edit_NEONSaveFilePath.setText(recipe.neon)
+                if hasattr(self, "edit_NEON_TableInput"):
+                    self.edit_NEON_TableInput.setText(recipe.neon)
+                JsonEditor().update_json_entry("NEON_Root_Folder", recipe.neon)
+
+            # Composite / video / GIF outputs have no dedicated widgets yet;
+            # persist to JSON so the output pipeline (GRIME_AI_Save_Utils)
+            # can redirect them. Videos and GIFs use separate folders.
+            if recipe.composites:
+                JsonEditor().update_json_entry("Composite_Slices_Folder", recipe.composites)
+            if recipe.videos:
+                JsonEditor().update_json_entry("Videos_Folder", recipe.videos)
+            if recipe.gifs:
+                JsonEditor().update_json_entry("GIFs_Folder", recipe.gifs)
+
+            # Site root (informational; downstream code may key off this).
+            if recipe.root:
+                JsonEditor().update_json_entry("Recipe_Site_Root", recipe.root)
+
+            try:
+                self.statusBar().showMessage(f"Recipe '{recipe.name}' applied.", 5000)
+            except Exception:
+                pass
+            print(f"[INFO] Recipe applied: {recipe.name}")
+        except Exception as e:
+            print(f"[ERROR] Failed to apply recipe: {e}")
+            traceback.print_exc()
 
 
     # ==================================================================================================================
@@ -4861,7 +5140,7 @@ def NEON_labelMouseDoubleClickEvent(self, event):
 # ======================================================================================================================
 def retranslateUi(self, MainWindow):
 
-    szWindowsTitle = "GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr."
+    szWindowsTitle = "GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD"
 
     _translate = QtCore.QCoreApplication.translate
     MainWindow.setWindowTitle(_translate(szWindowsTitle, szWindowsTitle))
