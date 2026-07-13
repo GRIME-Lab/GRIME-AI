@@ -530,6 +530,15 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         model_training_image_folder = JsonEditor().getValue("Model_Training_Images_Folder")
         if model_training_image_folder:
             self.lineEdit_model_training_images_path.setText(model_training_image_folder)
+        # The active recipe (if any) is authoritative for the training-images
+        # root, overriding the site-config value loaded above.
+        try:
+            from GRIME_AI.recipe_manager import RecipeStore
+            _active = RecipeStore().get_active()
+            if _active is not None and getattr(_active, "ml_images", ""):
+                self.lineEdit_model_training_images_path.setText(_active.ml_images)
+        except Exception as _e:
+            print(f"[WARN] Recipe training-images lookup skipped: {_e}")
         self.lineEdit_model_training_images_path.editingFinished.connect(self.populate_available_folders)
         self.lineEdit_model_training_images_path.editingFinished.connect(self._training_images_committed)
 

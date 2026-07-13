@@ -621,7 +621,7 @@ class MainWindow(QMainWindow):
         ui_path = os.path.join(os.path.dirname(__file__), "resources", "ui", "neonAIgui.ui")
         uic.loadUi(ui_path, self)
 
-        self.setWindowTitle("GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr.")
+        self.setWindowTitle("GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
         self.tabWidget.setTabVisible(1, False)
         #self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowStaysOnTopHint)
 
@@ -1084,7 +1084,12 @@ class MainWindow(QMainWindow):
 
         # Add USGS pins to map now that we have the camera dictionary
         for name, coords in self.cameraDictionary.items():
-            self.osm_widget.add_pin(coords["lat"], coords["lng"], color="usgs_green", label=name)
+            try:
+                self.osm_widget.add_pin(
+                    coords["lat"], coords["lng"], color="usgs_green",
+                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)))
+            except Exception as _e:
+                print(f"[WARN] USGS pin {name!r} skipped: {_e}")
 
         self._usgs_startup_ready = True
         self._check_and_dismiss_splash()
@@ -1152,7 +1157,16 @@ class MainWindow(QMainWindow):
             return
         self.phenocam_site_dictionary = data
         for site_id, info in self.phenocam_site_dictionary.items():
-            self.osm_widget.add_pin(info["lat"], info["lon"], color="yellow", label=site_id)
+            try:
+                from urllib.parse import urljoin
+                _pc_base = "https://phenocam.nau.edu"
+                _link = info.get("link") if hasattr(info, "get") else None
+                href = urljoin(_pc_base, _link) if _link else f"{_pc_base}/webcam/sites/{site_id}/"
+                self.osm_widget.add_pin(
+                    info["lat"], info["lon"], color="yellow",
+                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base))
+            except Exception as _e:
+                print(f"[WARN] PhenoCam pin {site_id!r} skipped: {_e}")
         self.populate_phenocam_tree()
         self.setup_phenocam_right_panel()
 
@@ -1166,6 +1180,68 @@ class MainWindow(QMainWindow):
                 self._splash.dismiss()
                 self._splash = None
 
+    def _osm_pin_label(self, title, data=None, href=None, base_url=None):
+        """Build a MESONET-style HTML popup label. `title` becomes a hyperlink
+        when `href` is given; `data` (any mapping) adds prettified metadata rows.
+        Field values that are URLs (or site-relative paths, resolved against
+        `base_url`) are rendered as clickable links."""
+        from urllib.parse import urljoin
+        key_labels = {
+            "lat": "Latitude", "lon": "Longitude", "lng": "Longitude",
+            "nwsli": "NWSLI", "elv_ft": "Elevation (ft)", "utc_offset": "Time Zone",
+            "site_no": "Site Number", "site_number": "Site Number",
+            "state": "State", "county": "County", "status": "Status",
+            "description": "Description", "url": "URL", "name": "Name",
+            "sitename": "Site Name", "siteid": "Site ID",
+            "elevation": "Elevation", "network": "Network", "link": "Link",
+        }
+        def pretty(k):
+            return key_labels.get(str(k).lower(),
+                                  str(k).replace("_", " ").strip().title())
+
+        def as_link(s):
+            # Only linkify when a base_url is supplied (e.g. PhenoCam). This keeps
+            # other sources' labels exactly as before and avoids breaking the popup
+            # JS on odd values.
+            if not base_url:
+                return None
+            if s.startswith(("http://", "https://")):
+                full = s
+            elif s.startswith("/"):
+                full = urljoin(base_url, s)
+            else:
+                return None
+            # Reject anything that could break the anchor / popup JS.
+            if any(c in full for c in ' "\'<>\n\r'):
+                return None
+            return f'<a href="{full}" title="Open link">{full}</a>'
+
+        head = (f'<a href="{href}" title="Open site page">{title}</a>'
+                if href else str(title))
+        rows = [f"<b>{head}</b>"]
+        if data is not None and hasattr(data, "items"):
+            for k, v in data.items():
+                if v in ("", None):
+                    continue
+                # Collapse newlines so a value can never break the popup JS string.
+                s = str(v).replace("\r", " ").replace("\n", " ").strip()
+                if not s or s.lower() == "nan":
+                    continue
+                rows.append(f"<b>{pretty(k)}:</b> {as_link(s) or s}")
+        return "<br>".join(rows)
+
+    def _usgs_href(self, coords):
+        """Best-effort NWIS monitoring-location link from a USGS camera record."""
+        try:
+            get = coords.get if hasattr(coords, "get") else (lambda *_: None)
+            for k in ("site_no", "site_number", "siteNumber", "nwis_id"):
+                v = get(k)
+                if v:
+                    return f"https://waterdata.usgs.gov/monitoring-location/{str(v).strip()}/"
+        except Exception:
+            pass
+        return None
+
     def init_openstreetmap(self, cameraDictionary, redList=None, geojson_str=None):
         osm_tab = self.findChild(QWidget, "tab_GoogleMaps")
 
@@ -1175,16 +1251,33 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.osm_widget)
 
         # POPULATE THE MAP WITH PINS FOR USGS HIVIS CAMERA SITES
-        for name, coords in self.cameraDictionary.items():
-            self.osm_widget.add_pin(coords["lat"], coords["lng"], color="usgs_green", label=name)
+        try:
+            for name, coords in self.cameraDictionary.items():
+                self.osm_widget.add_pin(
+                    coords["lat"], coords["lng"], color="usgs_green",
+                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)))
+        except Exception as _e:
+            print(f"[WARN] USGS pins skipped: {_e}")
 
         # POPULATE THE MAP WITH PINS FOR PHENOCAM CAMERA SITES REFERENCED BY NEON
-        for site_id, info in self.phenocam_site_dictionary.items():
-            self.osm_widget.add_pin(info["lat"], info["lon"], color="gold", label=site_id)
+        try:
+            for site_id, info in self.phenocam_site_dictionary.items():
+                from urllib.parse import urljoin
+                _pc_base = "https://phenocam.nau.edu"
+                _link = info.get("link") if hasattr(info, "get") else None
+                href = urljoin(_pc_base, _link) if _link else f"{_pc_base}/webcam/sites/{site_id}/"
+                self.osm_widget.add_pin(
+                    info["lat"], info["lon"], color="gold",
+                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base))
+        except Exception as _e:
+            print(f"[WARN] PhenoCam pins skipped: {_e}")
 
-        # POPULATE THE MAP WITH PINS FOR PHENOCAM CAMERA SITES REFERENCED BY NEON
-        for coords in self.NEON_siteList:
-            self.osm_widget.add_pin(coords.latitude, coords.longitude, color="yellow")
+        # POPULATE THE MAP WITH PINS FOR NEON FIELD SITES
+        try:
+            for coords in self.NEON_siteList:
+                self.osm_widget.add_pin(coords.latitude, coords.longitude, color="yellow")
+        except Exception as _e:
+            print(f"[WARN] NEON pins skipped: {_e}")
 
         # POPULATE THE MAP WITH BLUE PINS FOR SD MESONET STATIONS
         try:
@@ -5042,7 +5135,7 @@ def NEON_labelMouseDoubleClickEvent(self, event):
 # ======================================================================================================================
 def retranslateUi(self, MainWindow):
 
-    szWindowsTitle = "GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr."
+    szWindowsTitle = "GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD"
 
     _translate = QtCore.QCoreApplication.translate
     MainWindow.setWindowTitle(_translate(szWindowsTitle, szWindowsTitle))
