@@ -9,7 +9,9 @@ from hydra import initialize_config_module
 import sam2
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 from SAGE.core.segmentation_backend import SegmentationBackend
+from SAGE.utils.anchor_classifier import classify_by_anchors
 
 
 class SAM2Backend(SegmentationBackend):
@@ -64,9 +66,17 @@ class SAM2Backend(SegmentationBackend):
         print("Using SAM2 checkpoint:", self.checkpoint_path)
 
         sam2_model = build_sam2(self.config_name, self.checkpoint_path, device=self.device)
+        self.sam2_model = sam2_model
         self.predictor = SAM2ImagePredictor(sam2_model)
 
+        # Lazily-built automatic mask generator (Smart Select mode only).
+        self._auto_generator = None
+        self._auto_masks = None          # cached candidate masks for current image
+        self.image_np = None
+
     def set_image(self, image_np: np.ndarray):
+        self.image_np = image_np
+        self._auto_masks = None          # invalidate candidate cache on image change
         self.predictor.set_image(image_np)
 
     def segment_from_points(self, fg_points, bg_points, exclude_mask=None):
@@ -103,6 +113,61 @@ class SAM2Backend(SegmentationBackend):
                 mask = np.logical_and(mask, np.logical_not(exclude_bool))
 
         return mask
+
+    # =====================================================================
+    # Smart Select: automatic mask generation + anchor classify
+    # =====================================================================
+    def _get_auto_generator(self):
+        if self._auto_generator is None:
+            # Tuned for large, sparse water regions rather than tiny parts.
+            self._auto_generator = SAM2AutomaticMaskGenerator(
+                model=self.sam2_model,
+                points_per_side=32,
+                pred_iou_thresh=0.80,
+                stability_score_thresh=0.90,
+                min_mask_region_area=200,
+            )
+        return self._auto_generator
+
+    def _get_candidate_masks(self):
+        """Generate (once per image) and cache class-agnostic candidate masks."""
+        if self._auto_masks is None:
+            if self.image_np is None:
+                return []
+            gen = self._get_auto_generator()
+            records = gen.generate(self.image_np)
+            self._auto_masks = [r["segmentation"].astype(bool) for r in records]
+        return self._auto_masks
+
+    def segment_smart_select(self, fg_points, bg_points, exclude_mask=None):
+        """
+        Smart Select: auto-generate + anchor classify.
+          - auto-generate all candidate masks (zero per-thread prompts)
+          - fg_points = water anchors, bg_points = exposed-bed anchors
+          - two-class Mahalanobis assignment over per-region features
+          - return union of water-assigned candidates
+
+        Returns (mask_bool_or_None, info_dict).
+        """
+        if self.image_np is None:
+            return None, {"reason": "no image set"}
+
+        candidates = self._get_candidate_masks()
+        if not candidates:
+            return None, {"reason": "auto generator produced no masks"}
+
+        target, info = classify_by_anchors(
+            self.image_np, candidates, fg_points, bg_points
+        )
+
+        if target is not None and exclude_mask is not None:
+            exclude_bool = exclude_mask.astype(bool)
+            if exclude_bool.shape == target.shape:
+                target = np.logical_and(target, np.logical_not(exclude_bool))
+                if not target.any():
+                    target = None
+
+        return target, info
 
 
 # sam2_gui/backends/sam2_backend.py
