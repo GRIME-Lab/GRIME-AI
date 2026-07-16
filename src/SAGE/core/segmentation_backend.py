@@ -17,3 +17,10 @@ class SegmentationBackend(ABC):
         Returns: mask (H, W) bool or uint8.
         """
         pass
+
+    # Optional capability — backends that support automatic-mask + anchor
+    # classification (Smart Select) override this.
+    def segment_smart_select(self, fg_points, bg_points, exclude_mask=None):
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support Smart Select segmentation."
+        )

@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QCheckBox,
 )
 from PyQt5.QtWidgets import QAction
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 import os
 import csv
 import copy
@@ -29,8 +29,10 @@ from SAGE.utils.image_io import load_image_rgb
 from SAGE.core.controller import SegmentationController
 from SAGE.core.renderer import Renderer
 from SAGE.ui.canvas import Canvas
+from SAGE.ui.filmstrip import Filmstrip
 from SAGE.ui.sidebar import Sidebar, MASK_STATE_LOCKED, MASK_STATE_LOADED, MASK_STATE_PERSISTS
 from SAGE.utils.mask_ops import compute_mask_stats
+from SAGE.utils.coco_buffer import CocoBuffer, ann_to_mask
 from SAGE.ui.mask_item import MaskItem
 from SAGE.settings_manager import SettingsManager
 
@@ -49,6 +51,7 @@ class MainWindow(QMainWindow):
         # Mask store + current image tracking
         self.mask_store = {}
         self.current_image_path = None
+        self._coco_buffer = None
 
         # Polygon sampling mode
         self.polygon_sampling_mode = "dense"  # "dense", "random", "poisson"
@@ -111,7 +114,20 @@ class MainWindow(QMainWindow):
             parent=self
         )
         self.canvas.eraser_move.connect(self._erase_seeds_at)
-        layout.addWidget(self.canvas, stretch=4)
+        # Default "Click or Drag" button maps to paint-style placement.
+        self.canvas.set_segmentation_mode("paint")
+
+        # Canvas column: canvas above, thumbnail filmstrip below.
+        canvas_col = QVBoxLayout()
+        canvas_col.setContentsMargins(0, 0, 0, 0)
+        canvas_col.setSpacing(2)
+        canvas_col.addWidget(self.canvas, stretch=1)
+
+        self.filmstrip = Filmstrip(parent=self)
+        self.filmstrip.image_clicked.connect(self._load_new_image)
+        canvas_col.addWidget(self.filmstrip)
+
+        layout.addLayout(canvas_col, stretch=4)
 
         self.sidebar = Sidebar(
             controller=None,  # Will be set when image is loaded
@@ -120,9 +136,6 @@ class MainWindow(QMainWindow):
             on_clear_points=self._clear_points,
             parent=self,
         )
-
-        # Sidebar emits ONLY the filename → MainWindow builds full path
-        self.sidebar.image_selected.connect(self._load_new_image)
 
         # Sidebar requests COCO save → MainWindow handles it
         self.sidebar.save_all_coco_requested.connect(self.save_all_coco)
@@ -134,6 +147,8 @@ class MainWindow(QMainWindow):
         self.sidebar.auto_seed_toggled.connect(self._on_auto_seed_toggled)
         self.sidebar.eraser_toggled.connect(self._on_eraser_toggled)
         self.sidebar.mask_selected.connect(self._on_mask_selected)
+        self.sidebar.mask_reclicked.connect(self._on_mask_reclicked)
+        self.sidebar.mask_unlabeled_requested.connect(self._mask_unlabeled)
         self.sidebar.mask_renamed.connect(self._on_mask_renamed)
         self.sidebar.label_class_renamed.connect(self._on_label_class_renamed)
 
@@ -148,6 +163,12 @@ class MainWindow(QMainWindow):
 
         # Edge Trace signal
         self.canvas.edge_trace_stroke.connect(self._on_edge_trace_stroke)
+        # Canvas asks this before allowing any drawing; blocks (with one dialog)
+        # when no label is active, instead of looping on every drag event.
+        self.canvas._can_annotate = lambda: self.sidebar.get_active_label() is not None
+        self.canvas.label_required.connect(self._warn_no_label)
+        self.sidebar.tool_mode_changed.connect(self.canvas.set_tool_mode)
+        self.canvas.mask_clicked.connect(self._on_canvas_mask_clicked)
 
         layout.addWidget(self.sidebar, stretch=1)
         main_layout.addLayout(layout)
@@ -178,6 +199,33 @@ class MainWindow(QMainWindow):
         self.border_checkbox.stateChanged.connect(self._on_border_checkbox_changed)
         toolbar.addWidget(self.border_checkbox)
         self._show_borders = False
+
+        self.flash_checkbox = QCheckBox("Flash")
+        self.flash_checkbox.setChecked(True)
+        self.flash_checkbox.setToolTip("Briefly flash a mask when selected")
+        self.flash_checkbox.stateChanged.connect(self._on_flash_checkbox_changed)
+        toolbar.addWidget(self.flash_checkbox)
+        self._flash_enabled = True
+
+        self.other_checkbox = QCheckBox("Display Other")
+        self.other_checkbox.setChecked(False)
+        self.other_checkbox.setToolTip(
+            "Preview the 'Other' region — every pixel not covered by a defined mask")
+        self.other_checkbox.stateChanged.connect(self._on_other_checkbox_changed)
+        toolbar.addWidget(self.other_checkbox)
+        self._display_other = False
+
+        # Flash animation state
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setInterval(100)          # blink speed (lower = faster)
+        self._flash_timer.timeout.connect(self._on_flash_tick)
+        self._flash_mask_id = -1
+        self._flash_on = False
+
+        self._flash_ticks = 0
+        self._FLASH_TOTAL_TICKS = 35                 # 100ms x 35 = ~3.5s
+        self._flash_base_pixmap = None      # cached full canvas; ticks blit onto this
+        self._flash_entry = None            # the mask entry being flashed
 
         # ---------------------------------------------------------
         # Menu bar: File
@@ -215,6 +263,7 @@ class MainWindow(QMainWindow):
 
         # Restore saved border setting
         self._autoload_borders()
+        self._autoload_flash()
 
         # Restore saved edge trace settings
         self._autoload_edge_trace_settings()
@@ -258,6 +307,15 @@ class MainWindow(QMainWindow):
         self.opacity_spinbox.setValue(self._opacity_percent)
         self.opacity_spinbox.blockSignals(False)
 
+    def _autoload_flash(self):
+        """Restore flash setting from sage.json (default True on first use)."""
+        settings = self._read_sage_settings()
+        enabled = settings.get("flash_enabled", True)
+        self._flash_enabled = enabled
+        self.flash_checkbox.blockSignals(True)
+        self.flash_checkbox.setChecked(enabled)
+        self.flash_checkbox.blockSignals(False)
+
     def _autoload_borders(self):
         """Restore show_borders setting from sage.json."""
         settings = self._read_sage_settings()
@@ -281,8 +339,8 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------------------
 
     def _export_labels(self):
-        classes = self.sidebar.get_label_classes()
-        if not classes:
+        pairs = self.sidebar.get_label_classes_with_ids()
+        if not pairs:
             QMessageBox.warning(self, "Export Labels",
                 "No label classes defined. Add labels before exporting.")
             return
@@ -300,11 +358,11 @@ class MainWindow(QMainWindow):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-                for idx, name in enumerate(classes, start=1):
-                    writer.writerow([idx, name])
+                for name, cid in pairs:
+                    writer.writerow([cid, name])
             self._write_sage_settings({"last_labels_file": path})
             QMessageBox.information(self, "Export Labels",
-                f"Exported {len(classes)} label(s) to:\n{path}")
+                f"Exported {len(pairs)} label(s) to:\n{path}")
         except OSError as e:
             QMessageBox.critical(self, "Export Failed", str(e))
 
@@ -321,8 +379,9 @@ class MainWindow(QMainWindow):
     def _load_labels_from_path(self, path: str, silent: bool = False):
         """Parse a labels CSV and apply to the sidebar. Persists path to sage.json."""
         try:
-            names = []
-            seen = set()
+            pairs = []
+            seen_names = set()
+            seen_ids = set()
             with open(path, newline="", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 for lineno, row in enumerate(reader, start=1):
@@ -333,31 +392,45 @@ class MainWindow(QMainWindow):
                             QMessageBox.warning(self, "Import Labels",
                                 f"Line {lineno} is malformed (expected: id,name):\n{','.join(row)}")
                         return
+                    try:
+                        lid = int(row[0].strip())
+                    except ValueError:
+                        if not silent:
+                            QMessageBox.warning(self, "Import Labels",
+                                f"Line {lineno} has a non-integer ID: \"{row[0]}\"")
+                        return
                     name = row[1].strip()
                     if not name:
                         if not silent:
                             QMessageBox.warning(self, "Import Labels",
                                 f"Line {lineno} has an empty label name.")
                         return
-                    if name in seen:
+                    if name in seen_names:
                         if not silent:
                             QMessageBox.warning(self, "Import Labels",
                                 f"Duplicate label name on line {lineno}: \"{name}\"\n"
                                 "Each label must be unique.")
                         return
-                    seen.add(name)
-                    names.append(name)
+                    if lid in seen_ids:
+                        if not silent:
+                            QMessageBox.warning(self, "Import Labels",
+                                f"Duplicate label ID on line {lineno}: {lid}\n"
+                                "Each ID must be unique.")
+                        return
+                    seen_names.add(name)
+                    seen_ids.add(lid)
+                    pairs.append((name, lid))
 
-            if not names:
+            if not pairs:
                 if not silent:
                     QMessageBox.warning(self, "Import Labels", "No labels found in file.")
                 return
 
-            self.sidebar.set_label_classes(names)
+            self.sidebar.set_label_classes(pairs)
             self._write_sage_settings({"last_labels_file": path})
             if not silent:
                 QMessageBox.information(self, "Import Labels",
-                    f"Imported {len(names)} label(s) from:\n{path}")
+                    f"Imported {len(pairs)} label(s) from:\n{path}")
 
         except OSError as e:
             if not silent:
@@ -368,7 +441,92 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------
     def _on_mask_selected(self, mask_id: int):
         self.selected_mask_id = mask_id
+        self._start_flash(mask_id)
         self._update_canvas()
+
+    def _start_flash(self, mask_id: int):
+        """Restart the flash for a newly selected mask. Renders the full canvas
+        ONCE, then each tick only blits the one brightened mask onto that cached
+        pixmap — so the flash rate follows the timer interval, not the (heavy)
+        full-canvas rebuild time."""
+        self._flash_timer.stop()
+        self._flash_base_pixmap = None
+        self._flash_entry = None
+
+        if (not self._flash_enabled or mask_id < 0
+                or self.controller is None or self.renderer is None):
+            self._flash_mask_id = -1
+            self._flash_on = False
+            self._update_canvas()
+            return
+
+        self._flash_mask_id = mask_id
+        self._flash_entry = next(
+            (m for m in self.controller.masks if m["id"] == mask_id), None)
+        if self._flash_entry is None:
+            self._update_canvas()
+            return
+
+        # Render the base canvas once (all masks, borders, hit-test items).
+        self._flash_on = False          # base must be unflashed
+        self._update_canvas()
+        self._flash_base_pixmap = self.canvas._pixmap_item.pixmap()
+
+        self._flash_on = True
+        self._flash_ticks = 0
+        self._paint_flash_frame(True)     # show first bright frame immediately
+        self._flash_timer.start()
+
+    def _on_mask_reclicked(self, mask_id: int):
+        """Re-clicking the already-selected list row stops an active flash."""
+        if self._flash_timer.isActive() and mask_id == self._flash_mask_id:
+            self._stop_flash()
+
+    def _stop_flash(self):
+        """Stop an in-progress flash immediately and settle on the plain canvas."""
+        if not self._flash_timer.isActive() and self._flash_base_pixmap is None:
+            return
+        self._flash_timer.stop()
+        self._flash_on = False
+        self._flash_mask_id = -1
+        self._flash_entry = None
+        if self._flash_base_pixmap is not None:
+            self.canvas.set_pixmap(self._flash_base_pixmap)
+            self._flash_base_pixmap = None
+        else:
+            self._update_canvas()
+
+    def _paint_flash_frame(self, on: bool):
+        if self._flash_base_pixmap is None:
+            return
+        if on and self._flash_entry is not None:
+            pm = self.renderer.overlay_single_mask(
+                self._flash_base_pixmap, self._flash_entry, self.controller.opacity)
+        else:
+            pm = self._flash_base_pixmap
+        self.canvas.set_pixmap(pm)
+
+    def _on_flash_tick(self):
+        self._flash_ticks += 1
+        if self._flash_ticks >= self._FLASH_TOTAL_TICKS:
+            self._flash_timer.stop()
+            self._flash_on = False
+            self._flash_mask_id = -1
+            self._flash_entry = None
+            if self._flash_base_pixmap is not None:
+                self.canvas.set_pixmap(self._flash_base_pixmap)  # settle on plain base
+            self._flash_base_pixmap = None
+            return
+        self._flash_on = not self._flash_on
+        self._paint_flash_frame(self._flash_on)
+
+    def _on_flash_checkbox_changed(self, state):
+        self._flash_enabled = bool(state)
+        self._write_sage_settings({"flash_enabled": self._flash_enabled})
+        if not self._flash_enabled:
+            self._flash_timer.stop()
+            self._flash_mask_id = -1
+            self._update_canvas()
 
     def _on_label_class_renamed(self, old_name: str, new_name: str):
         """Propagate a label class rename to all existing mask entries."""
@@ -401,7 +559,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------
     def _on_polygon_drawn_dispatcher(self, points):
         """Route to SAM2 or manual polygon handler based on mode"""
-        if self.canvas._segmentation_mode == "manual_polygon":
+        if self.canvas._segmentation_mode in ("manual_polygon", "manual_freeform"):
             self._on_manual_polygon_drawn(points)
         else:
             self._on_polygon_drawn(points)  # SAM2 Polygon and SAM2 Freehand
@@ -760,17 +918,45 @@ class MainWindow(QMainWindow):
     # Populate image list
     # ---------------------------------------------------------
     def _populate_image_list(self, folder):
-        """Populate the sidebar image list from a folder"""
-        self.sidebar.image_list.clear()
-        image_files = []
-        for name in os.listdir(folder):
-            if name.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff")):
-                image_files.append(name)
-                self.sidebar.image_list.addItem(name)
+        """Populate the thumbnail filmstrip from a folder."""
+        if not folder or not os.path.isdir(folder):
+            QMessageBox.warning(self, "Folder Not Found",
+                                f"This folder no longer exists or isn't accessible:\n{folder}")
+            self.filmstrip.populate("", [])
+            return
 
-        # Automatically load the first image if any exist
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError as e:
+            QMessageBox.critical(self, "Cannot Open Folder",
+                                 f"Could not read folder:\n{folder}\n\n{e}")
+            self.filmstrip.populate("", [])
+            return
+
+        image_files = [
+            name for name in names
+            if name.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff"))
+        ]
+
+        # If a COCO file exists, load its categories into the label list and
+        # open a disk-backed edit buffer (only current image's masks stay in RAM).
+        self._coco_buffer = None
+        coco_path = os.path.join(folder, "instances_default.json")
+        working = os.path.join(folder, ".instances_default.working.json")
+        if os.path.exists(coco_path) or os.path.exists(working):
+            self._coco_buffer = CocoBuffer(folder)
+            self._coco_buffer.load()
+            cats = self._coco_buffer.categories()
+            if cats:
+                self.sidebar.set_label_classes(cats)
+
+        self.filmstrip.populate(folder, image_files)
+
         if image_files:
             self._load_new_image(image_files[0])
+        else:
+            QMessageBox.information(self, "No Images",
+                                    "No images (.jpg/.jpeg/.png/.tif/.tiff) were found in this folder.")
 
     # ---------------------------------------------------------
     # Clear Points
@@ -839,35 +1025,35 @@ class MainWindow(QMainWindow):
                 "Please define at least one label class before annotating.")
             return
         color = self.sidebar.get_color_for_label(label)
+
+        # Smart Select path
+        if getattr(self, "_smart_select_active", False):
+            if not self.controller.fg_points:
+                QMessageBox.information(self, "Smart Select",
+                    "Left-click to mark what you want (positive), "
+                    "right-click to mark what to exclude (negative).")
+                return
+            mask_entry, info = self.controller.run_smart_select_segmentation(
+                label=label, color=color)
+            if mask_entry is None:
+                QMessageBox.warning(self, "Smart Select",
+                    "No matching region found.\n\n"
+                    f"Reason: {info.get('reason', 'unknown')}\n\n"
+                    "Smart Select works best on large, uniform regions. "
+                    "For small or isolated objects, try SAM2 Point instead "
+                    "(one or two clicks on the object).")
+                return
+            self.sidebar.refresh_masks()
+            self._update_canvas()
+            if hasattr(self.canvas, "_paint_points"):
+                self.canvas._paint_points = []
+            return
+
         mask_entry = self.controller.run_segmentation(label=label, color=color)
 
         if mask_entry is not None:
-            # If in paint mode, constrain to FOREGROUND painted area only
-            if self.canvas._segmentation_mode == "paint" and len(self.controller.fg_points) > 0:
-                import cv2
-
-                # Get bounding box of ONLY foreground (green) painted points
-                fg_array = np.array(self.controller.fg_points, dtype=np.int32)
-                x_min = max(0, int(fg_array[:, 0].min()) - 30)
-                x_max = min(self.image_np.shape[1], int(fg_array[:, 0].max()) + 30)
-                y_min = max(0, int(fg_array[:, 1].min()) - 30)
-                y_max = min(self.image_np.shape[0], int(fg_array[:, 1].max()) + 30)
-
-                # Create constraint mask
-                h, w = self.image_np.shape[:2]
-                constraint_mask = np.zeros((h, w), dtype=np.uint8)
-                constraint_mask[y_min:y_max, x_min:x_max] = 1
-
-                # Apply spatial constraint
-                mask_entry["mask"] = mask_entry["mask"] & constraint_mask.astype(bool)
-
-                # Recompute stats
-                mask_entry["stats"] = compute_mask_stats(mask_entry["mask"])
-
-                # Clear paint visuals
-                if hasattr(self.canvas, '_paint_points'):
-                    self.canvas._paint_points = []
-
+            if hasattr(self.canvas, '_paint_points'):
+                self.canvas._paint_points = []
             self.sidebar.refresh_masks()
             self._update_canvas()
 
@@ -883,8 +1069,88 @@ class MainWindow(QMainWindow):
         self._show_borders = bool(state)
         self._update_canvas()
 
+    def _on_other_checkbox_changed(self, state):
+        self._display_other = bool(state)
+        self._update_canvas()
+
+    def _mask_unlabeled(self):
+        """Create/regenerate the 'Other' mask covering all unlabeled pixels."""
+        if self.controller is None:
+            return
+        color = self.sidebar.get_color_for_label("Other")
+        entry = self.controller.fill_other(label="Other", color=color)
+        if entry is None:
+            QMessageBox.information(self, "Mask Unlabeled",
+                                    "Every pixel is already labeled — nothing to mask.")
+            return
+        self.sidebar.refresh_masks()
+        self._update_canvas()
+
+    def _on_canvas_mask_clicked(self, mask_id: int):
+        """Select tool: a mask was clicked on the canvas — highlight its list
+        row and scroll to it. Clicking the mask that's flashing stops the flash."""
+        if self._flash_timer.isActive() and mask_id == self._flash_mask_id:
+            self._stop_flash()
+        self.selected_mask_id = mask_id
+        self.sidebar.select_mask_in_list(mask_id)
+        self._update_canvas()
+
+    def _warn_no_label(self):
+        """Shown once when the user attempts to draw with no active label."""
+        QMessageBox.warning(self, "No Label Defined",
+            "Please define or select a label class before annotating.")
+
+    def _compute_other_overlay(self):
+        """Transient 'Other' preview: complement of the union of all real masks,
+        in the Other color. Not stored — display only."""
+        if self.controller is None or self.image_np is None:
+            return None
+        h, w = self.image_np.shape[:2]
+        union = np.zeros((h, w), dtype=bool)
+        for m in self.controller.masks:
+            if m.get("is_fill"):
+                continue
+            union |= m["mask"].astype(bool)
+        complement = ~union
+        if not complement.any():
+            return None
+        return {"id": -999, "label": "Other", "mask": complement,
+                "color": (192, 38, 211), "visible": True}
+
     def closeEvent(self, event):
-        """Save persistent settings before closing."""
+        """On exit, if there are unsaved annotation edits, ask whether to save.
+        Save promotes them to instances_default.json; Don't Save discards the
+        working file so nothing is written; Cancel aborts the exit."""
+        # Fold the current image's edits into the in-memory buffer so the
+        # unsaved-changes check reflects everything.
+        if self.current_image_path and self.controller is not None:
+            self._flush_current_to_buffer()
+
+        if self._coco_buffer is not None and self._coco_buffer.has_unsaved_changes():
+            choice = QMessageBox.question(
+                self, "Unsaved Changes",
+                "You have unsaved annotation changes.\n\nSave them before exiting?",
+                QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+                QMessageBox.Save,
+            )
+            if choice == QMessageBox.Cancel:
+                event.ignore()
+                return
+            if choice == QMessageBox.Save:
+                try:
+                    self._coco_buffer.save()
+                except Exception as e:
+                    QMessageBox.critical(self, "Save Failed",
+                                         f"Could not save annotations:\n{e}")
+                    event.ignore()
+                    return
+            else:  # Discard — delete the working file, leave the original untouched
+                self._coco_buffer.discard_temp()
+        elif self._coco_buffer is not None:
+            # No changes: remove the seeded working file so it can't shadow the
+            # original on next launch.
+            self._coco_buffer.discard_temp()
+
         self._write_sage_settings({
             "show_borders": self._show_borders,
             "edge_trace_interval": self.canvas._edge_trace_interval,
@@ -906,7 +1172,11 @@ class MainWindow(QMainWindow):
     # Segmentation mode + polygon sampling handlers
     # ---------------------------------------------------------
     def _on_segmentation_mode_changed(self, mode: str):
-        self.canvas.set_segmentation_mode(mode)
+        # "points" (the merged SAM2 button) and Smart Select both use paint-style
+        # placement so a single click or a click-drag both work.
+        self._smart_select_active = (mode == "smart_select")
+        canvas_mode = "paint" if mode in ("points", "smart_select") else mode
+        self.canvas.set_segmentation_mode(canvas_mode)
 
     def _on_polygon_sampling_changed(self, mode: str):
         if mode in ("dense", "random", "poisson"):
@@ -955,10 +1225,16 @@ class MainWindow(QMainWindow):
 
         base_pixmap = self.renderer.base_pixmap()
         masks = self.controller.get_visible_masks()
+        if self._display_other:
+            other = self._compute_other_overlay()
+            if other is not None:
+                masks = masks + [other]
+        flash_id = self._flash_mask_id if self._flash_on else -1
         pixmap_with_masks = self.renderer.overlay_masks(
             base_pixmap, masks, opacity=self.controller.opacity,
             selected_mask_id=self.selected_mask_id,
             show_borders=self._show_borders,
+            flash_mask_id=flash_id,
         )
         self.canvas.set_pixmap(pixmap_with_masks)
         self.canvas.update_seed_points(
@@ -1003,10 +1279,17 @@ class MainWindow(QMainWindow):
 
                 # Create and add the invisible mask item
                 mask_item = MaskItem(polygon_points, m["id"])
+                if m.get("is_fill"):
+                    mask_item.setZValue(50)   # 'Other' full-frame target sits below real masks
                 self.canvas._scene.addItem(mask_item)
 
     def keyPressEvent(self, event):
         key = event.key()
+
+        # Esc - stop an in-progress flash
+        if key == Qt.Key_Escape and self._flash_timer.isActive():
+            self._stop_flash()
+            return
 
         # Enter keys - run segmentation
         if key in (13, 16777220):
@@ -1181,138 +1464,96 @@ class MainWindow(QMainWindow):
         if not folder:
             return
 
-        # Save current image's masks into mask_store
-        if self.current_image_path and self.controller is not None:
-            self.mask_store[self.current_image_path] = copy.deepcopy(self.controller.masks)
-
-        # All images in folder
-        all_images = [
-            name for name in os.listdir(folder)
-            if name.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff"))
-        ]
-        total_images = len(all_images)
-
-        # Ask user where to save the COCO file
-        default_path = os.path.join(folder, "instances_default.json")
-        filepath, _ = QFileDialog.getSaveFileName(
-            self,
-            "Save COCO Annotation File",
-            default_path,
-            "JSON Files (*.json)",
-        )
-        if not filepath:
+        # Reject save if any two label classes share the same ID.
+        pairs = self.sidebar.get_label_classes_with_ids()
+        ids = [cid for _, cid in pairs]
+        dup_ids = {i for i in ids if ids.count(i) > 1}
+        if dup_ids:
+            dups = ", ".join(
+                f"ID {i}: " + " / ".join(n for n, c in pairs if c == i)
+                for i in sorted(dup_ids)
+            )
+            QMessageBox.warning(
+                self, "Duplicate Label IDs",
+                "Cannot save — these label classes share the same ID:\n\n"
+                f"{dups}\n\nGive each label a unique ID and try again."
+            )
             return
 
-        import cv2
+        # Flush the open image into the buffer, then ensure buffer categories
+        # are current, then back up the original and promote the working copy.
+        if self._coco_buffer is None:
+            self._coco_buffer = CocoBuffer(folder)
+            self._coco_buffer.load()
 
-        # Step 1: collect all unique labels
-        label_set = set()
-        for masks in self.mask_store.values():
-            for m in masks:
-                label_set.add(m["label"])
-
-        label_to_id = {label: i + 1 for i, label in enumerate(sorted(label_set))}
-        categories = [{"id": cid, "name": label} for label, cid in label_to_id.items()]
-
-        coco = {
-            "images": [],
-            "annotations": [],
-            "categories": categories,
-        }
-
-        image_id = 1
-        ann_id = 1
-        saved = 0
-        skipped = 0
-
-        for filename in all_images:
-            full_path = os.path.join(folder, filename)
-            masks = self.mask_store.get(full_path, [])
-
-            if not masks:
-                skipped += 1
+        # Make sure any images visited this session but still cached are flushed.
+        if self.current_image_path and self.controller is not None:
+            self._flush_current_to_buffer()
+        for path, masks in list(self.mask_store.items()):
+            fname = os.path.basename(path)
+            try:
+                img = load_image_rgb(path)
+                h, w = img.shape[:2]
+            except Exception:
                 continue
+            name_to_id = {n: i for n, i in self.sidebar.get_label_classes_with_ids()}
+            self._coco_buffer.flush_image(fname, masks, h, w, name_to_id)
 
-            image_np = load_image_rgb(full_path)
-            height, width = image_np.shape[:2]
+        self._coco_buffer.set_categories(self.sidebar.get_label_classes_with_ids())
 
-            coco["images"].append({
-                "id": image_id,
-                "file_name": filename,
-                "width": width,
-                "height": height,
-            })
+        try:
+            out_path = self._coco_buffer.save()
+        except Exception as e:
+            QMessageBox.critical(self, "Save Failed", str(e))
+            return
 
-            # Process masks directly - no need to create a controller
-            for m in masks:
-                mask = m["mask"].astype("uint8")
-
-                import cv2 as _cv2
-                contours, _ = _cv2.findContours(
-                    mask, _cv2.RETR_EXTERNAL, _cv2.CHAIN_APPROX_SIMPLE
-                )
-
-                segmentation = []
-                area = 0
-                all_x, all_y, all_x2, all_y2 = [], [], [], []
-
-                for cnt in contours:
-                    if len(cnt) < 3:
-                        continue
-
-                    poly = cnt.reshape(-1, 2).tolist()
-                    segmentation.append([coord for point in poly for coord in point])
-
-                    area += _cv2.contourArea(cnt)
-                    x, y, w, h = _cv2.boundingRect(cnt)
-                    all_x.append(x)
-                    all_y.append(y)
-                    all_x2.append(x + w)
-                    all_y2.append(y + h)
-
-                bbox = None
-                if all_x:
-                    x_min = min(all_x)
-                    y_min = min(all_y)
-                    bbox = [x_min, y_min, max(all_x2) - x_min, max(all_y2) - y_min]
-
-                if not segmentation:
-                    continue
-
-                coco["annotations"].append({
-                    "id": ann_id,
-                    "image_id": image_id,
-                    "category_id": label_to_id[m["label"]],
-                    "segmentation": segmentation,
-                    "area": float(area),
-                    "bbox": bbox,
-                    "iscrowd": 0,
-                    "label": m["label"],  # optional, for your own tools
-                })
-
-                ann_id += 1
-
-            saved += 1
-            image_id += 1
-
-        # Write final COCO file
-        with open(filepath, "w") as f:
-            json.dump(coco, f, indent=2)
-
-        # Summary dialog
-        msg = QMessageBox(self)
-        msg.setWindowTitle("COCO Export Summary")
-        msg.setText(
-            f"Total images: {total_images}\n"
-            f"Saved with labels: {saved}\n"
-            f"Skipped (no labels): {skipped}\n\n"
-            f"Saved to:\n{filepath}"
+        n_imgs = len(self._coco_buffer.doc["images"])
+        n_anns = len(self._coco_buffer.doc["annotations"])
+        QMessageBox.information(
+            self, "COCO Saved",
+            f"Backed up previous file (if any) and wrote:\n{out_path}\n\n"
+            f"Images: {n_imgs}\nAnnotations: {n_anns}"
         )
-        msg.exec_()
 
     # ---------------------------------------------------------
     # Load a new image when double-clicked in the sidebar
     # ---------------------------------------------------------
+    def _flush_current_to_buffer(self):
+        """Write the open image's masks to the disk buffer as polygons+RLE+bbox."""
+        if self._coco_buffer is None or self.current_image_path is None:
+            return
+        if self.controller is not None:
+            self.controller.recompute_fill()   # keep 'Other' exact after edits
+        filename = os.path.basename(self.current_image_path)
+        h, w = self.image_np.shape[:2]
+        name_to_id = {n: i for n, i in self.sidebar.get_label_classes_with_ids()}
+        self._coco_buffer.set_categories(self.sidebar.get_label_classes_with_ids())
+        self._coco_buffer.flush_image(
+            filename, self.controller.masks, h, w, name_to_id
+        )
+
+    def _masks_from_buffer(self, filename):
+        """Rasterize this image's buffered annotations into controller mask entries."""
+        h, w = self.image_np.shape[:2]
+        entries = []
+        id_to_name = {int(cid): name
+                      for name, cid in self.sidebar.get_label_classes_with_ids()}
+        for ann in self._coco_buffer.annotations_for(filename):
+            mask = ann_to_mask(ann, h, w)
+            if not mask.any():
+                continue
+            label = ann.get("label") or id_to_name.get(
+                int(ann.get("category_id", -1)), "Region")
+            entries.append({
+                "id": next(self.controller._mask_id_counter),
+                "label": label,
+                "mask": mask,
+                "color": self.sidebar.get_color_for_label(label),
+                "visible": True,
+                "stats": compute_mask_stats(mask),
+            })
+        return entries
+
     def _load_new_image(self, filename):
         folder = self.folder_edit.text().strip()
         if not folder:
@@ -1320,12 +1561,17 @@ class MainWindow(QMainWindow):
 
         full_path = os.path.join(folder, filename)
 
-        # Save masks for current image
+        # Flush outgoing image's masks to the disk buffer (frees RAM), then
+        # drop them from mask_store so only the open image stays rasterized.
         if self.current_image_path and self.controller is not None:
-            self.mask_store[self.current_image_path] = copy.deepcopy(self.controller.masks)
+            self._flush_current_to_buffer()
+            self.mask_store.pop(self.current_image_path, None)
 
         # Update current image path
         self.current_image_path = full_path
+
+        # Keep filmstrip selection in sync (e.g. when loaded programmatically)
+        self.filmstrip.select_name(filename)
 
         # Load new image
         self.image_np = load_image_rgb(full_path)
@@ -1336,9 +1582,11 @@ class MainWindow(QMainWindow):
         self.controller.set_opacity(int(self._opacity_percent / 100 * 255))
         self.renderer = Renderer(self.image_np)
 
-        # Restore masks if they exist
+        # Restore masks: prefer in-session store, else rasterize from buffer.
         if full_path in self.mask_store:
             self.controller.masks = copy.deepcopy(self.mask_store[full_path])
+        elif self._coco_buffer is not None:
+            self.controller.masks = self._masks_from_buffer(filename)
 
         # Auto-seed points from seed mask if available
         if self.seed_mask_path and self.auto_seed_enabled:

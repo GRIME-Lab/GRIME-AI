@@ -10,6 +10,8 @@ class Canvas(QGraphicsView):
     eraser_move = pyqtSignal(float, float)        # x,y in image coords
     edge_trace_stroke = pyqtSignal(list, list)    # (fg_points, bg_points)
     edge_trace_interval_changed = pyqtSignal(int) # new interval value for HUD
+    label_required = pyqtSignal()                 # drawing attempted with no active label
+    mask_clicked = pyqtSignal(int)                # Select mode: mask_id clicked on canvas
 
     def __init__(self, on_left_click, on_right_click, parent=None):
         super().__init__(parent)
@@ -27,6 +29,7 @@ class Canvas(QGraphicsView):
 
         # Left-button pan (drag detection)
         self._left_pan_active = False       # currently panning with left button
+        self._tool_mode = "draw"            # "draw" | "select" | "pan"
         self._left_press_pos = None         # view-coords where left button went down
         self._left_press_scene_pos = None   # scene-coords at left press
         self._LEFT_PAN_THRESHOLD = 6        # pixels of movement before pan kicks in
@@ -53,6 +56,7 @@ class Canvas(QGraphicsView):
         # Eraser mode variables
         self._eraser_enabled = False
         self._eraser_radius = 18  # tweakable
+        self._delete_key_down = False   # 'd' held → click deletes nearest point
         self._is_erasing = False
 
         # Manual polygon (click-by-click) state
@@ -114,7 +118,7 @@ class Canvas(QGraphicsView):
         self._scene.addItem(self._eraser_preview)
 
     def set_segmentation_mode(self, mode: str):
-        if mode in ("points", "polygon", "paint", "manual_polygon", "manual_draw", "mask", "edge_trace"):
+        if mode in ("points", "polygon", "paint", "manual_polygon", "manual_draw", "manual_freeform", "mask", "edge_trace"):
             if self._segmentation_mode in ("polygon", "manual_polygon") and mode not in ("polygon", "manual_polygon"):
                 self._cancel_manual_polygon()
             if self._segmentation_mode == "edge_trace" and mode != "edge_trace":
@@ -151,11 +155,11 @@ class Canvas(QGraphicsView):
             self._scene.removeItem(item)
         self._seed_point_items = []
 
-        RADIUS = 5  # screen pixels — stays constant regardless of zoom
+        RADIUS = 3  # screen pixels — stays constant regardless of zoom
 
-        fg_pen   = QPen(QColor(0, 180, 0), 2)
+        fg_pen   = QPen(QColor(0, 180, 0), 1)
         fg_brush = QBrush(QColor(0, 255, 0, 220))
-        bg_pen   = QPen(QColor(180, 0, 0), 2)
+        bg_pen   = QPen(QColor(180, 0, 0), 1)
         bg_brush = QBrush(QColor(255, 0, 0, 220))
 
         for pen, brush, points in (
@@ -208,7 +212,76 @@ class Canvas(QGraphicsView):
 
         super().mouseDoubleClickEvent(event)
 
+    def set_tool_mode(self, mode: str):
+        """Top-level interaction mode: 'draw' (annotate), 'select' (pick a mask),
+        or 'pan' (drag the image)."""
+        self._tool_mode = mode
+        if mode == "pan":
+            self.setCursor(Qt.OpenHandCursor)
+        elif mode == "select":
+            self.setCursor(Qt.ArrowCursor)
+        else:
+            self.setCursor(Qt.CrossCursor)
+
     def mousePressEvent(self, event):
+        # ----------------------------------------------------
+        # Tool-mode gate. Select and Pan reassign the left button and never draw.
+        # ----------------------------------------------------
+        if self._tool_mode == "pan":
+            if event.button() == Qt.LeftButton:
+                self._left_press_pos = event.pos()
+                self._left_pan_active = False
+                self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
+
+        if self._tool_mode == "select":
+            scene_pos = self.mapToScene(event.pos())
+            if event.button() == Qt.LeftButton:
+                for item in self._scene.items(scene_pos):
+                    if isinstance(item, MaskItem):
+                        self.mask_clicked.emit(item.mask_id)
+                        break
+                event.accept()
+                return
+            if event.button() == Qt.RightButton:
+                for item in self._scene.items(scene_pos):
+                    if isinstance(item, MaskItem):
+                        self._on_right_click(item.mask_id)   # delete on right-click
+                        break
+                event.accept()
+                return
+
+        # ----------------------------------------------------
+        # Block drawing entirely when no label is active. Deletion/selection
+        # shortcuts still work. Fires the dialog once per press — never during a
+        # drag — so there is no message-box loop.
+        # ----------------------------------------------------
+        can = getattr(self, "_can_annotate", None)
+        if can is not None and not can():
+            is_delete = (
+                (self._delete_key_down and event.button() in (Qt.LeftButton, Qt.RightButton))
+                or (event.button() == Qt.RightButton and event.modifiers() == Qt.ControlModifier)
+            )
+            mask_hit = False
+            if event.button() == Qt.RightButton and not is_delete:
+                sp = self.mapToScene(event.pos())
+                mask_hit = any(isinstance(i, MaskItem) for i in self._scene.items(sp))
+            if not is_delete and not mask_hit:
+                self.label_required.emit()
+                event.accept()
+                return
+
+        # ----------------------------------------------------
+        # 'd' held: click deletes the nearest fg/bg point (either button)
+        # ----------------------------------------------------
+        if self._delete_key_down and event.button() in (Qt.LeftButton, Qt.RightButton):
+            x, y = self._map_to_image_coords(event.pos())
+            if self._is_in_bounds(x, y):
+                self.eraser_move.emit(x, y)   # routes to _erase_seeds_at → refresh
+            event.accept()
+            return
+
         # ----------------------------------------------------
         # Ctrl+Right-click: Delete mask
         # ----------------------------------------------------
@@ -313,7 +386,7 @@ class Canvas(QGraphicsView):
                     if self._segmentation_mode in ("polygon", "manual_polygon"):
                         self._add_manual_polygon_vertex(x, y)
 
-                    elif self._segmentation_mode == "manual_draw":
+                    elif self._segmentation_mode in ("manual_draw", "manual_freeform"):
                         self._drawing_polygon = True
                         self._polygon_points = [(x, y)]
                         self._init_polygon_path_item()
@@ -401,7 +474,7 @@ class Canvas(QGraphicsView):
             self._update_manual_rubber_band(pos.x(), pos.y())
 
         # Manual Draw: freehand drag streaming
-        if self._drawing_polygon and self._segmentation_mode == "manual_draw":
+        if self._drawing_polygon and self._segmentation_mode in ("manual_draw", "manual_freeform"):
             pos = self.mapToScene(event.pos())
             x, y = pos.x(), pos.y()
             if (
@@ -501,6 +574,19 @@ class Canvas(QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        # Pan tool: finish the drag, restore the open-hand cursor, draw nothing.
+        if self._tool_mode == "pan":
+            if event.button() == Qt.LeftButton:
+                self._left_press_pos = None
+                self._left_pan_active = False
+                self.setCursor(Qt.OpenHandCursor)
+            event.accept()
+            return
+        # Select tool: left/right handled on press; nothing to resolve here.
+        if self._tool_mode == "select":
+            event.accept()
+            return
+
         if event.button() == Qt.MiddleButton:
             self._panning = False
             self._pan_start = None
@@ -516,7 +602,7 @@ class Canvas(QGraphicsView):
             self._left_pan_active = False
             self.setCursor(Qt.ArrowCursor)
 
-        if event.button() == Qt.LeftButton and self._drawing_polygon and self._segmentation_mode == "manual_draw":
+        if event.button() == Qt.LeftButton and self._drawing_polygon and self._segmentation_mode in ("manual_draw", "manual_freeform"):
             self._drawing_polygon = False
             if len(self._polygon_points) >= 3:
                 if self._polygon_points[0] != self._polygon_points[-1]:
@@ -701,7 +787,14 @@ class Canvas(QGraphicsView):
     # ------------------------------------------------------------------
 
     def keyPressEvent(self, event):
-        """+ / - adjust sample interval;  [ / ] adjust ray reach width."""
+        """+ / - adjust sample interval;  [ / ] adjust ray reach width.
+        Hold 'd' to click-delete fg/bg points."""
+        if event.key() == Qt.Key_D and not event.isAutoRepeat():
+            self._delete_key_down = True
+            self.setCursor(Qt.PointingHandCursor)
+            event.accept()
+            return
+
         if self._segmentation_mode == "edge_trace":
             if event.key() in (Qt.Key_Plus, Qt.Key_Equal):
                 self._edge_trace_interval = min(200, self._edge_trace_interval + 5)
@@ -726,6 +819,14 @@ class Canvas(QGraphicsView):
                 event.accept()
                 return
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key_D and not event.isAutoRepeat():
+            self._delete_key_down = False
+            self.setCursor(Qt.CrossCursor if self._eraser_enabled else Qt.ArrowCursor)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
     def _update_et_hud_text(self):
         self._et_hud.setPlainText(
