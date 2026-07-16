@@ -88,6 +88,49 @@ class SegmentationController:
         self.clear_points()
         return mask_entry
 
+    def run_smart_select_segmentation(self, label=None, color=None):
+        """
+        Smart Select. fg_points = target anchors, bg_points = exclude
+        anchors. Produces a single unioned target mask.
+        Returns (mask_entry_or_None, info_dict).
+        """
+        if not self.fg_points:
+            return None, {"reason": "need at least one target anchor"}
+
+        # Exclude visible (checked) masks, same policy as run_segmentation.
+        exclude_mask = None
+        for m in self.masks:
+            if m["visible"]:
+                if exclude_mask is None:
+                    exclude_mask = m["mask"].copy()
+                else:
+                    exclude_mask |= m["mask"]
+
+        mask, info = self.model_manager.segment_smart_select(
+            fg_points=self.fg_points,
+            bg_points=self.bg_points,
+            exclude_mask=exclude_mask,
+        )
+        if mask is None:
+            return None, info
+
+        mask_id = next(self._mask_id_counter)
+        if color is None:
+            color = get_color_for_index(len(self.masks))
+        stats = compute_mask_stats(mask)
+
+        mask_entry = {
+            "id": mask_id,
+            "label": label or f"Region {mask_id}",
+            "mask": mask,
+            "color": color,
+            "visible": True,
+            "stats": stats,
+        }
+        self.masks.append(mask_entry)
+        self.clear_points()
+        return mask_entry, info
+
     def set_mask_label(self, mask_id, new_label):
         for m in self.masks:
             if m["id"] == mask_id:
@@ -176,6 +219,52 @@ class SegmentationController:
         import json
         with open(filepath, "w") as f:
             json.dump(coco, f, indent=2)
+
+    def fill_other(self, label="Other", color=None):
+        """Create one mask covering every pixel not already in a mask, labeled
+        `label`. Idempotent: removes any prior fill and recomputes. Returns the
+        entry, or None if the image is already fully covered."""
+        self.masks = [m for m in self.masks if not m.get("is_fill")]
+
+        h, w = self.image_np.shape[:2]
+        union = np.zeros((h, w), dtype=bool)
+        for m in self.masks:
+            union |= m["mask"].astype(bool)
+
+        complement = ~union
+        if not complement.any():
+            return None
+
+        entry = {
+            "id": next(self._mask_id_counter),
+            "label": label,
+            "mask": complement,
+            "color": color if color is not None else (192, 38, 211),
+            "visible": True,
+            "stats": compute_mask_stats(complement),
+            "is_fill": True,
+        }
+        self.masks.append(entry)
+        return entry
+
+    def recompute_fill(self):
+        """Rebuild the 'Other' fill from the current complement so it stays
+        exact after other masks change. No-op if no fill exists; drops it if the
+        image is now fully covered."""
+        fill = next((m for m in self.masks if m.get("is_fill")), None)
+        if fill is None:
+            return
+        h, w = self.image_np.shape[:2]
+        union = np.zeros((h, w), dtype=bool)
+        for m in self.masks:
+            if not m.get("is_fill"):
+                union |= m["mask"].astype(bool)
+        complement = ~union
+        if not complement.any():
+            self.masks = [m for m in self.masks if not m.get("is_fill")]
+            return
+        fill["mask"] = complement
+        fill["stats"] = compute_mask_stats(complement)
 
     def delete_mask(self, mask_id):
         """Remove a mask by its ID."""

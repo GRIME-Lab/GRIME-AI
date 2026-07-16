@@ -265,16 +265,13 @@ class DatasetUtils:
         return [ann for ann in entry["annotations"] if ann["image_id"] == image_id]
 
     # ------------------------------------------------------------------------
-    def rasterize_polygon(self, segmentation: list, image_shape: tuple[int, int]) -> np.ndarray:
+    def rasterize_polygon(self, segmentation, image_shape: tuple[int, int]) -> np.ndarray:
+        """Decode any COCO segmentation (polygon, uncompressed RLE, or
+        compressed RLE) to an H×W 0/1 mask. Holes are preserved — this routes
+        through coco_mask.decode, so ring masks (e.g. water around a sandbar)
+        keep their interior 0s instead of being filled solid."""
         h, w = image_shape
-        mask = np.zeros((h, w), dtype=np.uint8)
-        if isinstance(segmentation, list):
-            for poly in segmentation:
-                pts = np.array(poly, dtype=np.int32).reshape(-1, 2)
-                cv2.fillPoly(mask, [pts], color=1)
-        else:
-            raise ValueError("Unsupported segmentation format")
-        return mask
+        return _seg_to_mask(segmentation, h, w)
 
     # ------------------------------------------------------------------------
     def load_all_true_masks(self, image_path: str, annotation_index: dict) -> dict[int, np.ndarray]:

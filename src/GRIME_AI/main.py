@@ -3524,6 +3524,18 @@ class MainWindow(QMainWindow):
         self.fileFolderDlg.accepted.connect(self.closeFilefolderDlg)
         self.fileFolderDlg.rejected.connect(self.closeFilefolderDlg)
 
+`        # An active recipe is the source of truth for the image folder. The
+        # dialog's constructor seeds itself from the last-saved
+        # Local_Image_Folder, which drifts whenever the user browses elsewhere;
+        # override it here so re-opening Data Exploration reflects the active
+        # recipe. Blank image_input leaves the JSON-derived value untouched.
+        try:
+            active = self._get_recipe_store().get_active()
+            if active is not None and active.image_input:
+                self.fileFolderDlg.setImageFolderPath(active.image_input)
+        except Exception:
+            pass
+
         self.fileFolderDlg.show()
 
         try:
