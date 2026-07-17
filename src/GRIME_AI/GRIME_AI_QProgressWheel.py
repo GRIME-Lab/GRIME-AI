@@ -8,6 +8,7 @@
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
 import operator
+import sys
 from enum import Enum
 
 from PyQt5 import QtCore
@@ -18,7 +19,34 @@ from PyQt5.QtGui import (QPalette, QConicalGradient, QGradient, QRadialGradient,
 from PyQt5.QtWidgets import QWidget, QApplication
 
 
+def _running_headless() -> bool:
+    """True when there is no usable GUI. Intrinsic to Qt state, so no external
+    flag is needed: with no QApplication a QWidget cannot be constructed at all,
+    and an offscreen/minimal platform has no visible display."""
+    try:
+        app = QApplication.instance()
+    except Exception:
+        return True
+    if app is None:
+        return True
+    try:
+        if app.platformName() in ("offscreen", "minimal", ""):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 class QProgressWheel(QWidget):
+
+    # When constructed headlessly, transparently become the console
+    # subclass. isinstance() and subclassing still work, and every call
+    # site keeps constructing QProgressWheel(...) unchanged. The guard
+    # cls is QProgressWheel means real GUI subclasses are never swapped.
+    def __new__(cls, *args, **kwargs):
+        if cls is QProgressWheel and _running_headless():
+            return super().__new__(_QProgressWheelConsole)
+        return super().__new__(cls)
 
     # CONSTANTS
     PositionLeft = 180
@@ -394,3 +422,123 @@ class QProgressWheel(QWidget):
             self._on_close_callback = None
         self.deleteLater()
         event.accept()
+
+
+# ======================================================================================================================
+# Console (headless) variant
+# ----------------------------------------------------------------------------------------------------------------------
+# A real subclass of QProgressWheel, so isinstance(x, QProgressWheel) holds and
+# QProgressWheel(...) can return it from __new__ with no call-site changes. It
+# deliberately does NOT chain to QWidget.__init__: in a headless process there
+# is no QApplication and the C++ widget cannot exist. Instead it renders to the
+# terminal. Every inherited method that would touch the C++ widget is either
+# overridden here or neutralised by the update() no-op below, so the console
+# instance never reaches the (uninitialised) Qt side. Pure-Python inherited
+# reads (getValue/minimum/maximum/valueToText) work as-is via the m_* fields.
+# ======================================================================================================================
+class _QProgressWheelConsole(QProgressWheel):
+
+    _SPINNER = "|/-\\"
+
+    def __init__(self, startVal=0, maxVal=0, alwaysOnTop: bool = True,
+                 title: str = None, total: int = None, on_close=None, parent=None):
+        # NOTE: intentionally no super().__init__() — see class docstring.
+        self._is_closed = False
+        self._on_close_callback = on_close
+        self.m_min = 0
+        self.m_max = total if total is not None else maxVal
+        self.m_value = startVal
+        self.m_format = '%p%'
+        self.m_decimals = 1
+        self._title = title or "Working"
+        self._spin = 0
+        self._last_pct = -1
+        self._width = 28
+        try:
+            self._isatty = bool(sys.stdout.isatty())
+        except Exception:
+            self._isatty = False
+        self._render(force=True)
+
+    # Neutralise the one Qt call the inherited setters funnel through, so
+    # cosmetic setters (setBarStyle/setFormat/setDataColors/...) stay safe.
+    def update(self, *args, **kwargs):
+        pass
+
+    # --- range / value -------------------------------------------------------
+    def setRange(self, minval, maxval):
+        self.m_min, self.m_max = minval, maxval
+        if self.m_max < self.m_min:
+            self.m_min, self.m_max = self.m_max, self.m_min
+        if self.m_value < self.m_min:
+            self.m_value = self.m_min
+        elif self.m_value > self.m_max:
+            self.m_value = self.m_max
+        self._render(force=True)
+
+    def setValue(self, val):
+        if self._is_closed:
+            return
+        if val < self.m_min:
+            val = self.m_min
+        elif val > self.m_max:
+            val = self.m_max
+        self.m_value = val
+        self._render()
+
+    # --- window-ish API ------------------------------------------------------
+    def setWindowTitle(self, title):
+        self._title = title or self._title
+        self._render(force=True)
+
+    def show(self):
+        self._render(force=True)
+
+    def isVisible(self):
+        return not self._is_closed
+
+    def repaint(self):
+        self._render(force=True)
+
+    def close(self):
+        if self._is_closed:
+            return
+        self._is_closed = True
+        if self._isatty:
+            try:
+                sys.stdout.write("\n"); sys.stdout.flush()
+            except Exception:
+                pass
+        if self._on_close_callback is not None:
+            cb, self._on_close_callback = self._on_close_callback, None
+            try:
+                cb()
+            except Exception:
+                pass
+
+    # --- rendering -----------------------------------------------------------
+    def _pct(self):
+        span = self.m_max - self.m_min
+        return 0.0 if span <= 0 else (self.m_value - self.m_min) / span * 100.0
+
+    def _render(self, force=False):
+        if self._is_closed:
+            return
+        pct = self._pct()
+        try:
+            if self._isatty:
+                self._spin = (self._spin + 1) % len(self._SPINNER)
+                filled = int(self._width * pct / 100.0)
+                bar = "\u2588" * filled + "\u2591" * (self._width - filled)
+                sys.stdout.write(
+                    f"\r{self._title} [{bar}] {pct:5.1f}% "
+                    f"({int(self.m_value)}/{int(self.m_max)}) {self._SPINNER[self._spin]}"
+                )
+                sys.stdout.flush()
+            else:
+                ip = int(pct)
+                if force or (ip != self._last_pct and ip % 5 == 0):
+                    self._last_pct = ip
+                    print(f"{self._title}: {ip}% ({int(self.m_value)}/{int(self.m_max)})", flush=True)
+        except Exception:
+            pass

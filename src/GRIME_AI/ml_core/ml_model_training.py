@@ -64,7 +64,7 @@ def normalize_files(annotation_files):
 # ============================================================================
 class MLModelTraining:
 
-    def __init__(self, cfg: DictConfig = None, parent_widget=None):
+    def __init__(self, cfg: DictConfig = None, parent_widget=None, site_config: dict = None):
         self.className = "MLModelTraining"
 
         self.cfg = cfg
@@ -76,13 +76,16 @@ class MLModelTraining:
 
         self.image_shape_cache = {}
 
-        # load site_config from saved JSON
-        settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
-        CONFIG_FILENAME = "site_config.json"
-        site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
-        print(site_configuration_file)
-
-        self.site_config = JsonEditor().load_json_file(site_configuration_file)
+        # Use an injected site_config when provided (e.g. the CLI passes one
+        # loaded from --config); otherwise load the saved site_config.json.
+        if site_config is not None:
+            self.site_config = site_config
+        else:
+            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            CONFIG_FILENAME = "site_config.json"
+            site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
+            print(site_configuration_file)
+            self.site_config = JsonEditor().load_json_file(site_configuration_file)
 
         self.site_name = self.site_config['siteName']
         self.learning_rates = self.site_config['learningRates']
