@@ -366,22 +366,22 @@ class TrainingTab(QtWidgets.QWidget):
         self.doubleSpinBox_loraDropout.setMaximumWidth(110)
 
         # Chain link toggle for Training Splits
-        self._split_linked = True
+        self._split_linked = getattr(self, "_split_linked", True)
         self._split_guard  = False
 
         self._btn_split_link = QtWidgets.QPushButton()
         self._btn_split_link.setCheckable(True)
-        self._btn_split_link.setChecked(True)
+        self._btn_split_link.setChecked(self._split_linked)
         self._btn_split_link.setFixedSize(28, 28)
         self._btn_split_link.setToolTip("Linked: changing one value sets the other to its complement (100 - n).\nClick to unlink.")
         # Load icons from resource module; fall back to text if unavailable
         if _get_chain_icon:
             self._icon_linked   = QIcon(_get_chain_icon("linked"))
             self._icon_unlinked = QIcon(_get_chain_icon("unlinked"))
-            self._btn_split_link.setIcon(self._icon_linked)
+            self._btn_split_link.setIcon(self._icon_linked if self._split_linked else self._icon_unlinked)
             self._btn_split_link.setIconSize(QtCore.QSize(20, 20))
         else:
-            self._btn_split_link.setText("🔗")
+            self._btn_split_link.setText("🔗" if self._split_linked else "⛓")
         self._btn_split_link.setStyleSheet("""
 QPushButton {
     font-size: 14px;
@@ -1150,8 +1150,20 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         # Back-compat: older configs only have val_split; derive train from it
         if "train_split" not in cfg:
             train_pct = 100 - val_pct
-        self.spinBox_valSplit.setValue(val_pct)
-        self.spinBox_trainSplit.setValue(train_pct)
+        # Restore link state. On the first call the split-link button is not
+        # built yet (it is created later in __init__), so only record the
+        # value here; on later calls (e.g. site switch) update the button
+        # directly. Spinbox writes are guarded so loading never re-triggers
+        # the complement rule, keeping an unlinked split (e.g. 20/20) as saved.
+        self._split_linked = bool(cfg.get("split_linked", True))
+        if hasattr(self, "_btn_split_link"):
+            self._btn_split_link.setChecked(self._split_linked)
+        self._split_guard = True
+        try:
+            self.spinBox_valSplit.setValue(val_pct)
+            self.spinBox_trainSplit.setValue(train_pct)
+        finally:
+            self._split_guard = False
 
         # YOLO base weights — select saved value in combobox if present
         saved_weights = cfg.get("yolo_base_weights", "")
@@ -1227,6 +1239,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             "blob_filter_radius": self._blob_pixels_to_fraction(),
             "val_split":   round(self.spinBox_valSplit.value()   / 100.0, 2),
             "train_split": round(self.spinBox_trainSplit.value() / 100.0, 2),
+            "split_linked": bool(self._split_linked),
             "yolo_base_weights": (
                 self.comboBox_yoloWeights.currentText()
                 if self.comboBox_yoloWeights.isEnabled() else ""
@@ -2200,26 +2213,65 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def _on_val_split_changed(self, val_pct: int) -> None:
-        """When validation changes, update training only if linked."""
-        if getattr(self, '_split_guard', False) or not getattr(self, '_split_linked', False):
+        """Validation changed. Linked: set training to the complement.
+        Unlinked: keep training + validation <= 100 by capping and warning."""
+        if getattr(self, '_split_guard', False):
             return
-        self._split_guard = True
-        try:
-            self.spinBox_trainSplit.setValue(100 - val_pct)
-        finally:
-            self._split_guard = False
+        if getattr(self, '_split_linked', False):
+            self._split_guard = True
+            try:
+                self.spinBox_trainSplit.setValue(100 - val_pct)
+            finally:
+                self._split_guard = False
+            return
+        # Unlinked: enforce the invariant train + val <= 100.
+        train_pct = self.spinBox_trainSplit.value()
+        if val_pct + train_pct > 100:
+            capped = max(0, 100 - train_pct)
+            self._split_guard = True
+            try:
+                self.spinBox_valSplit.setValue(capped)
+            finally:
+                self._split_guard = False
+            self._warn_split_capped("Validation", capped, "training", train_pct)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def _on_train_split_changed(self, train_pct: int) -> None:
-        """When training changes, update validation only if linked."""
-        if getattr(self, '_split_guard', False) or not getattr(self, '_split_linked', False):
+        """Training changed. Linked: set validation to the complement.
+        Unlinked: keep training + validation <= 100 by capping and warning."""
+        if getattr(self, '_split_guard', False):
             return
-        self._split_guard = True
-        try:
-            self.spinBox_valSplit.setValue(100 - train_pct)
-        finally:
-            self._split_guard = False
+        if getattr(self, '_split_linked', False):
+            self._split_guard = True
+            try:
+                self.spinBox_valSplit.setValue(100 - train_pct)
+            finally:
+                self._split_guard = False
+            return
+        # Unlinked: enforce the invariant train + val <= 100.
+        val_pct = self.spinBox_valSplit.value()
+        if train_pct + val_pct > 100:
+            capped = max(0, 100 - val_pct)
+            self._split_guard = True
+            try:
+                self.spinBox_trainSplit.setValue(capped)
+            finally:
+                self._split_guard = False
+            self._warn_split_capped("Training", capped, "validation", val_pct)
+
+    def _warn_split_capped(self, capped_name, capped_pct, other_name, other_pct):
+        """Unlinked splits may total at most 100%. Tell the user the value
+        they entered was reduced to fit."""
+        QMessageBox.warning(
+            self,
+            "Split exceeds 100%",
+            f"Unlinked training and validation splits can total at most 100%.\n\n"
+            f"With {other_name} at {other_pct}%, {capped_name.lower()} was "
+            f"capped at {capped_pct}%.\n\n"
+            f"Unlink lets the two sum to less than 100% (the remainder is "
+            f"held out), but never more."
+        )
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------

@@ -801,6 +801,17 @@ class MainWindow(QMainWindow):
             print(f"[ERROR] Failed to add Recipe Manager to Tools menu: {e}")
             traceback.print_exc()
 
+        try:
+            self._action_site_config_editor = QAction("Site Config Editor\u2026", self)
+            self._action_site_config_editor.setStatusTip("View, edit, or save a site config JSON under a new filename")
+            self._action_site_config_editor.triggered.connect(self.menubar_site_config_editor)
+            self.menuTools.addSeparator()
+            self.menuTools.addAction(self._action_site_config_editor)
+            print("[INFO] Site Config Editor added to Tools menu successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to add Site Config Editor to Tools menu: {e}")
+            traceback.print_exc()
+
 
         # ------------------------------------------------------------------------------------------------------------------
         # VIEW MENU — dark/light mode toggle
@@ -811,12 +822,82 @@ class MainWindow(QMainWindow):
 
         _help_action = self.menuBar().actions()[-1] if self.menuBar().actions() else None
         self._menu_view = QMenu("View", self)
-        self.menuBar().insertMenu(_help_action, self._menu_view)
+        # Place View immediately after File (before the second top-level menu).
+        _bar_actions = self.menuBar().actions()
+        _after_file = _bar_actions[1] if len(_bar_actions) > 1 else _help_action
+        self.menuBar().insertMenu(_after_file, self._menu_view)
 
         self._action_toggle_theme = QAction("Dark Mode", self)
         self._action_toggle_theme.setStatusTip("Toggle between dark and light application theme")
         self._action_toggle_theme.triggered.connect(self._toggle_dark_mode)
         self._menu_view.addAction(self._action_toggle_theme)
+
+        # ------------------------------------------------------------------------------------------------------------------
+        # MENU REORGANIZATION — split the crowded Tools menu into topic menus.
+        # Actions already exist (from the .ui or created above); here they are
+        # re-parented into Data Explorer / Annotations / Connectivity /
+        # Productivity / Test menus. Tools keeps only SAGE and Temporal Averaging.
+        # ------------------------------------------------------------------------------------------------------------------
+        try:
+            def _move_action(attr_name, target_menu):
+                action = getattr(self, attr_name, None)
+                if action is None:
+                    return
+                try:
+                    self.menuTools.removeAction(action)
+                except Exception:
+                    pass
+                target_menu.addAction(action)
+
+            self._menu_data_explorer = QMenu("Data Explorer", self)
+            self._menu_annotations   = QMenu("Annotations", self)
+            self._menu_connectivity  = QMenu("Connectivity", self)
+            self._menu_productivity  = QMenu("Productivity", self)
+            self._menu_test          = QMenu("Test", self)
+
+            # Data Explorer
+            _move_action("action_CompositeSlices", self._menu_data_explorer)
+            _move_action("action_TriageImages",    self._menu_data_explorer)
+            _move_action("action_ImageOrganizer",  self._menu_data_explorer)
+            # Annotations
+            _move_action("action_CreateJSON",           self._menu_annotations)
+            _move_action("action_ExtractCOCOMasks",     self._menu_annotations)
+            _move_action("action_Inspect_Annotations",  self._menu_annotations)
+            _move_action("action_Sync_JSON_Annotations", self._menu_annotations)
+            # Connectivity
+            _move_action("_action_api_keys",  self._menu_connectivity)
+            _move_action("action_RefreshNEON", self._menu_connectivity)
+            # Productivity
+            _move_action("_action_site_config_editor", self._menu_productivity)
+            _move_action("_action_recipe_manager",     self._menu_productivity)
+            # Test
+            _move_action("action_Generate_Greenness_Test_Images", self._menu_test)
+
+            # Collapse separators left dangling in Tools after moving items out.
+            _prev_sep = True
+            for _a in list(self.menuTools.actions()):
+                if _a.isSeparator():
+                    if _prev_sep:
+                        self.menuTools.removeAction(_a)
+                    else:
+                        _prev_sep = True
+                else:
+                    _prev_sep = False
+            _left = self.menuTools.actions()
+            if _left and _left[-1].isSeparator():
+                self.menuTools.removeAction(_left[-1])
+
+            # Place content menus just before Tools; put Test immediately left of Help.
+            _tools_action = self.menuTools.menuAction()
+            for _m in (self._menu_data_explorer, self._menu_annotations,
+                       self._menu_connectivity, self._menu_productivity):
+                self.menuBar().insertMenu(_tools_action, _m)
+            _help_action_bar = self.menuBar().actions()[-1] if self.menuBar().actions() else None
+            self.menuBar().insertMenu(_help_action_bar, self._menu_test)
+            print("[INFO] Tools menu reorganized into topic menus.")
+        except Exception as e:
+            print(f"[ERROR] Failed to reorganize menus: {e}")
+            traceback.print_exc()
 
         try:
             self.action_About.triggered.connect(self._show_about_dialog)
@@ -3219,6 +3300,16 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
             QMessageBox.critical(self, "Recipe Manager", str(e))
 
+    def menubar_site_config_editor(self):
+        """Open the standalone Site Config editor (Tools -> Site Config Editor)."""
+        try:
+            from GRIME_AI.utils.GRIME_AI_site_config import open_editor
+            open_editor(parent=self)
+        except Exception as e:
+            print(f"[ERROR] Failed to open Site Config Editor: {e}")
+            traceback.print_exc()
+            QMessageBox.critical(self, "Site Config Editor", str(e))
+
     def _get_recipe_store(self):
         """Return the single shared RecipeStore instance (created lazily), so
         the Recipe Manager and the image-folder write-back use the same store."""
@@ -5318,6 +5409,13 @@ def my_main():
     segment_parser.add_argument('--no-copy',       action='store_true',
                                 help='Skip copying original image to output folder')
 
+    # Train / fine-tune parser
+    train_parser = subparsers.add_parser('train', help='Train / fine-tune a GRIME AI model from a site configuration (headless)')
+    train_parser.add_argument('--config', required=True,
+                              help='Path to a site_config.json (as produced by the Training tab)')
+    train_parser.add_argument('--mode',   required=True, choices=['sam2', 'segformer'],
+                              help='Model type to train: sam2 or segformer')
+
     # ROI Analyzer parser
     roi_parser = subparsers.add_parser(
         'roi',
@@ -5545,6 +5643,38 @@ def run_cli(args):
             run_segformer(args, device, category, progressBar=None)
 
         print("[GRIME AI] Segmentation complete.")
+
+    elif args.command == 'train':
+        import json
+        if not os.path.isfile(args.config):
+            print(f"[ERROR] Config file not found: {args.config}", file=sys.stderr)
+            sys.exit(1)
+        with open(args.config, 'r', encoding='utf-8') as f:
+            site_config = json.load(f)
+
+        print(f"[GRIME AI] Training mode: {args.mode.upper()}")
+        print(f"[GRIME AI] Config:        {args.config}")
+        print(f"[GRIME AI] Site:          {site_config.get('siteName', '?')}")
+
+        # Build the SAM2 model config headlessly (the GUI path uses
+        # @hydra.main); SegFormer does not need a Hydra cfg.
+        cfg = None
+        if args.mode == 'sam2':
+            import importlib.util
+            from hydra import compose, initialize_config_dir
+            from hydra.core.global_hydra import GlobalHydra
+            sam2_dir = os.path.dirname(importlib.util.find_spec('sam2').origin)
+            cfg_dir = os.path.join(sam2_dir, "configs", "sam2.1")
+            if GlobalHydra.instance().is_initialized():
+                GlobalHydra.instance().clear()
+            with initialize_config_dir(config_dir=cfg_dir, version_base="1.3"):
+                cfg = compose(config_name="sam2.1_hiera_l")
+
+        from GRIME_AI.ml_core.ml_model_training import MLModelTraining
+        dispatcher = MLModelTraining(cfg, parent_widget=None, site_config=site_config)
+        dispatcher.Model_Training_Dispatcher(cfg=cfg, mode=args.mode)
+
+        print("[GRIME AI] Training complete.")
 
     elif args.command == 'roi':
 
