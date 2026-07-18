@@ -236,8 +236,14 @@ class SegmentImagesTab(QWidget):
         self.image_folders = saved_folders if isinstance(saved_folders, list) else []
         self._refresh_folder_list_widget()
 
-        # Output folder
+        # Output folder. Prefer the saved model config; otherwise fall back to a
+        # value pushed by an activated recipe (apply_recipe writes this key).
         output_folder = load_model_conf.get("output_folder", "")
+        if not output_folder:
+            try:
+                output_folder = JsonEditor().getValue("Model_Segmentation_Output_Folder") or ""
+            except Exception:
+                output_folder = ""
         if output_folder:
             self.lineEdit_output_folder.setText(output_folder)
         else:
@@ -737,6 +743,15 @@ QLineEdit:focus {
             self.lineEdit_output_folder.setText(folder.replace("\\", "/"))
             self.updateSegmentButtonState()
             self.update_model_config()
+
+    def set_output_folder(self, folder):
+        """Set the predictions output folder programmatically (e.g. from an
+        activated recipe). Mirrors the visible effect of choosing one."""
+        self.lineEdit_output_folder.setText((folder or "").replace("\\", "/"))
+        try:
+            self.updateSegmentButtonState()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
