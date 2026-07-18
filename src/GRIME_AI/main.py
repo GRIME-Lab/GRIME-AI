@@ -868,8 +868,8 @@ class MainWindow(QMainWindow):
             _move_action("_action_api_keys",  self._menu_connectivity)
             _move_action("action_RefreshNEON", self._menu_connectivity)
             # Productivity
-            _move_action("_action_site_config_editor", self._menu_productivity)
             _move_action("_action_recipe_manager",     self._menu_productivity)
+            _move_action("_action_site_config_editor", self._menu_productivity)
             # Test
             _move_action("action_Generate_Greenness_Test_Images", self._menu_test)
 
@@ -3292,7 +3292,7 @@ class MainWindow(QMainWindow):
         switch study sites without editing folder paths by hand."""
         try:
             from GRIME_AI.recipe_manager import RecipeManagerDialog
-            dlg = RecipeManagerDialog(self._get_recipe_store(), self)
+            dlg = RecipeManagerDialog(self._get_recipe_store(), self, dark_mode=self._is_dark_mode)
             dlg.recipeActivated.connect(self.apply_recipe)
             dlg.exec_()
         except Exception as e:
@@ -3406,6 +3406,18 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
 
+            # Segmentation predictions output -> Segment Images tab
+            if recipe.predictions:
+                JsonEditor().update_json_entry("Model_Segmentation_Output_Folder", recipe.predictions)
+                try:
+                    if hyperparameterDlg is not None:
+                        from GRIME_AI.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
+                        seg_tab = hyperparameterDlg.findChild(SegmentImagesTab)
+                        if seg_tab is not None:
+                            seg_tab.set_output_folder(recipe.predictions)
+                except Exception:
+                    pass
+
             # USGS download root
             if recipe.usgs:
                 if hasattr(self, "edit_USGSSaveFilePath"):
@@ -3419,6 +3431,12 @@ class MainWindow(QMainWindow):
                 if hasattr(self, "edit_NEON_TableInput"):
                     self.edit_NEON_TableInput.setText(recipe.neon)
                 JsonEditor().update_json_entry("NEON_Root_Folder", recipe.neon)
+
+            # PhenoCam download root -> PhenoCam tab
+            if recipe.phenocam:
+                if hasattr(self, "phenocam_folder_edit"):
+                    self.phenocam_folder_edit.setText(recipe.phenocam)
+                JsonEditor().update_json_entry("Phenocam_Root_Folder", recipe.phenocam)
 
             # Composite / video / GIF outputs have no dedicated widgets yet;
             # persist to JSON so the output pipeline (GRIME_AI_Save_Utils)
