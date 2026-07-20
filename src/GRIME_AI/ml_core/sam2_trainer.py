@@ -225,6 +225,9 @@ class SAM2Trainer:
         import math as _math
         _DEFAULT_BLOB_FRACTION = 50.0 / _math.sqrt(2000**2 + 1000**2)
         self.blob_filter_radius = float(self.site_config.get('blob_filter_radius', _DEFAULT_BLOB_FRACTION))
+        # Mahalanobis-derived fallback fraction, kept SEPARATE from
+        # blob_filter_radius so the Circular filter's radius is never poisoned.
+        self.blob_filter_mahal_fraction = None
 
         # Validation overlay settings (default: 5 samples per epoch)
         self.validation_overlay_samples = self.site_config.get('validation_overlay_samples', 5)
@@ -836,12 +839,12 @@ class SAM2Trainer:
             self.suggested_blob_radius_result = self._compute_blob_filter_distribution(
                 train_images, target_label
             )
-            # Update self.blob_filter_radius to the computed fallback fraction so
-            # the training report PDF shows the Mahalanobis-derived value, not the
-            # seed value from site_config.
+            # Record the Mahalanobis-derived fallback fraction for the report ONLY.
+            # Do NOT overwrite self.blob_filter_radius (the user's Manual/Computed
+            # scalar radius used by the Circular filter).
             if self.suggested_blob_radius_result is not None:
-                self.blob_filter_radius = self.suggested_blob_radius_result.get(
-                    "fallback_fraction", self.blob_filter_radius
+                self.blob_filter_mahal_fraction = self.suggested_blob_radius_result.get(
+                    "fallback_fraction", self.blob_filter_mahal_fraction
                 )
 
         finally:
@@ -869,6 +872,37 @@ class SAM2Trainer:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    @property
+    def _report_blob_radius_frac(self):
+        """Report value: Mahalanobis-derived fraction when available, else the
+        configured scalar radius. Separate from blob_filter_radius."""
+        if self.blob_filter_mahal_fraction is not None:
+            return self.blob_filter_mahal_fraction
+        return self.blob_filter_radius
+
+    def _suggest_blob_filter_mode(self, pts):
+        """Advisory only — recommend a blob-filter mode from the centroid
+        distribution. Never applied automatically. Returns (mode, reason)."""
+        n = len(pts)
+        if n < 5:
+            return "circular", f"only {n} centroids — too few for a distribution"
+        try:
+            from sklearn.cluster import KMeans
+            from sklearn.metrics import silhouette_score
+            best_k, best_s = 1, -1.0
+            for k in (2, 3):
+                if n <= k:
+                    break
+                labels = KMeans(n_clusters=k, n_init=10, random_state=0).fit_predict(pts)
+                s = silhouette_score(pts, labels)
+                if s > best_s:
+                    best_k, best_s = k, s
+            if best_k >= 2 and best_s >= 0.55:
+                return "knn", f"multimodal ({best_k} clusters, silhouette {best_s:.2f})"
+            return "mahalanobis", f"unimodal (best silhouette {best_s:.2f})"
+        except Exception:
+            return "mahalanobis", "unimodal (clustering unavailable)"
+
     def _compute_blob_filter_distribution(self, train_images, target_label):
         """
         Post-training: fit a 2D Gaussian to per-image ground truth centroids
@@ -897,8 +931,15 @@ class SAM2Trainer:
             print(f"[Blob Filter] Category '{target_label}' not found — skipping.")
             return None
 
-        per_image_centroids = []
+        # Minimum blob area (fraction of frame) to include — drops degenerate
+        # slivers/noise that would skew the distribution. Tunable.
+        _MIN_BLOB_FRAC = 0.005
+        # Covariance std floor as a fraction of the image diagonal (Fix 3).
+        _COV_MIN_STD_FRAC = 0.03
+
+        per_blob_centroids = []
         skipped = 0
+        dropped_small = 0
 
         for image_file in train_images:
             result = self.dataset_util.load_true_mask(
@@ -911,11 +952,24 @@ class SAM2Trainer:
             if true_mask.ndim == 3:
                 true_mask = true_mask[..., 0]
             true_mask = true_mask.astype(np.uint8)
-            ys, xs = np.where(true_mask > 0)
-            per_image_centroids.append([float(np.mean(xs)), float(np.mean(ys))])
 
-        if not per_image_centroids:
-            print("[Blob Filter] No valid images — skipping computation.")
+            # Fix 1: one centroid PER connected water region, not the mean of ALL
+            # water pixels — scattered regions no longer collapse to a single
+            # phantom centroid between them.
+            num_labels, labels = cv2.connectedComponents(true_mask)
+            frame_area = float(true_mask.shape[0] * true_mask.shape[1])
+            for lbl in range(1, num_labels):
+                ys, xs = np.where(labels == lbl)
+                if xs.size == 0:
+                    continue
+                # Fix 2: drop degenerate/tiny blobs (e.g. sliver annotations).
+                if xs.size / frame_area < _MIN_BLOB_FRAC:
+                    dropped_small += 1
+                    continue
+                per_blob_centroids.append([float(np.mean(xs)), float(np.mean(ys))])
+
+        if not per_blob_centroids:
+            print("[Blob Filter] No valid blobs — skipping computation.")
             return None
 
         try:
@@ -925,7 +979,7 @@ class SAM2Trainer:
         except Exception:
             diagonal_px = float(np.sqrt(1920 ** 2 + 1080 ** 2))
 
-        pts = np.array(per_image_centroids)  # shape (N, 2)
+        pts = np.array(per_blob_centroids)  # shape (N, 2)
         mean_cx, mean_cy = float(pts[:, 0].mean()), float(pts[:, 1].mean())
         centroid_mean = [mean_cx, mean_cy]
 
@@ -938,33 +992,71 @@ class SAM2Trainer:
         # Attempt covariance fit — requires at least 3 non-collinear points
         centroid_cov = None
         n_sigma = 2.5
+        cov_method = "none"
         if len(pts) >= 3:
             try:
-                cov = np.cov(pts.T)  # 2x2
-                # Verify invertibility
+                # Robust covariance (Minimum Covariance Determinant) when
+                # scikit-learn is available — rejects outlier centroids at the
+                # source. Falls back to the empirical np.cov otherwise.
+                rob_mean = [mean_cx, mean_cy]
+                try:
+                    from sklearn.covariance import MinCovDet
+                    _mcd = MinCovDet().fit(pts)
+                    cov = np.asarray(_mcd.covariance_, dtype=np.float64)
+                    rob_mean = [float(_mcd.location_[0]), float(_mcd.location_[1])]
+                    cov_method = "robust (MinCovDet)"
+                except Exception:
+                    cov = np.cov(pts.T)
+                    cov_method = "empirical (np.cov)"
+                # Fix 3: regularize — floor each axis' variance so a tight cluster
+                # can't create a near-singular, over-narrow ellipse.
+                _min_var = (_COV_MIN_STD_FRAC * diagonal_px) ** 2
+                cov = cov + _min_var * np.eye(2)
                 inv_cov = np.linalg.inv(cov)
-                # Sanity-check: recompute Mahalanobis distances and confirm
-                # the 95th percentile falls within n_sigma
+                # Pair the (robust) mean with the (robust) covariance so the
+                # Mahalanobis distances are internally consistent.
+                centroid_mean = rob_mean
                 mah_distances = np.array([
-                    mahalanobis(p, [mean_cx, mean_cy], inv_cov)
-                    for p in pts
+                    mahalanobis(p, centroid_mean, inv_cov) for p in pts
                 ])
-                # Expand n_sigma to cover 95th percentile of training centroids
                 n_sigma = max(2.5, float(np.percentile(mah_distances, 95)))
                 centroid_cov = cov.tolist()
-                print(f"[Blob Filter] Mahalanobis fit successful.")
+                print(f"[Blob Filter] Mahalanobis fit successful ({cov_method}).")
                 print(f"  n_sigma (95th pct of training Mahalanobis distances): {n_sigma:.3f}")
             except np.linalg.LinAlgError:
                 print("[Blob Filter] Covariance matrix singular — using scalar fallback.")
 
+        # kNN model: store every training centroid plus a distance threshold set
+        # from the training set's own k-th-nearest-neighbour scatter. Handles
+        # multimodal water (multiple channels) a single Gaussian cannot.
+        knn_k = 1
+        knn_threshold = None
+        if len(pts) >= 2:
+            try:
+                from scipy.spatial import cKDTree
+                _k = min(knn_k, len(pts) - 1)
+                _tree = cKDTree(pts)
+                _d, _ = _tree.query(pts, k=_k + 1)   # self is nearest (dist 0)
+                _kth = _d[:, _k]
+                knn_k = _k
+                knn_threshold = float(np.percentile(_kth, 95))
+            except Exception as _knn_err:
+                print(f"[Blob Filter] kNN threshold computation failed ({_knn_err}).")
+
+        # Advisory only — recommend a mode; never applied automatically.
+        suggested_mode, suggested_reason = self._suggest_blob_filter_mode(pts)
+
         print(f"\n[Blob Filter] Category: '{target_label}'")
-        print(f"  Images analyzed : {len(per_image_centroids)}  (skipped: {skipped})")
-        print(f"  Mean centroid   : ({mean_cx:.1f}, {mean_cy:.1f}) px")
+        print(f"  Blobs analyzed  : {len(per_blob_centroids)}  (images skipped: {skipped}, small blobs dropped: {dropped_small})")
+        print(f"  Mean centroid   : ({centroid_mean[0]:.1f}, {centroid_mean[1]:.1f}) px")
         print(f"  Median distance : {p50_px:.1f} px")
         print(f"  95th pct dist   : {p95_px:.1f} px")
         print(f"  Diagonal        : {diagonal_px:.1f} px")
         print(f"  Fallback frac   : {fallback_fraction:.4f} ({fallback_fraction * 100:.2f}%)")
-        print(f"  Covariance fit  : {'yes' if centroid_cov else 'no (fallback)'}")
+        print(f"  Covariance fit  : {cov_method if centroid_cov else 'no (fallback)'}")
+        if knn_threshold is not None:
+            print(f"  kNN threshold   : {knn_threshold:.1f} px (k={knn_k})")
+        print(f"  Recommended mode: {suggested_mode}  ({suggested_reason})")
 
         return {
             "centroid_mean":    centroid_mean,
@@ -972,7 +1064,12 @@ class SAM2Trainer:
             "n_sigma":          n_sigma,
             "fallback_fraction": fallback_fraction,
             "diagonal_px":      diagonal_px,
-            "n_images":         len(per_image_centroids),
+            "n_images":         len(per_blob_centroids),
+            "centroids":        pts.tolist(),
+            "knn_k":            knn_k,
+            "knn_threshold":    knn_threshold,
+            "suggested_mode":   suggested_mode,
+            "suggested_reason": suggested_reason,
         }
 
     # ------------------------------------------------------------------------
@@ -990,11 +1087,19 @@ class SAM2Trainer:
                 continue
             try:
                 ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-                ckpt["blob_filter_radius"] = new_fraction
+                # blob_filter_radius stays the scalar radius (Circular); the
+                # Mahalanobis fallback fraction is stored under its own key.
+                ckpt["blob_filter_radius"] = self.blob_filter_radius
+                if new_fraction is not None:
+                    ckpt["blob_filter_mahal_fraction"] = new_fraction
                 if blob_distribution is not None:
                     ckpt["blob_centroid_mean"]  = blob_distribution.get("centroid_mean")
                     ckpt["blob_centroid_cov"]   = blob_distribution.get("centroid_cov")
                     ckpt["blob_filter_n_sigma"] = blob_distribution.get("n_sigma", 2.5)
+                    ckpt["blob_centroids"]      = blob_distribution.get("centroids")
+                    ckpt["blob_knn_k"]          = blob_distribution.get("knn_k")
+                    ckpt["blob_knn_threshold"]  = blob_distribution.get("knn_threshold")
+                    ckpt["suggested_blob_filter_mode"] = blob_distribution.get("suggested_mode")
                 torch.save(ckpt, ckpt_path)
                 print(f"[Blob Filter] Updated checkpoint #{rank}: {os.path.basename(ckpt_path)}")
             except Exception as e:
@@ -1789,7 +1894,7 @@ class SAM2Trainer:
             num_train_images=getattr(self, "num_train_images", None),
             num_val_images=getattr(self, "num_val_images", None),
             weight_decay=self.weight_decay,
-            blob_radius_pct=round(self.blob_filter_radius * 100, 1),
+            blob_radius_pct=round(self._report_blob_radius_frac * 100, 1),
         )
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()
@@ -1807,7 +1912,7 @@ class SAM2Trainer:
             num_train_images=getattr(self, "num_train_images", None),
             num_val_images=getattr(self, "num_val_images", None),
             weight_decay=self.weight_decay,
-            blob_radius_pct=round(self.blob_filter_radius * 100, 1),
+            blob_radius_pct=round(self._report_blob_radius_frac * 100, 1),
         )
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()
@@ -1869,7 +1974,7 @@ class SAM2Trainer:
             num_train_images=getattr(self, "num_train_images", None),
             num_val_images=getattr(self, "num_val_images", None),
             weight_decay=self.weight_decay,
-            blob_radius_pct=round(self.blob_filter_radius * 100, 1),
+            blob_radius_pct=round(self._report_blob_radius_frac * 100, 1),
         )
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()
@@ -1885,7 +1990,7 @@ class SAM2Trainer:
             num_train_images=getattr(self, "num_train_images", None),
             num_val_images=getattr(self, "num_val_images", None),
             weight_decay=self.weight_decay,
-            blob_radius_pct=round(self.blob_filter_radius * 100, 1),
+            blob_radius_pct=round(self._report_blob_radius_frac * 100, 1),
         )
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()
@@ -1901,7 +2006,7 @@ class SAM2Trainer:
             num_train_images=getattr(self, "num_train_images", None),
             num_val_images=getattr(self, "num_val_images", None),
             weight_decay=self.weight_decay,
-            blob_radius_pct=round(self.blob_filter_radius * 100, 1),
+            blob_radius_pct=round(self._report_blob_radius_frac * 100, 1),
         )
         progressBar.setValue(progressBar.getValue() + 1)
         progressBar.show()
@@ -1926,7 +2031,7 @@ class SAM2Trainer:
             model_type="SAM2",
             num_train_images=getattr(self, "num_train_images", None),
             num_val_images=getattr(self, "num_val_images", None),
-            blob_radius_pct=round(self.blob_filter_radius * 100, 1),
+            blob_radius_pct=round(self._report_blob_radius_frac * 100, 1),
             weight_decay=self.weight_decay,
             categories=self.categories,
             best_epoch=self._extract_epoch_from_path(self.best_checkpoints[0][1])
