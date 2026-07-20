@@ -189,10 +189,43 @@ class CocoBuffer:
             self._write_temp()
             self._dirty = False
 
+    # "Other" is a reserved catch-all; it keeps a fixed sentinel id.
+    OTHER_LABEL = "Other"
+    OTHER_ID = 999
+
+    def _normalize_category_ids(self):
+        """Enforce stable category IDs: the reserved "Other" label keeps id 999,
+        and every real class is renumbered 1..N in its existing order. Every
+        annotation's category_id is remapped through the same old->new map, so
+        the written file is deterministic regardless of the IDs assigned
+        upstream. Order-preserving and idempotent.
+        """
+        cats = self.doc.get("categories", [])
+        if not cats:
+            return
+        remap = {}
+        n = 0
+        for c in cats:
+            old = c.get("id")
+            if c.get("name") == self.OTHER_LABEL:
+                new = self.OTHER_ID
+            else:
+                n += 1
+                new = n
+            if old is not None:
+                remap[old] = new
+            c["id"] = new
+        for a in self.doc.get("annotations", []):
+            old = a.get("category_id")
+            if old in remap:
+                a["category_id"] = remap[old]
+
     def _write_temp(self):
         # Serialize once and write in a single call. Streaming json.dump() emits
         # thousands of small writes; on Windows with AV/sync watching the folder
         # that turned a 21 MB write into ~50s. One write avoids that.
+        # Enforce 1-indexed, contiguous category IDs on every write.
+        self._normalize_category_ids()
         payload = json.dumps(self.doc)
         fd, tmp = tempfile.mkstemp(dir=self.folder, suffix=".json")
         try:

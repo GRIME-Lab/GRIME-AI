@@ -156,6 +156,11 @@ class Sidebar(QWidget):
         del_btn.setToolTip("Delete selected label class")
         del_btn.clicked.connect(self._delete_label_class)
         add_label_row.addWidget(del_btn)
+        clr_btn = QPushButton("Clr")
+        clr_btn.setFixedWidth(40)
+        clr_btn.setToolTip("Clear all label classes (keeps 'Other')")
+        clr_btn.clicked.connect(self._clear_label_classes)
+        add_label_row.addWidget(clr_btn)
         lg.addLayout(add_label_row)
         layout.addWidget(label_group)
 
@@ -652,6 +657,26 @@ class Sidebar(QWidget):
         self._label_classes.pop(row)
         if self._active_label == name:
             self._active_label = self._label_classes[0]["name"] if self._label_classes else None
+        self._rebuild_label_class_list()
+
+    def _clear_label_classes(self):
+        """Remove all user-defined label classes, keeping the protected
+        'Other'. For starting a new dataset with different labels. Does not
+        delete masks already on the canvas."""
+        removable = [lc for lc in self._label_classes if not lc.get("protected")]
+        if not removable:
+            return
+        from PyQt5.QtWidgets import QMessageBox
+        resp = QMessageBox.question(
+            self, "Clear Labels",
+            f"Remove all {len(removable)} label class(es)? 'Other' is kept.\n\n"
+            "Masks already on the canvas are not deleted.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if resp != QMessageBox.Yes:
+            return
+        self._label_classes = [lc for lc in self._label_classes if lc.get("protected")]
+        non_protected = [lc["name"] for lc in self._label_classes if not lc.get("protected")]
+        self._active_label = non_protected[0] if non_protected else None
         self._rebuild_label_class_list()
 
     def _rebuild_label_class_list(self):

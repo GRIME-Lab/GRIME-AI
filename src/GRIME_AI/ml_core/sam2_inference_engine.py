@@ -160,6 +160,13 @@ class SAM2InferenceEngine:
         self.blob_filter_radius = self._resolve_blob_filter_radius(checkpoint)
         print(f"Blob filter radius: {self.blob_filter_radius:.5f} (fraction of diagonal)")
 
+        # Resolve blob_filter_mode (mahalanobis / circular / none). Read from
+        # config so it can be changed for an existing checkpoint without retraining.
+        self.blob_filter_mode = self._resolve_blob_filter_mode(checkpoint)
+        self._warned_no_mahal = False
+        self._warned_no_knn = False
+        print(f"Blob filter mode: {self.blob_filter_mode}")
+
         print("=== Model ready for inference ===\n")
         return predictor
 
@@ -182,6 +189,12 @@ class SAM2InferenceEngine:
         # Load Mahalanobis distribution from checkpoint if present
         self.blob_centroid_mean  = checkpoint.get("blob_centroid_mean",  None)
         self.blob_filter_n_sigma = float(checkpoint.get("blob_filter_n_sigma", 2.5))
+        # Load kNN centroid model from checkpoint if present
+        _knn_c = checkpoint.get("blob_centroids", None)
+        self.blob_centroids     = np.array(_knn_c, dtype=np.float64) if _knn_c else None
+        self.blob_knn_k         = int(checkpoint.get("blob_knn_k", 1) or 1)
+        _knn_thr = checkpoint.get("blob_knn_threshold", None)
+        self.blob_knn_threshold = float(_knn_thr) if _knn_thr is not None else None
         raw_cov = checkpoint.get("blob_centroid_cov", None)
         if raw_cov is not None:
             try:
@@ -230,6 +243,35 @@ class SAM2InferenceEngine:
         # Tier 3: default
         print(f"  blob_filter_radius: using default ({DEFAULT_FRACTION:.5f})")
         return DEFAULT_FRACTION
+
+    def _resolve_blob_filter_mode(self, checkpoint: dict) -> str:
+        """Resolve the blob-filter mode: 'mahalanobis', 'circular', or 'none'.
+        Tier 1 checkpoint, Tier 2 site_config.json (load_model or top level),
+        Tier 3 default 'mahalanobis'."""
+        _VALID = ("mahalanobis", "circular", "knn", "none")
+
+        def _norm(v):
+            s = str(v).strip().lower()
+            return s if s in _VALID else None
+
+        m = _norm(checkpoint.get("blob_filter_mode"))
+        if m:
+            print(f"  blob_filter_mode: loaded from checkpoint ({m})")
+            return m
+        try:
+            from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+            from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+            import os
+            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            cfg = JsonEditor().load_json_file(os.path.join(settings_folder, "site_config.json"))
+            m = _norm((cfg.get("load_model") or {}).get("blob_filter_mode")) or _norm(cfg.get("blob_filter_mode"))
+            if m:
+                print(f"  blob_filter_mode: loaded from site_config.json ({m})")
+                return m
+        except Exception as e:
+            print(f"  blob_filter_mode: could not read site_config.json ({e})")
+        print("  blob_filter_mode: using default (mahalanobis)")
+        return "mahalanobis"
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
@@ -657,23 +699,45 @@ class SAM2InferenceEngine:
                 img_diagonal         = np.sqrt(target_h ** 2 + target_w ** 2)
                 radius_threshold_cache = max(10, int(self.blob_filter_radius * img_diagonal))
 
-            # ── FILTER BLOBS NOT NEAR CENTROID PROMPTS ────────────────────────
-            if centroid_coords_cache:
+            # ── BLOB FILTER (mode: mahalanobis / circular / none) ─────────────
+            _mode = getattr(self, "blob_filter_mode", "mahalanobis")
+            if _mode != "none" and centroid_coords_cache:
                 labels_np = mask.astype(np.uint8)
                 num_labels, labels = cv2.connectedComponents(labels_np)
                 valid_mask = np.zeros_like(labels, dtype=np.uint8)
 
-                # Choose Mahalanobis or scalar filter based on checkpoint contents
+                # Mahalanobis / kNN only when explicitly selected AND the required
+                # data exists in the checkpoint; otherwise scalar circular.
                 use_mahal = (
-                    self.blob_centroid_mean is not None
+                    _mode == "mahalanobis"
+                    and self.blob_centroid_mean is not None
                     and self.blob_centroid_inv_cov is not None
                 )
+                use_knn = (
+                    _mode == "knn"
+                    and self.blob_centroids is not None
+                    and self.blob_knn_threshold is not None
+                    and len(self.blob_centroids) >= 1
+                )
+                if _mode == "mahalanobis" and not use_mahal and not self._warned_no_mahal:
+                    print("[blob_filter] mahalanobis requested but no distribution "
+                          "in checkpoint — falling back to circular")
+                    self._warned_no_mahal = True
+                if _mode == "knn" and not use_knn and not self._warned_no_knn:
+                    print("[blob_filter] kNN requested but no centroid model in "
+                          "checkpoint — falling back to circular")
+                    self._warned_no_knn = True
 
                 if use_mahal:
                     from scipy.spatial.distance import mahalanobis as _mahal
                     _mean     = np.array(self.blob_centroid_mean, dtype=np.float64)
                     _inv_cov  = self.blob_centroid_inv_cov
                     _n_sigma  = self.blob_filter_n_sigma
+                if use_knn:
+                    from scipy.spatial import cKDTree as _cKDTree
+                    _knn_tree = _cKDTree(self.blob_centroids)
+                    _knn_k    = int(min(self.blob_knn_k, len(self.blob_centroids)))
+                    _knn_thr  = self.blob_knn_threshold
 
                 for lbl in range(1, num_labels):
                     ys, xs = np.nonzero(labels == lbl)
@@ -685,6 +749,12 @@ class SAM2InferenceEngine:
                         # Mahalanobis distance from the training centroid distribution
                         dist = _mahal([cx_blob, cy_blob], _mean, _inv_cov)
                         if dist < _n_sigma:
+                            valid_mask[labels == lbl] = 1
+                    elif use_knn:
+                        # Distance to the k-th nearest training centroid
+                        _dd, _ = _knn_tree.query([cx_blob, cy_blob], k=_knn_k)
+                        _kth = float(_dd if _knn_k == 1 else _dd[-1])
+                        if _kth < _knn_thr:
                             valid_mask[labels == lbl] = 1
                     else:
                         # Scalar circular fallback

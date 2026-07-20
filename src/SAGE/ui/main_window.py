@@ -247,6 +247,12 @@ class MainWindow(QMainWindow):
         import_action.triggered.connect(self._import_labels)
         file_menu.addAction(import_action)
 
+        help_menu = menu_bar.addMenu("Help")
+        about_action = QAction("About SAGE…", self)
+        about_action.setStatusTip("Version and attribution")
+        about_action.triggered.connect(self._show_about)
+        help_menu.addAction(about_action)
+
         self.showMaximized()
 
         # Load saved folder path and populate
@@ -337,6 +343,58 @@ class MainWindow(QMainWindow):
     # -------------------------------------------------------------------------
     # Label CSV Export / Import
     # -------------------------------------------------------------------------
+
+    def _get_version(self):
+        """SAGE versions within the GRIME AI ecosystem. Confirm/adjust the
+        import below if the version module path or variable differs."""
+        try:
+            from GRIME_AI.version import __version__ as _v
+            return str(_v)
+        except Exception:
+            try:
+                from GRIME_AI import version as _vmod
+                return str(getattr(_vmod, "__version__", None)
+                           or getattr(_vmod, "VERSION", None) or "unknown")
+            except Exception:
+                return "unknown"
+
+    def _show_about(self):
+        from pathlib import Path
+        from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QPushButton
+        from PyQt5.QtGui import QPixmap
+        from PyQt5.QtCore import Qt
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About SAGE")
+        layout = QVBoxLayout(dlg)
+
+        logo_path = Path(__file__).resolve().parent.parent / "resources" / "sage_logo.png"
+        pix = QPixmap(str(logo_path))
+        if not pix.isNull():
+            logo = QLabel()
+            logo.setAlignment(Qt.AlignCenter)
+            logo.setPixmap(pix.scaled(pix.width() // 2, pix.height() // 2,
+                                      Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            layout.addWidget(logo)
+
+        name = QLabel("SAGE — Segmentation & Annotation for Geospatial Ecohydrology")
+        name.setAlignment(Qt.AlignCenter)
+        name.setWordWrap(True)
+        layout.addWidget(name)
+
+        ver = QLabel(f"Version {self._get_version()}")
+        ver.setAlignment(Qt.AlignCenter)
+        layout.addWidget(ver)
+
+        eco = QLabel("Part of the GRIME AI ecosystem.")
+        eco.setAlignment(Qt.AlignCenter)
+        layout.addWidget(eco)
+
+        btn = QPushButton("OK")
+        btn.clicked.connect(dlg.accept)
+        layout.addWidget(btn)
+
+        dlg.exec_()
 
     def _export_labels(self):
         pairs = self.sidebar.get_label_classes_with_ids()
@@ -625,21 +683,12 @@ class MainWindow(QMainWindow):
         cv2.fillPoly(mask, [polygon_array], 1)
         mask = mask.astype(bool)
 
-        # Create mask entry manually (without SAM2)
-        mask_id = next(self.controller._mask_id_counter)
+        # Route through the controller so the manual mask is clipped against
+        # owned pixels at the same chokepoint as the SAM2 paths (first-wins).
         color = self.sidebar.get_color_for_label(label)
-        stats = compute_mask_stats(mask)
-
-        mask_entry = {
-            "id": mask_id,
-            "label": label,
-            "mask": mask,
-            "color": color,
-            "visible": True,
-            "stats": stats,
-        }
-
-        self.controller.masks.append(mask_entry)
+        mask_entry = self.controller.add_manual_mask(mask, label=label, color=color)
+        if mask_entry is None:
+            return  # stroke fell entirely on already-owned pixels
 
         self.sidebar.refresh_masks()
         self._update_canvas()
@@ -938,17 +987,14 @@ class MainWindow(QMainWindow):
             if name.lower().endswith((".jpg", ".jpeg", ".png", ".tif", ".tiff"))
         ]
 
-        # If a COCO file exists, load its categories into the label list and
-        # open a disk-backed edit buffer (only current image's masks stay in RAM).
-        self._coco_buffer = None
-        coco_path = os.path.join(folder, "instances_default.json")
-        working = os.path.join(folder, ".instances_default.working.json")
-        if os.path.exists(coco_path) or os.path.exists(working):
-            self._coco_buffer = CocoBuffer(folder)
-            self._coco_buffer.load()
-            cats = self._coco_buffer.categories()
-            if cats:
-                self.sidebar.set_label_classes(cats)
+        # Always open a disk-backed edit buffer for the folder so masks persist
+        # across image switches even before the first save. load() seeds from an
+        # existing COCO file if present, otherwise starts from an empty document.
+        self._coco_buffer = CocoBuffer(folder)
+        self._coco_buffer.load()
+        cats = self._coco_buffer.categories()
+        if cats:
+            self.sidebar.set_label_classes(cats)
 
         self.filmstrip.populate(folder, image_files)
 
