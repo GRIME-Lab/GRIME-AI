@@ -236,8 +236,14 @@ class SegmentImagesTab(QWidget):
         self.image_folders = saved_folders if isinstance(saved_folders, list) else []
         self._refresh_folder_list_widget()
 
-        # Output folder
+        # Output folder. Prefer the saved model config; otherwise fall back to a
+        # value pushed by an activated recipe (apply_recipe writes this key).
         output_folder = load_model_conf.get("output_folder", "")
+        if not output_folder:
+            try:
+                output_folder = JsonEditor().getValue("Model_Segmentation_Output_Folder") or ""
+            except Exception:
+                output_folder = ""
         if output_folder:
             self.lineEdit_output_folder.setText(output_folder)
         else:
@@ -264,6 +270,18 @@ class SegmentImagesTab(QWidget):
         else:
             # No model type stored — default to SAM2
             self.radioButton_segment_model_sam2.setChecked(True)
+
+        # Blob filter mode (SAM2 post-processing)
+        _blob_mode = str(load_model_conf.get("blob_filter_mode", "mahalanobis")).strip().lower()
+        if _blob_mode == "circular":
+            self.radioButton_blob_circular.setChecked(True)
+        elif _blob_mode == "knn":
+            self.radioButton_blob_knn.setChecked(True)
+        elif _blob_mode == "none":
+            self.radioButton_blob_none.setChecked(True)
+        else:
+            self.radioButton_blob_mahalanobis.setChecked(True)
+        self._update_blob_filter_enabled()
 
         # Select items in the listbox based on SEGMENTATION_CATEGORIES
         stored_categories = load_model_conf.get("SEGMENTATION_CATEGORIES", [])
@@ -360,6 +378,16 @@ class SegmentImagesTab(QWidget):
             site_config["load_model"]["SEGFORMER_MODEL"] = ""
             site_config["load_model"]["YOLO_MODEL"] = ""
 
+        # Blob filter mode (SAM2 post-processing)
+        if self.radioButton_blob_circular.isChecked():
+            site_config["load_model"]["blob_filter_mode"] = "circular"
+        elif self.radioButton_blob_knn.isChecked():
+            site_config["load_model"]["blob_filter_mode"] = "knn"
+        elif self.radioButton_blob_none.isChecked():
+            site_config["load_model"]["blob_filter_mode"] = "none"
+        else:
+            site_config["load_model"]["blob_filter_mode"] = "mahalanobis"
+
         return site_config
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -421,6 +449,16 @@ class SegmentImagesTab(QWidget):
 
         self.radioButton_segment_model_yolo.toggled.connect(lambda checked: self.set_segment_model("yolo", checked))
         self.radioButton_segment_model_yolo.toggled.connect(self.update_model_config)
+
+        # Blob filter mode radios (SAM2 post-processing)
+        self.radioButton_blob_mahalanobis.toggled.connect(self.update_model_config)
+        self.radioButton_blob_circular.toggled.connect(self.update_model_config)
+        self.radioButton_blob_none.toggled.connect(self.update_model_config)
+        self.radioButton_blob_knn.toggled.connect(self.update_model_config)
+        # Blob filter is SAM2-only — enable the group only when SAM2 is selected
+        self.radioButton_segment_model_sam2.toggled.connect(lambda _c: self._update_blob_filter_enabled())
+        self.radioButton_segment_model_segformer.toggled.connect(lambda _c: self._update_blob_filter_enabled())
+        self.radioButton_segment_model_yolo.toggled.connect(lambda _c: self._update_blob_filter_enabled())
 
         # Buttons
         self.pushButton_Select_Model.clicked.connect(self.select_segmentation_model)
@@ -738,6 +776,15 @@ QLineEdit:focus {
             self.updateSegmentButtonState()
             self.update_model_config()
 
+    def set_output_folder(self, folder):
+        """Set the predictions output folder programmatically (e.g. from an
+        activated recipe). Mirrors the visible effect of choosing one."""
+        self.lineEdit_output_folder.setText((folder or "").replace("\\", "/"))
+        try:
+            self.updateSegmentButtonState()
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def add_folder_flat(self):
@@ -941,6 +988,14 @@ QLineEdit:focus {
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
+    def _update_blob_filter_enabled(self):
+        """The blob filter is SAM2-only; enable its group only for SAM2."""
+        try:
+            self.groupBox_blobFilter_segment.setEnabled(
+                self.radioButton_segment_model_sam2.isChecked())
+        except Exception:
+            pass
+
     def update_model_config(self):
         """
         Gather all dialog values and update the JSON configuration file.
@@ -1094,6 +1149,31 @@ QLineEdit:focus {
         from PyQt5.QtCore import Qt
         from PyQt5.QtGui import QFont, QColor
 
+        # Display-name map (display only — raw checkpoint keys are unchanged).
+        _LABELS = {
+            "categories": "Categories",
+            "creation_UTC": "Creation (UTC)",
+            "site_name": "Site name",
+            "learning_rate": "Learning rate",
+            "epochs": "Epochs",
+            "num_classes": "Number of classes",
+            "val_loss": "Validation loss",
+            "val_accuracy": "Validation accuracy",
+            "miou": "Mean IoU",
+            "target_category_name": "Target category",
+            "base_model": "Base model",
+            "category_centroids": "Category centroids",
+            "blob_filter_mahal_fraction": "Mahalanobis fallback fraction",
+            "blob_centroids": "Centroids",
+            "blob_knn_k": "kNN k",
+            "blob_knn_threshold": "kNN threshold",
+            "suggested_blob_filter_mode": "Suggested filter mode",
+        }
+
+        def _prettify(k):
+            s = str(k).replace("_", " ").strip()
+            return (s[:1].upper() + s[1:]) if s else s
+
         self.listWidget_modelMetadata.setRowCount(0)
 
         try:
@@ -1175,21 +1255,21 @@ QLineEdit:focus {
                     display_value = f"{{dict with {len(value)} keys}}"
                 else:
                     display_value = f"{type(value).__name__}"
-                _add_row(key, display_value)
+                _add_row(_LABELS.get(key, _prettify(key)), display_value)
 
             # ── Mahalanobis blob filter section ───────────────────────────────
             if cov_ok:
                 fallback_px = int(round(float(fallback) * diag_px)) if fallback else "?"
-                _add_row("Mahalanobis blob filter", "", bold_label=True)
-                _add_sub_row("n_sigma",   f"{float(n_sigma):.2f}")
-                _add_sub_row("fallback",  f"{float(fallback)*100:.1f}%  (~{fallback_px}px)")
-                _add_sub_row("cov matrix", "[2×2 items]")
+                _add_row("Mahalanobis spatial filter", "", bold_label=True)
+                _add_sub_row("n-sigma",   f"{float(n_sigma):.2f}")
+                _add_sub_row("Fallback fraction",  f"{float(fallback)*100:.1f}%  (~{fallback_px}px)")
+                _add_sub_row("Covariance matrix", "[2×2 items]")
             elif fallback:
                 fallback_px = int(round(float(fallback) * diag_px))
-                _add_row("Scalar blob filter", "", bold_label=True)
-                _add_sub_row("radius", f"{float(fallback)*100:.1f}%  (~{fallback_px}px)")
+                _add_row("Circular spatial filter", "", bold_label=True)
+                _add_sub_row("Radius", f"{float(fallback)*100:.1f}%  (~{fallback_px}px)")
             else:
-                _add_row("Blob filter", "No metadata in checkpoint")
+                _add_row("Spatial filter", "No metadata in checkpoint")
 
             self.listWidget_modelMetadata.resizeColumnToContents(0)
             self.listWidget_modelMetadata.horizontalHeader().setStretchLastSection(True)

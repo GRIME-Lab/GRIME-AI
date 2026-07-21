@@ -208,6 +208,19 @@ class DatasetUtils:
         Collect all image paths from all folders and split into train/val.
         Paths are already normalized full paths from load_images_and_annotations.
         """
+        _EPS = 1e-6
+        if train_split < 0 or val_split < 0:
+            raise ValueError(
+                f"train_split ({train_split}) and val_split ({val_split}) "
+                f"must be non-negative."
+            )
+        if train_split + val_split > 1.0 + _EPS:
+            raise ValueError(
+                f"train_split ({train_split}) + val_split ({val_split}) = "
+                f"{train_split + val_split:.4f} exceeds 1.0. An unlinked split "
+                f"may sum to at most 100%."
+            )
+
         all_images = []
         for data in dataset_dict.values():
             for img in data["images"]:
@@ -215,10 +228,28 @@ class DatasetUtils:
 
         random.shuffle(all_images)
 
-        train_size = int(train_split * len(all_images))
+        n = len(all_images)
+        train_size = int(train_split * n)
+        # Honor val_split independently of train_split. When the two fractions
+        # are complementary (the "linked" case, sum ~= 1.0), validation is the
+        # remainder so no image is lost to rounding — identical to the previous
+        # behavior. When they sum to < 1.0 (the "unlinked" case), validation
+        # takes exactly its share and the remaining images are intentionally
+        # held out (unused). Previously val_split was ignored and validation
+        # always received 1 - train_split of the data.
+        if train_split + val_split >= 0.999:
+            val_size = n - train_size
+        else:
+            val_size = int(val_split * n)
+        # Never let validation overlap the training slice.
+        val_size = max(0, min(val_size, n - train_size))
         train_images = all_images[:train_size]
-        val_images = all_images[train_size:]
-        print(f"Train: {len(train_images)} images, Validation: {len(val_images)} images")
+        val_images = all_images[train_size:train_size + val_size]
+        held_out = n - len(train_images) - len(val_images)
+        msg = f"Train: {len(train_images)} images, Validation: {len(val_images)} images"
+        if held_out > 0:
+            msg += f", Held out (unused): {held_out} images"
+        print(msg)
 
         return train_images, val_images
 
@@ -265,16 +296,13 @@ class DatasetUtils:
         return [ann for ann in entry["annotations"] if ann["image_id"] == image_id]
 
     # ------------------------------------------------------------------------
-    def rasterize_polygon(self, segmentation: list, image_shape: tuple[int, int]) -> np.ndarray:
+    def rasterize_polygon(self, segmentation, image_shape: tuple[int, int]) -> np.ndarray:
+        """Decode any COCO segmentation (polygon, uncompressed RLE, or
+        compressed RLE) to an H×W 0/1 mask. Holes are preserved — this routes
+        through coco_mask.decode, so ring masks (e.g. water around a sandbar)
+        keep their interior 0s instead of being filled solid."""
         h, w = image_shape
-        mask = np.zeros((h, w), dtype=np.uint8)
-        if isinstance(segmentation, list):
-            for poly in segmentation:
-                pts = np.array(poly, dtype=np.int32).reshape(-1, 2)
-                cv2.fillPoly(mask, [pts], color=1)
-        else:
-            raise ValueError("Unsupported segmentation format")
-        return mask
+        return _seg_to_mask(segmentation, h, w)
 
     # ------------------------------------------------------------------------
     def load_all_true_masks(self, image_path: str, annotation_index: dict) -> dict[int, np.ndarray]:

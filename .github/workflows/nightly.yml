@@ -1,10 +1,8 @@
 name: Nightly Build
-
 on:
   schedule:
     - cron: '0 6 * * *'  # daily at 6am UTC
   workflow_dispatch:      # allows manual trigger from GitHub UI
-
 jobs:
   nightly:
     name: Nightly Conda Build
@@ -17,7 +15,6 @@ jobs:
           source /opt/conda/etc/profile.d/conda.sh
           conda activate base
           git clone -b $GITHUB_REF_NAME $GITHUB_SERVER_URL/$GITHUB_REPOSITORY .
-
       - name: Build and upload to dev label
         env:
           ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
@@ -28,7 +25,7 @@ jobs:
           conda config --set anaconda_upload yes
           conda build -c grimelab -e /opt/conda/conda_build_config.yaml \
           --label dev --user grimelab --token $ANACONDA_API_TOKEN recipe/grime-ai
-
+          conda clean -a -y
   nightly-container:
     name: Nightly Container Build
     runs-on: ubuntu-latest
@@ -36,35 +33,28 @@ jobs:
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@v5
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-
       - name: Read version.py metadata
         id: version
         run: |
           python - <<'EOF'
           import re, os
-
           with open("src/GRIME_AI/version.py") as f:
               content = f.read()
-
           def get_var(name):
               match = re.search(rf'^{name}\s*=\s*["\'](.+?)["\']', content, re.MULTILINE)
               return match.group(1) if match else ""
-
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"version={get_var('SW_VERSION')}.dev{get_var('BUILD_DATE').replace('-','')}\n")
               out.write(f"commit={get_var('SHA')[:7]}\n")
@@ -72,19 +62,15 @@ jobs:
               out.write(f"date={get_var('BUILD_DATE')}\n")
               out.write(f"package_name=grimelab/label/dev::grime-ai={get_var('SW_VERSION')}.dev{get_var('BUILD_DATE').replace('-','')}\n")
           EOF
-
-
       - name: Extract metadata for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=${{ steps.version.outputs.commit }}
             type=raw,value=nightly,enable=${{ github.ref == 'refs/heads/main' }}
-
-
       - name: Build and push
         uses: docker/build-push-action@v7
         with:

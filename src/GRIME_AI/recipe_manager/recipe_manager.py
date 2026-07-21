@@ -21,6 +21,7 @@ Run standalone to try it:  python grime_ai_recipe_manager.py
 
 import os
 import re
+import sys
 import json
 import datetime
 from dataclasses import dataclass, asdict
@@ -42,26 +43,78 @@ INPUT_FIELDS = [
 ]
 # Output-folder fields, in display order, mapped to their default sub-folder name.
 OUTPUT_FIELDS = [
-    ("composites",  "Composite slices"),
-    ("videos",      "Videos"),
-    ("gifs",        "GIFs"),
-    ("usgs",        "USGS downloads"),
-    ("neon",        "NEON downloads"),
+    ("composites",   "Composite slices"),
+    ("videos",       "Videos"),
+    ("gifs",         "GIFs"),
+    ("predictions",  "Segmentation results"),
+]
+# Download-manager destination folders (USGS / NEON / PhenoCam).
+DOWNLOAD_FIELDS = [
+    ("usgs",     "USGS"),
+    ("neon",     "NEON"),
+    ("phenocam", "PhenoCam"),
 ]
 # Machine-learning fields (set manually; NOT auto-derived/rebased from root).
 ML_FIELDS = [
     ("ml_images", "Training images"),
 ]
 # All editable path fields, for load / save round-tripping.
-PATH_FIELDS = INPUT_FIELDS + OUTPUT_FIELDS + ML_FIELDS
-# Auto-fill / rebase apply to OUTPUT folders only.
+PATH_FIELDS = INPUT_FIELDS + OUTPUT_FIELDS + DOWNLOAD_FIELDS + ML_FIELDS
+# Auto-fill / rebase apply to OUTPUT + DOWNLOAD folders.
 SUBFOLDER_DEFAULTS = {
-    "composites":  "composites",
-    "videos":      "Videos",
-    "gifs":        "GIFs",
-    "usgs":        "usgs",
-    "neon":        "neon",
+    "composites":   "composites",
+    "videos":       "Videos",
+    "gifs":         "GIFs",
+    "predictions":  "predictions",
+    "usgs":         "usgs",
+    "neon":         "neon",
+    "phenocam":     "phenocam",
 }
+
+# Muted, color-blind-safe (Okabe-Ito family) tint per folder group, as
+# (light-mode, dark-mode) so buttons and titles stay readable in both themes.
+GROUP_TINTS = {
+    "input":     ("#2F6690", "#7EB3DE"),
+    "output":    ("#9A6A15", "#E0B45E"),
+    "downloads": ("#1B7A5A", "#57C69E"),
+    "ml":        ("#8E3B6E", "#D488B4"),
+}
+
+
+def _rgb(hex_color):
+    h = hex_color.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _outline_button_style(color):
+    """Quiet outlined button (transparent fill, colored border + text), with
+    hover/press tinted in the button's own colour (matches the Reset button)."""
+    r, g, b = _rgb(color)
+    return (
+        f"QPushButton {{ background-color: transparent; color: {color};"
+        f" border: 1px solid {color}; padding: 4px 12px; border-radius: 3px; }}"
+        f"QPushButton:hover {{ background-color: rgba({r}, {g}, {b}, 0.12); }}"
+        f"QPushButton:pressed {{ background-color: rgba({r}, {g}, {b}, 0.22); }}"
+        f"QPushButton:disabled {{ color: rgba({r}, {g}, {b}, 0.40);"
+        f" border-color: rgba({r}, {g}, {b}, 0.35); }}"
+    )
+
+
+def _solid_button_style(color):
+    """Solid filled button (white text) with darker hover/press."""
+    r, g, b = _rgb(color)
+
+    def _dark(f):
+        return f"rgb({int(r * f)}, {int(g * f)}, {int(b * f)})"
+
+    return (
+        f"QPushButton {{ background-color: {color}; color: white;"
+        f" border: none; padding: 4px 14px; border-radius: 3px; }}"
+        f"QPushButton:hover {{ background-color: {_dark(0.88)}; }}"
+        f"QPushButton:pressed {{ background-color: {_dark(0.76)}; }}"
+        f"QPushButton:disabled {{ background-color: rgba({r}, {g}, {b}, 0.40);"
+        f" color: rgba(255, 255, 255, 0.8); }}"
+    )
 
 
 def _now_iso() -> str:
@@ -99,8 +152,10 @@ class Recipe:
     composites: str = ""
     videos: str = ""
     gifs: str = ""
+    predictions: str = ""
     usgs: str = ""
     neon: str = ""
+    phenocam: str = ""
     ml_images: str = ""
 
     def derive_from_root(self, overwrite: bool = False) -> None:
@@ -143,7 +198,7 @@ class Recipe:
         """Re-root every sub-folder that currently lives under `old_root`.
         Returns True if anything changed."""
         changed = False
-        for attr in ("composites", "videos", "gifs", "usgs", "neon"):
+        for attr in ("composites", "videos", "gifs", "predictions", "usgs", "neon", "phenocam"):
             new_val = Recipe.rebase_path(getattr(self, attr), old_root, new_root)
             if new_val != getattr(self, attr):
                 setattr(self, attr, new_val)
@@ -157,7 +212,8 @@ class Recipe:
     def from_dict(cls, d: dict) -> "Recipe":
         fields = ("name", "created", "modified", "root",
                   "image_input", "data_input",
-                  "composites", "videos", "gifs", "usgs", "neon",
+                  "composites", "videos", "gifs", "predictions",
+                  "usgs", "neon", "phenocam",
                   "ml_images")
         out = {k: d.get(k, "") for k in fields}
         # Back-compat: recipes saved before Videos/GIFs were split into two
@@ -244,9 +300,10 @@ class RecipeManagerDialog(QDialog):
 
     recipeActivated = pyqtSignal(object)  # emits a Recipe
 
-    def __init__(self, store: RecipeStore, parent=None):
+    def __init__(self, store: RecipeStore, parent=None, dark_mode=None):
         super().__init__(parent)
         self.store = store
+        self._dark_mode = dark_mode   # explicit theme flag; None -> detect from parent
         self._current: Optional[Recipe] = None
         self._loading = False   # guards field-change handlers during load
         self._dirty = False
@@ -254,8 +311,8 @@ class RecipeManagerDialog(QDialog):
         self._drafting = False  # True while a New (uncommitted) recipe is in the form
 
         self.setWindowTitle("GRIME AI — Recipe Manager")
-        self.setMinimumSize(820, 520)
-        self.resize(880, 600)
+        self.setMinimumSize(820, 620)
+        self.resize(900, 780)
         self._build_ui()
         self._refresh_list(select=self.store.active_name)
 
@@ -335,7 +392,10 @@ class RecipeManagerDialog(QDialog):
         self.name_edit = QLineEdit()
         self.name_edit.textEdited.connect(self._on_name_edited)
 
-        self.root_edit, root_row = self._path_row("Browse…", self._browse_root)
+        # Root browse is a solid steelblue button (distinct from the outlined
+        # group buttons; reads on both light and dark).
+        self.root_edit, root_row = self._path_row(
+            "Browse…", self._browse_root, color="#4682B4", solid=True)
         self.root_edit.textChanged.connect(self._on_root_changed)
         self.root_edit.editingFinished.connect(self._commit_root_change)
 
@@ -356,11 +416,12 @@ class RecipeManagerDialog(QDialog):
         # Per-path rows are built into self.path_edits and grouped below.
         self.path_edits = {}
 
-        def _build_group(title, fields, trailing=None):
+        def _build_group(title, fields, trailing=None, color=None):
             gform = QFormLayout()
             for attr, label in fields:
                 edit, row_w = self._path_row(
-                    "Browse…", lambda _=False, a=attr: self._browse_field(a))
+                    "Browse…", lambda _=False, a=attr: self._browse_field(a),
+                    color=color)
                 edit.textChanged.connect(
                     lambda _=None, a=attr: self._on_field_changed(a))
                 self.path_edits[attr] = edit
@@ -374,12 +435,17 @@ class RecipeManagerDialog(QDialog):
                 gform.addRow("", trow)
             box = QGroupBox(title)
             box.setLayout(gform)
+            if color:
+                box.setStyleSheet(f"QGroupBox::title {{ color: {color}; }}")
             return box
 
-        input_box = _build_group("Input folders", INPUT_FIELDS)
+        dark = self._is_dark()
+        _tint = lambda key: GROUP_TINTS[key][1 if dark else 0]
+
+        input_box = _build_group("Input folders", INPUT_FIELDS, color=_tint("input"))
 
         btn_reset = QPushButton("Reset")
-        btn_reset.setToolTip("Reset output sub-folders to root defaults")
+        btn_reset.setToolTip("Reset output and download sub-folders to root defaults")
         btn_reset.setFixedWidth(self._browse_w)
         btn_reset.setStyleSheet(
             "QPushButton { background-color: transparent; color: #c0392b;"
@@ -388,23 +454,43 @@ class RecipeManagerDialog(QDialog):
             "QPushButton:pressed { background-color: rgba(192, 57, 43, 0.22); }"
             "QPushButton:disabled { color: #d9a5a0; border-color: #e3c2be; }")
         btn_reset.clicked.connect(self._reset_subfolders)
-        output_box = _build_group("Output folders", OUTPUT_FIELDS, trailing=btn_reset)
-        ml_box = _build_group("Machine Learning", ML_FIELDS)
+        output_box = _build_group("Output folders", OUTPUT_FIELDS, color=_tint("output"))
+        download_box = _build_group("Downloads", DOWNLOAD_FIELDS, color=_tint("downloads"))
+        ml_box = _build_group("Machine Learning", ML_FIELDS, color=_tint("ml"))
 
-        editor_layout = QVBoxLayout()
-        editor_layout.addLayout(id_form)
-        editor_layout.addWidget(input_box)
-        editor_layout.addWidget(output_box)
-        editor_layout.addWidget(ml_box)
-        editor_layout.addStretch(1)
+        # Identity (Name / Root / Auto-fill / Created / Modified) lives in its
+        # own group box, pinned above the scrollable folder groups so it never
+        # scrolls out of view. Reset (recipe-wide) sits at its lower right.
+        id_box = QGroupBox("Recipe")
+        id_box_lay = QVBoxLayout()
+        id_box_lay.addLayout(id_form)
+        _reset_row = QHBoxLayout()
+        _reset_row.addStretch(1)
+        _reset_row.addWidget(btn_reset)
+        id_box_lay.addLayout(_reset_row)
+        id_box.setLayout(id_box_lay)
 
-        self.editor = QGroupBox("Recipe")
-        self.editor.setLayout(editor_layout)
+        # The folder groups scroll (they can get long).
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.addWidget(input_box)
+        body_lay.addWidget(output_box)
+        body_lay.addWidget(download_box)
+        body_lay.addWidget(ml_box)
+        body_lay.addStretch(1)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidget(self.editor)
+        scroll.setWidget(body)
+
+        editor_layout = QVBoxLayout()
+        editor_layout.addWidget(id_box)
+        editor_layout.addWidget(scroll, 1)
+
+        self.editor = QWidget()
+        self.editor.setLayout(editor_layout)
 
         # Empty-state placeholder shown when there is no recipe to edit
         # (e.g. a first-time user who hasn't created any recipes yet).
@@ -429,11 +515,12 @@ class RecipeManagerDialog(QDialog):
 
         self._stack = QStackedWidget()
         self._stack.addWidget(empty_page)   # index 0 = placeholder
-        self._stack.addWidget(scroll)       # index 1 = editor
+        self._stack.addWidget(self.editor)  # index 1 = editor
 
         # Bottom buttons
         bb = QDialogButtonBox()
         self.btn_save = bb.addButton("Save", QDialogButtonBox.AcceptRole)
+        self.btn_save.setStyleSheet(_solid_button_style("#4682B4"))
         self.btn_close = bb.addButton("Close", QDialogButtonBox.RejectRole)
         self.btn_save.clicked.connect(self._save)
         self.btn_close.clicked.connect(self.close)
@@ -449,11 +536,29 @@ class RecipeManagerDialog(QDialog):
         outer.addLayout(top, 1)
         outer.addWidget(bb)
 
-    def _path_row(self, browse_text, on_browse):
+    def _is_dark(self):
+        """Current theme: use the explicit dark_mode flag when provided, else
+        detect from the main window's dark-mode flag."""
+        if self._dark_mode is not None:
+            return bool(self._dark_mode)
+        w = self.parent()
+        while w is not None:
+            if hasattr(w, "_is_dark_mode"):
+                return bool(getattr(w, "_is_dark_mode"))
+            parent = getattr(w, "parent", None)
+            w = parent() if callable(parent) else None
+        return False
+
+    def _path_row(self, browse_text, on_browse, color=None, solid=False):
         edit = QLineEdit()
         btn = QPushButton(browse_text)
         btn.clicked.connect(on_browse)
-        btn.setStyleSheet(self._browse_style)
+        if color and solid:
+            btn.setStyleSheet(_solid_button_style(color))
+        elif color:
+            btn.setStyleSheet(_outline_button_style(color))
+        else:
+            btn.setStyleSheet(self._browse_style)
         btn.setFixedWidth(self._browse_w)
         w = QWidget()
         lay = QHBoxLayout(w)
@@ -840,28 +945,36 @@ class RecipeManagerDialog(QDialog):
 
 
 # --------------------------------------------------------------------------- #
-# Standalone test harness
+# Standalone entry
 # --------------------------------------------------------------------------- #
-if __name__ == "__main__":
-    import sys
+def open_manager(parent=None, dark_mode=None, on_activated=None):
+    """Open the Recipe Manager. Reuses an existing QApplication (when called
+    from inside GRIME AI) or creates one (standalone). Returns an exit code."""
     from PyQt5.QtWidgets import QApplication
-
-    app = QApplication(sys.argv)
-    # Standalone: operate on the real store (Documents/GRIME-AI/Settings).
     store = RecipeStore()
+    existing = QApplication.instance()
+    if existing is not None:
+        dlg = RecipeManagerDialog(store, parent=parent, dark_mode=dark_mode)
+        if on_activated is not None:
+            dlg.recipeActivated.connect(on_activated)
+        dlg.exec_()
+        return 0
+    app = QApplication(sys.argv)
+    dlg = RecipeManagerDialog(store, dark_mode=dark_mode)
+    if on_activated is not None:
+        dlg.recipeActivated.connect(on_activated)
+    dlg.show()
+    return app.exec_()
 
-    dlg = RecipeManagerDialog(store)
-    dlg.recipeActivated.connect(
-        lambda r: print(f"[activated] {r.name}\n"
-                        f"  created:     {r.created}\n"
-                        f"  modified:    {r.modified}\n"
-                        f"  root:        {r.root}\n"
-                        f"  image_input: {r.image_input}\n"
-                        f"  data_input:  {r.data_input}\n"
-                        f"  composites:  {r.composites}\n"
-                        f"  videos:      {r.videos}\n"
-                        f"  gifs:        {r.gifs}\n"
-                        f"  usgs:        {r.usgs}\n"
-                        f"  neon:        {r.neon}"))
-    dlg.exec_()
-    sys.exit(0)
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description="GRIME AI Recipe Manager (standalone).")
+    parser.add_argument("--dark", action="store_true",
+                        help="Use dark-mode button/title tints.")
+    args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+    return open_manager(dark_mode=args.dark)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

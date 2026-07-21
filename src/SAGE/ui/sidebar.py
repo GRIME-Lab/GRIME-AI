@@ -5,6 +5,10 @@ from PyQt5.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QAbstractItemView,
     QHBoxLayout,
     QPushButton,
     QButtonGroup,
@@ -12,6 +16,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QCheckBox,
     QStackedWidget,
+    QRadioButton,
     QSizePolicy,
     QFrame,
     QLineEdit,
@@ -19,8 +24,44 @@ from PyQt5.QtWidgets import (
     QMenu,
     QAction,
 )
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QByteArray
+from PyQt5.QtGui import QColor, QFont, QPixmap, QPainter, QIcon
+try:
+    from PyQt5.QtSvg import QSvgRenderer
+    _HAS_SVG = True
+except Exception:
+    _HAS_SVG = False
+
+
+_ICON_COLOR = "#8a9099"   # mid gray: legible on light and dark buttons
+
+_TOOL_SVGS = {
+    "draw": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+            '<path fill="{c}" d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25z'
+            'M20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0'
+            'l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>',
+    "select": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+              '<path fill="{c}" d="M6 2 L6 18 L10 14 L13 20 L15 19 L12 13 L17 13 Z"/></svg>',
+    "pan": '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">'
+           '<path fill="{c}" d="M23 5.5V20c0 2.2-1.8 4-4 4h-7.3c-1.08 0-2.1-.43-2.85-1.19'
+           'L1 14.83c0 0 1.26-1.23 1.3-1.25.22-.19.49-.29.79-.29.22 0 .42.06.6.16'
+           '.04.01 4.31 2.46 4.31 2.46V4c0-.83.67-1.5 1.5-1.5S12 3.17 12 4v7h1V1.5'
+           'c0-.83.67-1.5 1.5-1.5S16 .67 16 1.5V11h1V2.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5V11'
+           'h1V5.5c0-.83.67-1.5 1.5-1.5s1.5.67 1.5 1.5z"/></svg>',
+}
+
+_TOOL_FALLBACK = {"draw": "Draw", "select": "Select", "pan": "Pan"}
+
+
+def _tool_icon(kind: str, size: int = 22) -> QIcon:
+    svg = _TOOL_SVGS[kind].format(c=_ICON_COLOR)
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    renderer.render(p)
+    p.end()
+    return QIcon(pix)
 import os
 
 
@@ -34,14 +75,17 @@ MASK_STATE_PERSISTS = "persists"  # image changed, mask carried forward
 
 class Sidebar(QWidget):
     # Existing signals
-    image_selected              = pyqtSignal(str)
     save_all_coco_requested     = pyqtSignal()
+    mask_unlabeled_requested    = pyqtSignal()
     eraser_toggled              = pyqtSignal(bool)
     segmentation_mode_changed   = pyqtSignal(str)   # "points","polygon","paint","manual_polygon","mask"
+    tool_mode_changed           = pyqtSignal(str)   # "draw","select","pan"
     polygon_sampling_changed    = pyqtSignal(str)   # "dense","random","poisson"
     mask_selected               = pyqtSignal(int)   # mask_id; -1 = none selected
+    mask_reclicked              = pyqtSignal(int)   # mask_id; re-click of already-selected row
     mask_renamed                = pyqtSignal(int, str)  # mask_id, new_name
     label_class_renamed         = pyqtSignal(str, str)  # old_name, new_name
+    label_class_id_changed      = pyqtSignal(str, int, int)  # name, old_id, new_id
 
     # Seed-mask signals (previously lived in seed_groupbox)
     load_seed_mask_requested    = pyqtSignal()
@@ -64,30 +108,39 @@ class Sidebar(QWidget):
         self.on_clear_points      = on_clear_points
 
         layout = QVBoxLayout()
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(8)
 
-        # ----------------------------------------------------
-        # Image list
-        # ----------------------------------------------------
-        layout.addWidget(QLabel("Images:"))
-        self.image_list = QListWidget()
-        self.image_list.itemDoubleClicked.connect(self._on_image_double_clicked)
-        layout.addWidget(self.image_list)
+        # Internal state (must exist before lists are rebuilt)
+        self._label_classes = []   # list of {"name": str, "id": int, "protected"?: bool}, ordered
+        self._label_classes.append({"name": "Other", "id": 999, "protected": True})
+        self._active_label  = None
 
-        # ----------------------------------------------------
-        # Label Classes panel
-        # ----------------------------------------------------
-        lc_header_row = QHBoxLayout()
-        lc_header_row.addWidget(QLabel("Label Classes:"))
-        layout.addLayout(lc_header_row)
+        # ====================================================
+        # Section 1 — Label Classes
+        # ====================================================
+        label_group = QGroupBox("Label Classes")
+        lg = QVBoxLayout(label_group)
+        lg.setContentsMargins(8, 10, 8, 8)
+        lg.setSpacing(6)
 
-        self.label_class_list = QListWidget()
-        self.label_class_list.setMaximumHeight(90)
-        self.label_class_list.itemClicked.connect(self._on_label_class_clicked)
+        self.label_class_list = QTableWidget(0, 2)
+        self.label_class_list.setHorizontalHeaderLabels(["Name", "ID"])
+        self.label_class_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.label_class_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.label_class_list.verticalHeader().setVisible(False)
+        self.label_class_list.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.label_class_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.label_class_list.setEditTriggers(
+            QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+        )
+        self.label_class_list.setFixedHeight(150)
+        self.label_class_list.itemSelectionChanged.connect(self._on_label_class_selection_changed)
+        self.label_class_list.itemChanged.connect(self._on_label_class_item_changed)
+        self.label_class_list.itemDoubleClicked.connect(self.label_class_list.editItem)
         self.label_class_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.label_class_list.customContextMenuRequested.connect(self._on_label_class_context_menu)
-        layout.addWidget(self.label_class_list)
+        lg.addWidget(self.label_class_list)
 
         add_label_row = QHBoxLayout()
         self.new_label_input = QLineEdit()
@@ -98,59 +151,80 @@ class Sidebar(QWidget):
         add_btn.setFixedWidth(38)
         add_btn.clicked.connect(self._add_label_class)
         add_label_row.addWidget(add_btn)
-        del_btn = QPushButton("✕")
-        del_btn.setFixedWidth(26)
+        del_btn = QPushButton("Del")
+        del_btn.setFixedWidth(40)
         del_btn.setToolTip("Delete selected label class")
         del_btn.clicked.connect(self._delete_label_class)
         add_label_row.addWidget(del_btn)
-        layout.addLayout(add_label_row)
+        clr_btn = QPushButton("Clr")
+        clr_btn.setFixedWidth(40)
+        clr_btn.setToolTip("Clear all label classes (keeps 'Other')")
+        clr_btn.clicked.connect(self._clear_label_classes)
+        add_label_row.addWidget(clr_btn)
+        lg.addLayout(add_label_row)
+        layout.addWidget(label_group)
 
-        # ----------------------------------------------------
-        # Masks on this image
-        # ----------------------------------------------------
-        layout.addWidget(QLabel("Masks on this image:"))
+        # ====================================================
+        # Section 2 — Masks on this image  (+ Segment trigger)
+        # ====================================================
+        masks_group = QGroupBox("Masks on this image")
+        mg = QVBoxLayout(masks_group)
+        mg.setContentsMargins(8, 10, 8, 8)
+        mg.setSpacing(6)
+
         self.mask_list = QListWidget()
-        self.mask_list.setMaximumHeight(100)
+        self.mask_list.setFixedHeight(160)
         self.mask_list.itemChanged.connect(self._on_item_changed)
         self.mask_list.itemSelectionChanged.connect(self._on_mask_selection_changed)
+        # A click on the already-selected row emits mask_reclicked (used to
+        # stop a mask flash). itemClicked fires on release, after any
+        # itemSelectionChanged on press, so the flag below tells a genuine
+        # re-click (no selection change) from a new-row click.
+        self.mask_list.itemClicked.connect(self._on_mask_item_clicked)
+        self._mask_selection_changed = False
         self.mask_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.mask_list.customContextMenuRequested.connect(self._on_mask_context_menu)
-        layout.addWidget(self.mask_list)
-
-        # Internal state
-        self._label_classes = []   # list of str, ordered
-        self._active_label  = None  # str or None
-
-        # ----------------------------------------------------
-        # Segment controls
-        # ----------------------------------------------------
-        seg_groupbox = QGroupBox("Segment")
-        seg_layout   = QVBoxLayout(seg_groupbox)
-        seg_layout.setContentsMargins(8, 10, 8, 8)
-        seg_layout.setSpacing(6)
-
-        top_row = QHBoxLayout()
-
-        self.erase_btn = QPushButton("Erase")
-        self.erase_btn.setCheckable(True)
-        self.erase_btn.clicked.connect(self._on_erase_clicked)
-        top_row.addWidget(self.erase_btn)
-
-        self.clear_points_btn = QPushButton("Clear Points")
-        self.clear_points_btn.clicked.connect(self.on_clear_points)
-        top_row.addWidget(self.clear_points_btn)
-
-        seg_layout.addLayout(top_row)
+        mg.addWidget(self.mask_list)
 
         self.run_btn = QPushButton("Segment (Enter)")
         self.run_btn.clicked.connect(self.on_run_segmentation)
-        seg_layout.addWidget(self.run_btn)
+        mg.addWidget(self.run_btn)
+        layout.addWidget(masks_group)
 
-        layout.addWidget(seg_groupbox)
+        # ====================================================
+        # Tool — Draw / Select / Pan (top-level interaction mode)
+        # ====================================================
+        tool_groupbox = QGroupBox("Tool")
+        tool_row = QHBoxLayout(tool_groupbox)
+        tool_row.setContentsMargins(8, 10, 8, 8)
+        tool_row.setSpacing(6)
+        self._tool_group = QButtonGroup(self)
+        self._tool_group.setExclusive(True)
 
-        # ----------------------------------------------------
-        # Segmentation Mode  (2-col grid + full-width SAM2 Mask)
-        # ----------------------------------------------------
+        def _make_tool_btn(kind, tip):
+            b = QPushButton()
+            b.setToolTip(tip)
+            b.setCheckable(True)
+            if _HAS_SVG:
+                b.setIcon(_tool_icon(kind))
+                b.setIconSize(QSize(22, 22))
+            else:
+                b.setText(_TOOL_FALLBACK[kind])   # QtSvg missing → readable text
+            b.setMinimumHeight(38)
+            b.clicked.connect(lambda: self.tool_mode_changed.emit(kind))
+            self._tool_group.addButton(b)
+            tool_row.addWidget(b)
+            return b
+
+        self.draw_tool_btn   = _make_tool_btn("draw",   "Draw — annotate with the segmentation tools")
+        self.select_tool_btn = _make_tool_btn("select", "Select — click a mask to highlight it in the list")
+        self.pan_tool_btn    = _make_tool_btn("pan",    "Pan — drag to move the image when zoomed in")
+        self.draw_tool_btn.setChecked(True)
+        layout.addWidget(tool_groupbox)
+
+        # ====================================================
+        # Section 3 — Segmentation Mode  (radio sampling under Polygon)
+        # ====================================================
         mode_groupbox = QGroupBox("Segmentation Mode")
         mode_outer    = QVBoxLayout(mode_groupbox)
         mode_outer.setContentsMargins(8, 10, 8, 8)
@@ -160,45 +234,77 @@ class Sidebar(QWidget):
         mode_button_group = QButtonGroup(self)
         mode_button_group.setExclusive(True)
 
-        self.points_btn = QPushButton("SAM2 Points")
+        self.points_btn = QPushButton("Click or Drag")
+        self.points_btn.setToolTip("Click a point, or click-drag to add many. "
+                                   "Left = foreground, right = background.")
         self.points_btn.setCheckable(True)
         self.points_btn.setChecked(True)
         self.points_btn.clicked.connect(lambda: self._on_mode_button_clicked("points"))
         mode_button_group.addButton(self.points_btn)
-        mode_grid.addWidget(self.points_btn, 0, 0)
+        mode_grid.addWidget(self.points_btn, 0, 0, 1, 2)
 
-        self.polygon_btn = QPushButton("SAM2 Polygon")
+        self.polygon_btn = QPushButton("Polygon")
         self.polygon_btn.setCheckable(True)
         self.polygon_btn.clicked.connect(lambda: self._on_mode_button_clicked("polygon"))
         mode_button_group.addButton(self.polygon_btn)
-        mode_grid.addWidget(self.polygon_btn, 0, 1)
+        mode_grid.addWidget(self.polygon_btn, 1, 0)
 
-        self.paint_btn = QPushButton("SAM2 Paint")
-        self.paint_btn.setCheckable(True)
-        self.paint_btn.clicked.connect(lambda: self._on_mode_button_clicked("paint"))
-        mode_button_group.addButton(self.paint_btn)
-        mode_grid.addWidget(self.paint_btn, 1, 0)
+        # Polygon sampling — radio buttons stacked directly under the Polygon button.
+        samp_box = QVBoxLayout()
+        samp_box.setContentsMargins(8, 2, 0, 2)
+        samp_box.setSpacing(2)
+        sampling_group = QButtonGroup(self)
+        sampling_group.setExclusive(True)
 
-        # Full-width SAM2 Mask button on its own row
-        self.mask_btn = QPushButton("SAM2 Mask")
+        self.dense_radio = QRadioButton("Grid")
+        self.dense_radio.setChecked(True)
+        self.dense_radio.clicked.connect(lambda: self._on_sampling_button_clicked("dense"))
+        sampling_group.addButton(self.dense_radio)
+        samp_box.addWidget(self.dense_radio)
+
+        self.random_radio = QRadioButton("Random")
+        self.random_radio.clicked.connect(lambda: self._on_sampling_button_clicked("random"))
+        sampling_group.addButton(self.random_radio)
+        samp_box.addWidget(self.random_radio)
+
+        self.poisson_radio = QRadioButton("Disc")
+        self.poisson_radio.clicked.connect(lambda: self._on_sampling_button_clicked("poisson"))
+        sampling_group.addButton(self.poisson_radio)
+        samp_box.addWidget(self.poisson_radio)
+
+        self.sampling_container = QWidget()
+        self.sampling_container.setLayout(samp_box)
+        mode_grid.addWidget(self.sampling_container, 2, 0)
+
+        self.mask_btn = QPushButton("Import Mask")
         self.mask_btn.setCheckable(True)
         self.mask_btn.clicked.connect(lambda: self._on_mode_button_clicked("mask"))
         mode_button_group.addButton(self.mask_btn)
-        mode_grid.addWidget(self.mask_btn, 2, 0)
+        mode_grid.addWidget(self.mask_btn, 5, 0, 1, 2)
 
-        self.manual_draw_btn = QPushButton("SAM2 Freehand")
+        self.manual_draw_btn = QPushButton("Free-form")
         self.manual_draw_btn.setCheckable(True)
         self.manual_draw_btn.clicked.connect(lambda: self._on_mode_button_clicked("manual_draw"))
         mode_button_group.addButton(self.manual_draw_btn)
-        mode_grid.addWidget(self.manual_draw_btn, 1, 1)
+        mode_grid.addWidget(self.manual_draw_btn, 3, 0)
+
+        # Manual Free-form: freehand drag filled directly as a mask (like
+        # Manual Polygon, but a traced stroke instead of clicked vertices; no SAM2).
+        self.manual_freeform_btn = QPushButton("Manual Free-form")
+        self.manual_freeform_btn.setCheckable(True)
+        self.manual_freeform_btn.setToolTip(
+            "Drag to trace a free-form outline; the enclosed shape is filled "
+            "directly as a mask (no SAM2), like Manual Polygon.")
+        self.manual_freeform_btn.clicked.connect(lambda: self._on_mode_button_clicked("manual_freeform"))
+        mode_button_group.addButton(self.manual_freeform_btn)
+        mode_grid.addWidget(self.manual_freeform_btn, 3, 1)
 
         self.manual_polygon_btn = QPushButton("Manual Polygon")
         self.manual_polygon_btn.setCheckable(True)
         self.manual_polygon_btn.clicked.connect(lambda: self._on_mode_button_clicked("manual_polygon"))
         mode_button_group.addButton(self.manual_polygon_btn)
-        mode_grid.addWidget(self.manual_polygon_btn, 2, 1)
+        mode_grid.addWidget(self.manual_polygon_btn, 1, 1)
 
-        # Edge Trace — full-width, visually separated
         self.edge_trace_btn = QPushButton("⟿  Edge Trace")
         self.edge_trace_btn.setCheckable(True)
         self.edge_trace_btn.setToolTip(
@@ -208,73 +314,66 @@ class Sidebar(QWidget):
         )
         self.edge_trace_btn.clicked.connect(lambda: self._on_mode_button_clicked("edge_trace"))
         mode_button_group.addButton(self.edge_trace_btn)
-        mode_grid.addWidget(self.edge_trace_btn, 3, 0, 1, 2)  # full width, row 3
+        mode_grid.addWidget(self.edge_trace_btn, 4, 0, 1, 2)
 
         mode_outer.addLayout(mode_grid)
 
         # ---- Mask sub-panel (QStackedWidget with 3 pages) ----
         self.mask_subpanel = QStackedWidget()
-        self.mask_subpanel.setVisible(False)   # hidden until SAM2 Mask mode is active
-
-        # Page 0: LOCKED — load gate
+        self.mask_subpanel.setVisible(False)
         self.mask_subpanel.addWidget(self._build_subpanel_locked())
-
-        # Page 1: LOADED — full controls
         self.mask_subpanel.addWidget(self._build_subpanel_loaded())
-
-        # Page 2: PERSISTS — amber carry-forward warning
         self.mask_subpanel.addWidget(self._build_subpanel_persists())
-
         mode_outer.addWidget(self.mask_subpanel)
         layout.addWidget(mode_groupbox)
 
-        # ----------------------------------------------------
-        # Polygon Sampling
-        # ----------------------------------------------------
-        self.sampling_groupbox = QGroupBox("Polygon Sampling")
-        sampling_row   = QHBoxLayout()
-        sampling_group = QButtonGroup(self)
-        sampling_group.setExclusive(True)
-
-        self.dense_radio = QPushButton("Grid")
-        self.dense_radio.setCheckable(True)
-        self.dense_radio.setChecked(True)
-        self.dense_radio.clicked.connect(lambda: self._on_sampling_button_clicked("dense"))
-        sampling_group.addButton(self.dense_radio)
-        sampling_row.addWidget(self.dense_radio)
-
-        self.random_radio = QPushButton("Random")
-        self.random_radio.setCheckable(True)
-        self.random_radio.clicked.connect(lambda: self._on_sampling_button_clicked("random"))
-        sampling_group.addButton(self.random_radio)
-        sampling_row.addWidget(self.random_radio)
-
-        self.poisson_radio = QPushButton("Disc")
-        self.poisson_radio.setCheckable(True)
-        self.poisson_radio.clicked.connect(lambda: self._on_sampling_button_clicked("poisson"))
-        sampling_group.addButton(self.poisson_radio)
-        sampling_row.addWidget(self.poisson_radio)
-
-        self.sampling_groupbox.setLayout(sampling_row)
-        layout.addWidget(self.sampling_groupbox)
-
-        # start disabled (default mode = points)
+        # sampling starts disabled (default mode = points)
         self._update_sampling_enabled_state(False)
 
-        # ----------------------------------------------------
-        # Save COCO
-        # ----------------------------------------------------
+        # ====================================================
+        # Section 4 — Segment (Erase / Clear Points)
+        # ====================================================
+        seg_groupbox = QGroupBox("Segment")
+        seg_layout   = QHBoxLayout(seg_groupbox)
+        seg_layout.setContentsMargins(8, 10, 8, 8)
+        seg_layout.setSpacing(6)
+
+        self.erase_btn = QPushButton("Erase")
+        self.erase_btn.setCheckable(True)
+        self.erase_btn.clicked.connect(self._on_erase_clicked)
+        seg_layout.addWidget(self.erase_btn)
+
+        self.clear_points_btn = QPushButton("Clear Points")
+        self.clear_points_btn.clicked.connect(self.on_clear_points)
+        seg_layout.addWidget(self.clear_points_btn)
+        layout.addWidget(seg_groupbox)
+
+        # ====================================================
+        # Section 5 — Mask Unlabeled + Save
+        # ====================================================
+        self.mask_unlabeled_btn = QPushButton("Mask Unlabeled")
+        self.mask_unlabeled_btn.setToolTip(
+            "Assign every pixel not yet in a mask to a single 'Other' region.\n"
+            "Use as a final step, after all target regions are labeled. Re-click to regenerate.")
+        self.mask_unlabeled_btn.clicked.connect(self.mask_unlabeled_requested.emit)
+        layout.addWidget(self.mask_unlabeled_btn)
+
         self.save_all_btn = QPushButton("Save COCO 1.0 (All Images)")
         self.save_all_btn.clicked.connect(self.save_all_coco_requested.emit)
         self.save_all_btn.setMinimumHeight(42)
-        self.save_all_btn.setStyleSheet(
-            "QPushButton { background-color: #5cb85c; color: white;"
-            "              font-weight: bold; border-radius: 6px; }"
-            "QPushButton:hover { background-color: #4cae4c; }"
-        )
+        self.save_all_btn.setObjectName("saveButton")   # themed as the primary/commit action
         layout.addWidget(self.save_all_btn)
+        layout.addStretch(1)
 
         self.setLayout(layout)
+        self.setObjectName("sagePanel")
+
+        # Draw the label table now so the protected 'Other' class is visible from
+        # launch, rather than appearing only when the first label is added.
+        self._rebuild_label_class_list()
+
+        from SAGE.ui.theme import apply_theme
+        apply_theme(self, "light")   # call self.set_theme("light"/"dark") to switch
 
     # =========================================================
     # Sub-panel builders
@@ -450,12 +549,11 @@ class Sidebar(QWidget):
 
         is_mask    = mode == "mask"
         is_polygon = mode in ("polygon", "paint", "mask", "manual_draw")
-        is_edge_trace = mode == "edge_trace"
 
         # Show / hide the mask sub-panel
         self.mask_subpanel.setVisible(is_mask)
 
-        # Sampling enabled for polygon, paint, mask, and manual_draw modes
+        # Sampling enabled for polygon-family modes
         self._update_sampling_enabled_state(is_polygon)
 
         # SAM2 Mask defaults to Random sampling
@@ -463,39 +561,16 @@ class Sidebar(QWidget):
             self.random_radio.setChecked(True)
             self._on_sampling_button_clicked("random")
 
-        # Style: green for polygon-family modes, teal for edge trace
-        if is_edge_trace:
-            self.edge_trace_btn.setStyleSheet(
-                "QPushButton:checked { background-color: #0097a7; color: white; }"
-            )
-            for btn in (self.polygon_btn, self.paint_btn, self.mask_btn, self.manual_draw_btn):
-                btn.setStyleSheet("")
-            self._update_sampling_button_style("")
-        elif is_polygon:
-            self.edge_trace_btn.setStyleSheet("")
-            color = "#4CAF50"
-            for btn in (self.polygon_btn, self.paint_btn, self.mask_btn, self.manual_draw_btn):
-                btn.setStyleSheet(
-                    f"QPushButton:checked {{ background-color: {color}; color: black; }}"
-                )
-            self._update_sampling_button_style(color)
-        else:
-            self.edge_trace_btn.setStyleSheet("")
-            for btn in (self.polygon_btn, self.paint_btn, self.mask_btn, self.manual_draw_btn):
-                btn.setStyleSheet("")
-            self._update_sampling_button_style("")
+        # Selected-button appearance is handled by the theme's QSS :checked rule.
+
+    def set_theme(self, mode: str):
+        """Switch the panel between 'light' and 'dark'."""
+        from SAGE.ui.theme import apply_theme
+        apply_theme(self, mode)
 
     def _update_sampling_enabled_state(self, enabled: bool):
         for btn in (self.dense_radio, self.random_radio, self.poisson_radio):
             btn.setEnabled(enabled)
-
-    def _update_sampling_button_style(self, color: str):
-        style = (
-            f"QPushButton:checked {{ background-color: {color}; color: black; }}"
-            if color else ""
-        )
-        for btn in (self.dense_radio, self.random_radio, self.poisson_radio):
-            btn.setStyleSheet(style)
 
     def _on_sampling_button_clicked(self, mode: str):
         self.polygon_sampling_changed.emit(mode)
@@ -542,13 +617,22 @@ class Sidebar(QWidget):
     def _label_color(self, index: int) -> str:
         return self._LABEL_COLORS[index % len(self._LABEL_COLORS)]
 
+    def _names(self) -> list:
+        return [lc["name"] for lc in self._label_classes]
+
+    def _ids(self) -> list:
+        return [lc["id"] for lc in self._label_classes]
+
+    def _next_id(self) -> int:
+        return (max(self._ids()) + 1) if self._label_classes else 1
+
     def _add_label_class(self):
         """Add a new label class from the input field."""
         name = self.new_label_input.text().strip()
-        if not name or name in self._label_classes:
+        if not name or name in self._names():
             self.new_label_input.clear()
             return
-        self._label_classes.append(name)
+        self._label_classes.append({"name": name, "id": self._next_id()})
         self._rebuild_label_class_list()
         if len(self._label_classes) == 1:
             self._set_active_label(name)
@@ -557,60 +641,154 @@ class Sidebar(QWidget):
     def add_label_classes_from_mask(self, names: list):
         """Called when SAM2 Mask file is loaded — populate classes from mask."""
         for name in names:
-            if name and name not in self._label_classes:
-                self._label_classes.append(name)
+            if name and name not in self._names():
+                self._label_classes.append({"name": name, "id": self._next_id()})
         self._rebuild_label_class_list()
         if not self._active_label and self._label_classes:
-            self._set_active_label(self._label_classes[0])
+            self._set_active_label(self._label_classes[0]["name"])
 
     def _delete_label_class(self):
         row = self.label_class_list.currentRow()
         if row < 0:
             return
-        name = self._label_classes[row]
+        if self._label_classes[row].get("protected"):
+            return
+        name = self._label_classes[row]["name"]
         self._label_classes.pop(row)
         if self._active_label == name:
-            self._active_label = self._label_classes[0] if self._label_classes else None
+            self._active_label = self._label_classes[0]["name"] if self._label_classes else None
+        self._rebuild_label_class_list()
+
+    def _clear_label_classes(self):
+        """Remove all user-defined label classes, keeping the protected
+        'Other'. For starting a new dataset with different labels. Does not
+        delete masks already on the canvas."""
+        removable = [lc for lc in self._label_classes if not lc.get("protected")]
+        if not removable:
+            return
+        from PyQt5.QtWidgets import QMessageBox
+        resp = QMessageBox.question(
+            self, "Clear Labels",
+            f"Remove all {len(removable)} label class(es)? 'Other' is kept.\n\n"
+            "Masks already on the canvas are not deleted.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if resp != QMessageBox.Yes:
+            return
+        self._label_classes = [lc for lc in self._label_classes if lc.get("protected")]
+        non_protected = [lc["name"] for lc in self._label_classes if not lc.get("protected")]
+        self._active_label = non_protected[0] if non_protected else None
         self._rebuild_label_class_list()
 
     def _rebuild_label_class_list(self):
-        self.label_class_list.blockSignals(True)
-        self.label_class_list.clear()
-        for i, name in enumerate(self._label_classes):
-            item = QListWidgetItem(f"  {name}")
-            item.setData(Qt.UserRole, name)
-            color = QColor(self._label_color(i))
-            item.setForeground(color)
-            if name == self._active_label:
-                item.setBackground(QColor("#dbeafe"))
-            self.label_class_list.addItem(item)
-        self.label_class_list.blockSignals(False)
+        tbl = self.label_class_list
+        tbl.blockSignals(True)
+        tbl.setRowCount(0)
+        for i, lc in enumerate(self._label_classes):
+            tbl.insertRow(i)
+            protected = lc.get("protected", False)
+            color = QColor("#c026d3") if protected else QColor(self._label_color(i))  # predefined = magenta
+            highlight = QColor("#dbeafe") if lc["name"] == self._active_label else None
+            editable = Qt.ItemIsEditable if not protected else Qt.NoItemFlags
+            tip = "Predefined class — cannot be renamed, re-numbered, or deleted." if protected else None
 
-    def _on_label_class_clicked(self, item: QListWidgetItem):
-        self._set_active_label(item.data(Qt.UserRole))
+            name_item = QTableWidgetItem(lc["name"])
+            name_item.setData(Qt.UserRole, lc["name"])   # original for revert/diff
+            name_item.setForeground(color)
+            name_item.setFlags((name_item.flags() | Qt.ItemIsEditable) if not protected
+                               else name_item.flags() & ~Qt.ItemIsEditable)
+            if tip:
+                name_item.setToolTip(tip)
+            if highlight:
+                name_item.setBackground(highlight)
+            tbl.setItem(i, 0, name_item)
+
+            id_item = QTableWidgetItem(str(lc["id"]))
+            id_item.setData(Qt.UserRole, lc["id"])       # original for revert
+            id_item.setTextAlignment(Qt.AlignCenter)
+            id_item.setForeground(color)
+            id_item.setFlags((id_item.flags() | Qt.ItemIsEditable) if not protected
+                             else id_item.flags() & ~Qt.ItemIsEditable)
+            if tip:
+                id_item.setToolTip(tip)
+            if highlight:
+                id_item.setBackground(highlight)
+            tbl.setItem(i, 1, id_item)
+        tbl.blockSignals(False)
+
+    def _on_label_class_selection_changed(self):
+        row = self.label_class_list.currentRow()
+        if 0 <= row < len(self._label_classes):
+            self._set_active_label(self._label_classes[row]["name"])
+
+    def _on_label_class_item_changed(self, item: QTableWidgetItem):
+        row = item.row()
+        col = item.column()
+        if row < 0 or row >= len(self._label_classes):
+            return
+        if self._label_classes[row].get("protected"):
+            self._rebuild_label_class_list()
+            return
+
+        self.label_class_list.blockSignals(True)
+        try:
+            if col == 0:
+                new_name = item.text().strip()
+                old_name = item.data(Qt.UserRole)
+                if not new_name or new_name == old_name:
+                    item.setText(old_name)
+                    return
+                if new_name in self._names():
+                    item.setText(old_name)  # duplicate — revert
+                    return
+                self._label_classes[row]["name"] = new_name
+                if self._active_label == old_name:
+                    self._active_label = new_name
+                self.label_class_renamed.emit(old_name, new_name)
+            elif col == 1:
+                old_id = item.data(Qt.UserRole)
+                try:
+                    new_id = int(item.text().strip())
+                except ValueError:
+                    item.setText(str(old_id))
+                    return
+                if new_id == old_id:
+                    return
+                if new_id in (lc["id"] for i, lc in enumerate(self._label_classes) if i != row):
+                    item.setText(str(old_id))  # duplicate — revert
+                    return
+                self._label_classes[row]["id"] = new_id
+                self.label_class_id_changed.emit(
+                    self._label_classes[row]["name"], old_id, new_id
+                )
+        finally:
+            self.label_class_list.blockSignals(False)
+            self._rebuild_label_class_list()
 
     def _on_label_class_context_menu(self, pos):
         item = self.label_class_list.itemAt(pos)
         if item is None:
             return
+        if self._label_classes[item.row()].get("protected"):
+            return
         menu = QMenu(self)
         rename_action = QAction("Rename…", self)
-        rename_action.triggered.connect(lambda: self._rename_label_class(item))
+        rename_action.triggered.connect(lambda: self._rename_label_class(item.row()))
         menu.addAction(rename_action)
         menu.exec_(self.label_class_list.mapToGlobal(pos))
 
-    def _rename_label_class(self, item: QListWidgetItem):
-        old_name = item.data(Qt.UserRole)
+    def _rename_label_class(self, row: int):
+        if not (0 <= row < len(self._label_classes)):
+            return
+        old_name = self._label_classes[row]["name"]
         new_name, ok = QInputDialog.getText(
             self, "Rename Label", "New label name:", text=old_name
         )
         new_name = new_name.strip()
         if not ok or not new_name or new_name == old_name:
             return
-        if new_name in self._label_classes:
+        if new_name in self._names():
             return  # already exists
-        idx = self._label_classes.index(old_name)
-        self._label_classes[idx] = new_name
+        self._label_classes[row]["name"] = new_name
         if self._active_label == old_name:
             self._active_label = new_name
         self._rebuild_label_class_list()
@@ -618,45 +796,89 @@ class Sidebar(QWidget):
 
     def _set_active_label(self, name: str):
         self._active_label = name
-        self._rebuild_label_class_list()
+        # Recolor rows in place — do NOT rebuild (that cancels an open editor).
+        tbl = self.label_class_list
+        tbl.blockSignals(True)
+        for i, lc in enumerate(self._label_classes):
+            hl = QColor("#dbeafe") if lc["name"] == name else QColor(Qt.white)
+            for c in (0, 1):
+                it = tbl.item(i, c)
+                if it:
+                    it.setBackground(hl)
+        tbl.blockSignals(False)
 
     def get_active_label(self) -> str | None:
         """Return active label, or None if no label classes have been defined."""
         return self._active_label or None
 
-    def get_label_classes(self) -> list:
-        """Return the current ordered list of label class names."""
-        return list(self._label_classes)
+    def get_active_label_id(self) -> int | None:
+        """Return the ID of the currently active label, or None."""
+        for lc in self._label_classes:
+            if lc["name"] == self._active_label:
+                return lc["id"]
+        return None
 
-    def set_label_classes(self, names: list):
-        """Replace all label classes with a new list (e.g. from CSV import)."""
-        self._label_classes = list(names)
+    def get_label_classes(self) -> list:
+        """Return the current ordered list of label class names (backward-compatible)."""
+        return self._names()
+
+    def get_label_classes_with_ids(self) -> list:
+        """Return ordered list of (name, id) tuples — use for COCO export."""
+        return [(lc["name"], lc["id"]) for lc in self._label_classes]
+
+    def set_label_classes(self, names, ids=None):
+        """
+        Replace all label classes. Accepts either:
+          - list[str] (auto-assign IDs starting at 1)
+          - list[(name, id)] tuples
+          - list[str] + parallel `ids` list
+        """
+        self._label_classes = []
+        if names and isinstance(names[0], tuple):
+            for name, lid in names:
+                self._label_classes.append({"name": name, "id": int(lid)})
+        elif ids is not None:
+            for name, lid in zip(names, ids):
+                self._label_classes.append({"name": name, "id": int(lid)})
+        else:
+            for i, name in enumerate(names, start=1):
+                self._label_classes.append({"name": name, "id": i})
+        # A predefined 'Other' (id 999, protected) must always exist and cannot
+        # be loaded away by a file's categories. Promote an existing one to
+        # protected, or seed it; keep it pinned at the top.
+        self._label_classes = [lc for lc in self._label_classes if lc["name"] != "Other"]
+        self._label_classes.insert(0, {"name": "Other", "id": 999, "protected": True})
         # Reset active label to first class if current one no longer exists
-        if self._active_label not in self._label_classes:
-            self._active_label = self._label_classes[0] if self._label_classes else None
+        if self._active_label not in self._names():
+            non_protected = [lc["name"] for lc in self._label_classes if not lc.get("protected")]
+            self._active_label = non_protected[0] if non_protected else None
         self._rebuild_label_class_list()
 
     def get_color_for_label(self, name: str) -> tuple:
         """Return (r, g, b) tuple for a label class, consistent across all instances."""
         try:
-            idx = self._label_classes.index(name)
+            idx = self._names().index(name)
         except ValueError:
             idx = abs(hash(name)) % len(self._LABEL_COLORS)
-        hex_color = self._label_color(idx)
-        # Convert hex string to (r, g, b)
-        h = hex_color.lstrip("#")
+        h = self._label_color(idx).lstrip("#")
         return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
 
     # =========================================================
-    # Image list
-    # =========================================================
-
-    def _on_image_double_clicked(self, item):
-        self.image_selected.emit(item.text())
-
     # =========================================================
     # Mask list (instances on this image)
     # =========================================================
+
+    def select_mask_in_list(self, mask_id: int):
+        """Highlight and scroll to the row for `mask_id` without re-emitting
+        mask_selected (avoids a canvas→list→canvas feedback loop)."""
+        for i in range(self.mask_list.count()):
+            item = self.mask_list.item(i)
+            if item.data(Qt.UserRole) == mask_id:
+                self.mask_list.blockSignals(True)
+                self.mask_list.setCurrentRow(i)
+                self.mask_list.blockSignals(False)
+                self.mask_list.scrollToItem(item)
+                return
 
     def refresh_masks(self):
         self.mask_list.blockSignals(True)
@@ -679,11 +901,25 @@ class Sidebar(QWidget):
         self.on_visibility_changed()
 
     def _on_mask_selection_changed(self):
+        # Mark that this click changed the selection; consumed in
+        # _on_mask_item_clicked so the paired itemClicked is not a re-click.
+        self._mask_selection_changed = True
         items = self.mask_list.selectedItems()
         if items:
             self.mask_selected.emit(items[0].data(Qt.UserRole))
         else:
             self.mask_selected.emit(-1)
+
+    def _on_mask_item_clicked(self, item: QListWidgetItem):
+        """Emit mask_reclicked when the click landed on the already-selected
+        row. A new-row click fires itemSelectionChanged (flag set) before this;
+        a re-click fires only itemClicked, so a clear flag here means the
+        selection did not change."""
+        if self._mask_selection_changed:
+            self._mask_selection_changed = False   # paired with a new-row click
+            return
+        if item is not None:
+            self.mask_reclicked.emit(item.data(Qt.UserRole))
 
     def _on_mask_context_menu(self, pos):
         item = self.mask_list.itemAt(pos)
@@ -701,10 +937,11 @@ class Sidebar(QWidget):
             return
         mask_id = item.data(Qt.UserRole)
         old_name = item.text()
-        current_idx = self._label_classes.index(old_name) if old_name in self._label_classes else 0
+        names = self._names()
+        current_idx = names.index(old_name) if old_name in names else 0
         new_name, ok = QInputDialog.getItem(
             self, "Rename Mask", "Select label:",
-            self._label_classes, current_idx, editable=False
+            names, current_idx, editable=False
         )
         if not ok or new_name == old_name:
             return
