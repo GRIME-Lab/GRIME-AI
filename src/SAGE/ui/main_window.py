@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
         self.seed_mask_path = None  # path to .tif/.tiff mask
         self.seed_mask_bool = None  # cached boolean mask resized to current image
         self.auto_seed_enabled = True  # auto-apply when each image loads
+        self._loaded_signature = None  # content hash of masks as last loaded/saved
         self.eraser_radius = 18
         self._opacity_percent = int(120 / 255 * 100)  # default; overwritten below from sage.json
 
@@ -113,6 +114,10 @@ class MainWindow(QMainWindow):
             on_right_click=self._on_right_click_handler,
             parent=self
         )
+        # Expand to fill the window, and allow it to shrink so the window can
+        # collapse smaller (QGraphicsView otherwise floors the height).
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.canvas.setMinimumSize(0, 0)
         self.canvas.eraser_move.connect(self._erase_seeds_at)
         # Default "Click or Drag" button maps to paint-style placement.
         self.canvas.set_segmentation_mode("paint")
@@ -170,8 +175,23 @@ class MainWindow(QMainWindow):
         self.sidebar.tool_mode_changed.connect(self.canvas.set_tool_mode)
         self.canvas.mask_clicked.connect(self._on_canvas_mask_clicked)
 
-        layout.addWidget(self.sidebar, stretch=1)
-        main_layout.addLayout(layout)
+        # Wrap the sidebar in a scroll area so the window can shrink below the
+        # combined height of the sidebar's stacked widgets. The scroll area is
+        # forced to a zero minimum height, so instead of flooring the window it
+        # shows a vertical scrollbar when the viewport is shorter than the
+        # sidebar needs. widgetResizable keeps the sidebar filling the column
+        # width (no horizontal scrollbar).
+        from PyQt5.QtWidgets import QScrollArea
+        self.sidebar.setMinimumHeight(0)
+        self._sidebar_scroll = QScrollArea()
+        self._sidebar_scroll.setWidget(self.sidebar)
+        self._sidebar_scroll.setWidgetResizable(True)
+        self._sidebar_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._sidebar_scroll.setMinimumHeight(0)
+        layout.addWidget(self._sidebar_scroll, stretch=1)
+        main_layout.addLayout(layout, stretch=1)
 
         self.setCentralWidget(central)
 
@@ -590,9 +610,13 @@ class MainWindow(QMainWindow):
         """Propagate a label class rename to all existing mask entries."""
         if self.controller is None:
             return
+        renamed = False
         for m in self.controller.masks:
             if m["label"] == old_name:
                 m["label"] = new_name
+                renamed = True
+        if renamed:
+            self.controller.dirty = True
         self.sidebar.refresh_masks()
 
     def _on_mask_renamed(self, mask_id: int, new_name: str):
@@ -603,6 +627,7 @@ class MainWindow(QMainWindow):
             if m["id"] == mask_id:
                 m["label"] = new_name
                 m["color"] = self.sidebar.get_color_for_label(new_name)
+                self.controller.dirty = True
                 break
         self.sidebar.refresh_masks()
         self._update_canvas()
@@ -1552,6 +1577,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Failed", str(e))
             return
+        if self.controller is not None:
+            self.controller.dirty = False
+            self._loaded_signature = self._masks_signature()
 
         n_imgs = len(self._coco_buffer.doc["images"])
         n_anns = len(self._coco_buffer.doc["annotations"])
@@ -1564,12 +1592,34 @@ class MainWindow(QMainWindow):
     # ---------------------------------------------------------
     # Load a new image when double-clicked in the sidebar
     # ---------------------------------------------------------
+    def _masks_signature(self):
+        """Content hash of the current masks (id, label, visibility, pixels).
+        Stable across a lossless load->flush round-trip; changes only on a real
+        edit. Drift-proof: needs nothing from the controller object."""
+        import hashlib
+        if self.controller is None:
+            return None
+        h = hashlib.md5()
+        for m in sorted(self.controller.masks, key=lambda mm: mm.get("id", 0)):
+            h.update(str(m.get("id", "")).encode())
+            h.update(str(m.get("label", "")).encode())
+            h.update(b"1" if m.get("visible", True) else b"0")
+            h.update(np.ascontiguousarray(m["mask"]).tobytes())
+        return h.hexdigest()
+
     def _flush_current_to_buffer(self):
         """Write the open image's masks to the disk buffer as polygons+RLE+bbox."""
         if self._coco_buffer is None or self.current_image_path is None:
             return
-        if self.controller is not None:
-            self.controller.recompute_fill()   # keep 'Other' exact after edits
+        # Only flush images whose mask CONTENT actually changed since load/save.
+        # A content signature is drift-proof and can't be fooled by a re-encode
+        # (polygon->RLE) that leaves the masks identical — which is what caused
+        # the spurious 'unsaved changes' prompt on close.
+        if self.controller is None:
+            return
+        if self._masks_signature() == self._loaded_signature:
+            return
+        self.controller.recompute_fill()   # keep 'Other' exact after edits
         filename = os.path.basename(self.current_image_path)
         h, w = self.image_np.shape[:2]
         name_to_id = {n: i for n, i in self.sidebar.get_label_classes_with_ids()}
@@ -1633,6 +1683,9 @@ class MainWindow(QMainWindow):
             self.controller.masks = copy.deepcopy(self.mask_store[full_path])
         elif self._coco_buffer is not None:
             self.controller.masks = self._masks_from_buffer(filename)
+        # Restored state is not an edit; snapshot it as the clean baseline.
+        self.controller.dirty = False
+        self._loaded_signature = self._masks_signature()
 
         # Auto-seed points from seed mask if available
         if self.seed_mask_path and self.auto_seed_enabled:

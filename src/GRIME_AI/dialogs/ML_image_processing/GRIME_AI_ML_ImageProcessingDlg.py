@@ -26,16 +26,10 @@ from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget
 from PyQt5.uic import loadUi
 
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-from GRIME_AI.dialogs.ML_image_processing.training_tab import TrainingTab
-from GRIME_AI.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
-from GRIME_AI.dialogs.ML_image_processing.holdout_validation_tab import HoldoutValidationTab
-from GRIME_AI.dialogs.ML_image_processing.roi_analyzer_tab import ROIAnalyzerTab
-from GRIME_AI.dialogs.ML_image_processing.correlation_analyzer_tab import CorrelationAnalyzerTab
-from GRIME_AI.dialogs.ML_image_processing.coco_generation import COCOGeneration
+# Tab classes are imported lazily in _add_tab_safe() so a missing or broken tab
+# module cannot stop this dialog from loading. ModelConfigManager is not a tab
+# and is imported normally.
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
-from GRIME_AI.dialogs.ML_image_processing.annotation_analyzer_tab import AnnotationAnalyzerTab
-from GRIME_AI.dialogs.ML_image_processing.mask_viewer import CocoViewerTab
-from GRIME_AI.dialogs.ML_image_processing.surface_state_classifier_tab import SurfaceStateClassifierTab
 
 # ======================================================================================================================
 # ======================================================================================================================
@@ -50,6 +44,8 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
     # ******************************************************************************************************************
     # * INITIALIZE DIALOGBOX AND  TABS     *     INITIALIZE DIALOGBOX AND TABS     *     INITIALIZE DIALOGBOX AND TABS *
     # ******************************************************************************************************************
+    PLUGIN_API_VERSION = 1
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -74,84 +70,52 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
         # TRAINING TAB    ---    TRAINING TAB    ---   TRAINING TAB    ---    TRAINING TAB    ---    TRAINING TAB
         # --------------------------------------------------------------------------------------------------------------
         # Instantiate the TrainingTab and add it to the tabWidget
-        self.training_tab = TrainingTab(self)
-        self.tabWidget.addTab(self.training_tab, "Train Model")
+        _MOD = "GRIME_AI.dialogs.ML_image_processing."
 
-        self.training_tab.ml_train_signal.connect(self.ml_train_signal)
+        self.training_tab = self._add_tab_safe(
+            "Train Model", _MOD + "training_tab", "TrainingTab",
+            post=lambda t: t.ml_train_signal.connect(self.ml_train_signal))
 
         # --------------------------------------------------------------------------------------------------------------
         # SEGMENT IMAGES TAB    ---    SEGMENT IMAGES TAB    ---    SEGMENT IMAGES TAB    ---   SEGMENT IMAGES TAB
         # --------------------------------------------------------------------------------------------------------------
         # Instantiate the SegmentTab and add it to the tabWidget
-        self.segment_tab = SegmentImagesTab(self)
-        self.tabWidget.addTab(self.segment_tab, "Segment Images")
+        self.segment_tab = self._add_tab_safe(
+            "Segment Images", _MOD + "segment_images_tab", "SegmentImagesTab",
+            post=lambda t: t.ml_segment_signal.connect(self.ml_segment_signal))
 
         # Instantiate the HoldoutValidationTab and add it to the tabWidget
-        self.holdout_tab = HoldoutValidationTab(self)
-        self.tabWidget.addTab(self.holdout_tab, "Holdout Validation")
-
-        self.segment_tab.ml_segment_signal.connect(self.ml_segment_signal)
 
         # --------------------------------------------------------------------------------------------------------------
         # ROI ANALYZER TAB     ---     ROI ANALYZER TAB     ---     ROI ANALYZER TAB     ---     ROI ANALYZER TAB
         # --------------------------------------------------------------------------------------------------------------
         # Create the ROI Analyzer tab widget
-        self.roi_tab = ROIAnalyzerTab(self)
-
-        # Load the ROI Analyzer tab UI into the ROIAnalyzerTab instance
-        loadUi(ui_path("ML_image_processing/roi_analyzer_tab.ui"), self.roi_tab)
-
-        self.roi_tab.configure_filmstrip()
-        self.roi_tab.wire_connections()
-
-        # Add ROI Analyzer tab to the tabWidget
-        self.tabWidget.addTab(self.roi_tab, "ROI Analyzer")
+        self.roi_tab = self._add_tab_safe(
+            "ROI Analyzer", _MOD + "roi_analyzer_tab", "ROIAnalyzerTab",
+            ui_rel="ML_image_processing/roi_analyzer_tab.ui",
+            post=lambda t: (t.configure_filmstrip(), t.wire_connections()))
 
         # --------------------------------------------------------------------------------------------------------------
         # COCO GENERATION TAB    ---    COCO GENERATION TAB    ---    COCO GENERATION TAB    ---    COCO GENERATION TAB
         # --------------------------------------------------------------------------------------------------------------
-        self.coco_generation_tab = COCOGeneration(self)
-
-        self.tabWidget.addTab(self.coco_generation_tab, "COCO 1.0 Generator")
+        self.coco_generation_tab = self._add_tab_safe(
+            "COCO 1.0 Generator", _MOD + "coco_generation", "COCOGeneration")
 
         # --------------------------------------------------------------------------------------------------------------
         #  ANNOTATION ANALYZER TAB        ---         ANNOTATION ANALYZER TAB         ---       ANNOTATION ANALYZER TAB
         # --------------------------------------------------------------------------------------------------------------
         # Create the Image Annotation Analyzer tab widget
-        self.annotation_analyzer_tab = AnnotationAnalyzerTab(self)
-
-        # Add Image Annotation tab to the tabWidget
-        self.tabWidget.addTab(self.annotation_analyzer_tab, "Annotation Analyzer")
+        self.annotation_analyzer_tab = self._add_tab_safe(
+            "Annotation Analyzer", _MOD + "annotation_analyzer_tab", "AnnotationAnalyzerTab")
 
         # --------------------------------------------------------------------------------------------------------------
         #  COCO VIEWER TAB   ---   COCO VIEWER TAB   ---   COCO VIEWER TAB   ---   COCO VIEWER TAB   ---   COCO VIEWER TAB
         # --------------------------------------------------------------------------------------------------------------
-        self.coco_viewer_tab = CocoViewerTab(self)
+        self.coco_viewer_tab = self._add_tab_safe(
+            "COCO Viewer", _MOD + "mask_viewer", "CocoViewerTab")
 
-        self.tabWidget.addTab(self.coco_viewer_tab, "COCO Viewer")
-
-        # --------------------------------------------------------------------------------------------------------------
-        #  CORRELATION ANALYZER TAB   ---   CORRELATION ANALYZER TAB   ---   CORRELATION ANALYZER TAB
-        # --------------------------------------------------------------------------------------------------------------
-        self.correlation_tab = CorrelationAnalyzerTab(self)
-
-        loadUi(ui_path("ML_image_processing/correlation_analyzer_tab.ui"), self.correlation_tab)
-
-        self.correlation_tab.wire_connections()
-
-        self.tabWidget.addTab(self.correlation_tab, "Correlation Analyzer (EXPERIMENTAL)")
-
-        # --------------------------------------------------------------------------------------------------------------
-        #  SURFACE STATE CLASSIFIER TAB   ---   SURFACE STATE CLASSIFIER TAB   ---   SURFACE STATE CLASSIFIER TAB
-        # --------------------------------------------------------------------------------------------------------------
-        self.surface_state_tab = SurfaceStateClassifierTab(self)
-
-        loadUi(ui_path("ML_image_processing/surface_state_classifier_tab.ui"), self.surface_state_tab)
-
-        self.surface_state_tab.configure_filmstrip()
-        self.surface_state_tab.wire_connections()
-
-        self.tabWidget.addTab(self.surface_state_tab, "Surface State Classifier")
+        # Optional drop-in tab plugins from Documents/GRIME-AI/plugins/
+        self._load_plugins()
 
         # --------------------------------------------------------------------------------------------------------------
         # LOAD CONFIGURATION SETTINGS THAT MAY BE REQUIRED FOR THE  TABS
@@ -190,6 +154,90 @@ class GRIME_AI_ML_ImageProcessingDlg(QDialog):
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
+    def _add_tab_safe(self, title, module_name, class_name, ui_rel=None, post=None):
+        """Create and add a sub-tab, guarded so a missing/broken tab (absent
+        .py or .ui, import error, UI-load error, wiring error) is skipped and
+        logged instead of crashing the ML dialog. The tab module is imported
+        lazily here. Returns the tab instance, or None if skipped."""
+        try:
+            import os
+            import importlib
+            import importlib.util
+            if importlib.util.find_spec(module_name) is None:
+                print(f"[ML] '{title}' tab skipped (module not found).")
+                return None
+            ui_file = ui_path(ui_rel) if ui_rel else None
+            if ui_file is not None and not os.path.exists(ui_file):
+                print(f"[ML] '{title}' tab skipped (UI file not found).")
+                return None
+            cls = getattr(importlib.import_module(module_name), class_name)
+            tab = cls(self)
+            if ui_file is not None:
+                loadUi(ui_file, tab)
+            if post is not None:
+                post(tab)
+            self.tabWidget.addTab(tab, title)
+            return tab
+        except Exception as err:
+            print(f"[ML] '{title}' tab unavailable: {err}")
+            return None
+
+    def _load_plugins(self):
+        """Load optional tab plugins from Documents/GRIME-AI/plugins/.
+
+        Each plugin is a .py file exposing a module-level PLUGIN dict:
+            PLUGIN = {
+                "title": "My Tab",            # tab label
+                "class": "MyTabClass",        # class defined in this file
+                "ui": "my_tab.ui" or None,    # optional, relative to the file
+                "post": ["wire_connections"], # methods to call on the widget
+                "api_version": 1,
+            }
+
+        The module is loaded BY FILE PATH (spec_from_file_location), so a
+        plugin need not be an installed package module; its own
+        `from GRIME_AI...` imports still resolve against the installed package.
+        Every plugin is fully guarded — a bad one is skipped and logged, never
+        crashing the dialog. Presence of the file is the only gate."""
+        import os
+        import importlib.util
+        plugin_dir = os.path.join(os.path.expanduser("~"), "Documents",
+                                  "GRIME-AI", "plugins")
+        if not os.path.isdir(plugin_dir):
+            return
+        for fname in sorted(os.listdir(plugin_dir)):
+            if not fname.endswith(".py") or fname.startswith("_"):
+                continue
+            path = os.path.join(plugin_dir, fname)
+            title = fname
+            try:
+                mod_name = "grime_ai_plugin_" + os.path.splitext(fname)[0]
+                spec = importlib.util.spec_from_file_location(mod_name, path)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)       # executes the plugin file
+                meta = getattr(module, "PLUGIN", None)
+                if not isinstance(meta, dict):
+                    print(f"[ML] plugin '{fname}' skipped (no PLUGIN dict).")
+                    continue
+                if meta.get("api_version") != self.PLUGIN_API_VERSION:
+                    print(f"[ML] plugin '{fname}' skipped (api_version mismatch).")
+                    continue
+                title = meta.get("title", fname)
+                tab = getattr(module, meta["class"])(self)
+                ui_rel = meta.get("ui")
+                if ui_rel:
+                    ui_file = os.path.join(plugin_dir, ui_rel)
+                    if not os.path.exists(ui_file):
+                        print(f"[ML] plugin '{title}' skipped (UI file not found).")
+                        continue
+                    loadUi(ui_file, tab)
+                for method in meta.get("post", []):
+                    getattr(tab, method)()
+                self.tabWidget.addTab(tab, "* " + title)   # asterisk marks a plugin
+                print(f"[ML] plugin loaded: {title}")
+            except Exception as err:
+                print(f"[ML] plugin '{title}' unavailable: {err}")
+
     def setup_ui_properties(self):
         """Set size policies and layout stretch factors."""
         self.tabWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
