@@ -8,15 +8,81 @@
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
 import cv2
-import GRIME_AI.sobelData
 import numpy as np
 
-from PIL import Image, ImageQt
 from PyQt5.QtGui import QPixmap, QImage
+
+# WAS: `import GRIME_AI.sobelData`, which binds only the name `GRIME_AI`. The module then
+# referenced a bare `sobelData`, raising NameError on every Sobel X / Sobel Y request.
+from GRIME_AI.sobelData import sobelData
+
 from GRIME_AI.constants import edgeMethodsClass, featureMethodsClass
 
 from GRIME_AI.GRIME_AI_Image_Processing import GRIME_AI_Image_Processing
 from GRIME_AI.GRIME_AI_Image_Conversion import GRIME_AI_Image_Conversion
+
+
+# ======================================================================================================================
+# DISPLAY HELPERS
+#
+# Every QPixmap in this module used to be built with QImage(ndarray.data, ...), which does
+# NOT copy the buffer -- the QImage aliases the NumPy memory. If the array is garbage
+# collected (or explicitly deleted, as processORB did) the QImage points at freed memory.
+# These helpers copy defensively and compute the stride instead of assuming it.
+# ======================================================================================================================
+def _to_u8(arr):
+    """Convert any float / signed gradient image to a displayable 8-bit image.
+
+    Gradient operators produce SIGNED output, and there are two distinct wrong ways to
+    get that onto the screen:
+
+      arr.astype(np.uint8)          WRAPS modulo 256. A true gradient of 800 displays as
+                                    32 -- a strong edge renders as near-black. This is
+                                    what the commented-out line in processSobel did.
+      cv2.Sobel(..., cv2.CV_8U)     SATURATES, so every negative response becomes 0 and
+                                    the dark-to-light half of every edge disappears.
+
+    convertScaleAbs takes the absolute value first, so both polarities survive.
+    """
+    if arr is None:
+        return None
+
+    if arr.dtype == np.uint8:
+        return np.ascontiguousarray(arr)
+
+    # Preserve magnitude of negative gradients rather than clipping them.
+    return np.ascontiguousarray(cv2.convertScaleAbs(arr))
+
+
+def _gray_to_pixmap(arr):
+    """Build a QPixmap from a single-channel image, copying the buffer."""
+    img = _to_u8(arr)
+    if img is None or img.size == 0:
+        return QPixmap()
+
+    if img.ndim != 2:
+        return _rgb_to_pixmap(img)
+
+    h, w = img.shape
+    q_img = QImage(img.data, w, h, img.strides[0], QImage.Format_Grayscale8)
+    return QPixmap.fromImage(q_img.copy())      # .copy() detaches from the NumPy buffer
+
+
+def _rgb_to_pixmap(arr):
+    """Build a QPixmap from a 3-channel image in R, G, B order, copying the buffer."""
+    img = np.ascontiguousarray(arr)
+    if img is None or img.size == 0:
+        return QPixmap()
+
+    if img.ndim == 2:
+        return _gray_to_pixmap(img)
+
+    h, w = img.shape[:2]
+    # Format_RGB888, not Format_BGR888. Everything upstream of this module is RGB
+    # (processLocalImage builds its QImage with Format_RGB888). The old code declared
+    # Format_BGR888 here, which swapped the red and blue channels on screen.
+    q_img = QImage(img.data, w, h, img.strides[0], QImage.Format_RGB888)
+    return QPixmap.fromImage(q_img.copy())
 
 
 class GRIME_AI_ProcessImage:
@@ -27,234 +93,169 @@ class GRIME_AI_ProcessImage:
         self.className = "GRIME_AI_ProcessImage"
 
     # ------------------------------------------------------------------------------------------------------------------
-    #
+    # CANNY
     # ------------------------------------------------------------------------------------------------------------------
-    def processCanny(self, img1, gray, edgeMethodSettings):
+    def processCanny(self, img1, gray, edgeMethodSettings, overlay_contours=False):
+        """Canny edge detection.
 
-        #JESkernelSize = self.spinBoxCannyKernel.value()
+        Set overlay_contours True to draw contours over the source image instead of
+        returning the edge map itself.
+        """
         highThreshold = edgeMethodSettings.getCannyThresholdHigh()
         lowThreshold  = edgeMethodSettings.getCannyThresholdLow()
-        kernelSize    = 3
 
-        # BLUR IMAGE TO REMOVE NOISE
-        img_blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        # Aperture must be 3, 5 or 7. Falls back to 3 if edgeMethodsClass does not yet
+        # carry the field (add `canny_kernel` to constants.py to make the spinbox live).
+        kernelSize = getattr(edgeMethodSettings, "canny_kernel", 3)
+        if kernelSize not in (3, 5, 7):
+            kernelSize = 3
 
-        #otsu_thresh, _     = cv2.threshold(img_blur, 0, 255, cv2.THRESH_OTSU)
-        #triangle_thresh, _ = cv2.threshold(img_blur, 0, 255, cv2.THRESH_TRIANGLE)
-        otsu_thresh, _     = cv2.threshold(img_blur, lowThreshold, highThreshold, cv2.THRESH_OTSU)
-        triangle_thresh, _ = cv2.threshold(img_blur, lowThreshold, highThreshold, cv2.THRESH_TRIANGLE)
+        # Enforce the hysteresis invariant explicitly rather than relying on OpenCV's
+        # internal swap, so the values mean what the dialog labels say they mean.
+        if lowThreshold > highThreshold:
+            lowThreshold, highThreshold = highThreshold, lowThreshold
 
-        otsu_thresh     = self.getThresholdRange(otsu_thresh)
-        triangle_thresh = self.getThresholdRange(triangle_thresh)
+        # NOTE: main.py already blurred `gray`. A second blur here would compound the
+        # smoothing and further erode the gradients, so it has been removed.
+        #
+        # WAS: cv2.Canny(img_blur, highThreshold, lowThreshold, kernelSize)
+        #   - argument order was (high, low); the signature is (image, low, high)
+        #   - the 4th POSITIONAL parameter of cv2.Canny is `edges` (the output array),
+        #     NOT apertureSize. Passing kernelSize there was silently ignored, so the
+        #     aperture was permanently stuck at the default of 3.
+        edges = cv2.Canny(gray,
+                          lowThreshold,
+                          highThreshold,
+                          apertureSize=kernelSize,
+                          L2gradient=True)
 
-        # Find Canny edges
-        #edges = cv2.Canny(img_blur, highThreshold, lowThreshold, kernelSize)
-        #edges = cv2.Canny(img_blur, *otsu_thresh, kernelSize)
-        #edges = cv2.Canny(img_blur, *triangle_thresh)
-        edges = cv2.Canny(img_blur, highThreshold, lowThreshold, kernelSize)
+        # REMOVED: two full-image cv2.threshold() calls computing Otsu and Triangle
+        # thresholds. Both results were fed through getThresholdRange() and then never
+        # used -- the lines that consumed them are commented out. They also passed
+        # lowThreshold/highThreshold as thresh/maxval, which THRESH_OTSU ignores entirely.
 
-        # Find Contours
-        # Use a copy of the image e.g. edged.copy() since findContours alters the image
-        #contours, hierarchy = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        contours, hierarchy = cv2.findContours(edges, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        if not overlay_contours:
+            return _gray_to_pixmap(edges)
 
-        # Draw all contours (-1 = draw all contours)
-        cv2.drawContours(img1, contours, -1, (0, 255, 0), 2)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
-        # for line in lines:
-        # x1, y1, x2, y2 = line[0]
-        # cv2.line(img1, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        # cv2.imwrite('C:/Users/Astrid Haugen/Documents/houghlines5.jpg', img1)
-        # q_img = QImage(edges.data, edges.shape[1], edges.shape[0], QImage.Format_Grayscale8)
-        # q_img = QImage(temp.data, temp.shape[1], temp.shape[0], QImage.Format_Grayscale8)
+        # Draw on a COPY. cv2.drawContours mutates in place, and img1 may be a view onto
+        # the caller's QImage buffer -- the old code was scribbling on the source image.
+        #
+        # RETR_EXTERNAL rather than RETR_TREE: a Canny edge map is a set of thin lines, so
+        # RETR_TREE returns an inner AND an outer contour for every line, doubling them.
+        canvas = np.ascontiguousarray(img1.copy())
+        cv2.drawContours(canvas, contours, -1, (0, 255, 0), 2)
 
-        # QImage BYTE ORDER IS B, G, R
-        #q_img = QImage(img1.data, img1.shape[1], img1.shape[0], QImage.Format_BGR888)
-        img1 = np.ascontiguousarray(img1)
-        bytes_per_line = img1.strides[0]
-        q_img = QImage(img1.data, img1.shape[1], img1.shape[0], bytes_per_line, QImage.Format_BGR888)
+        return _rgb_to_pixmap(canvas)
 
-        return QPixmap.fromImage(q_img)
-
+    # ------------------------------------------------------------------------------------------------------------------
     def getThresholdRange(self, threshold, sigma=0.33):
         return (1 - sigma) * threshold, (1 + sigma) * threshold
 
     # ------------------------------------------------------------------------------------------------------------------
-    #
+    # SOBEL
     # ------------------------------------------------------------------------------------------------------------------
     def processSobel(self, gray, sobelKernelSize, method):
 
-        myImageProcssing = GRIME_AI_Image_Conversion()
-        #img1 = myImageProcssing.qimage_to_opencv(img1)
+        if sobelKernelSize not in (1, 3, 5, 7):
+            sobelKernelSize = 3
 
-        #gray = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
+        mySobel = sobelData()
 
-        mySobel = sobelData.sobelData()
+        # CV_64F is correct here -- gradients are signed. The failure was downstream: the
+        # float64 result was handed straight to QImage as Format_Grayscale8, so Qt read an
+        # 8-bytes-per-pixel buffer as 1 byte per pixel. That displayed roughly one eighth
+        # of the image as noise. _to_u8() now does the magnitude conversion properly.
+        gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobelKernelSize)
+        gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobelKernelSize)
 
-        mySobel.setSobelX(cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobelKernelSize))
-        mySobel.setSobelY(cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobelKernelSize))
+        mySobel.setSobelX(gx)
+        mySobel.setSobelY(gy)
 
         if method == edgeMethodsClass.SOBEL_X:
-            #edges = mySobel.getSobelX().astype(np.uint8)
-            edges = mySobel.getSobelX()
-            q_img = QImage(edges.data, edges.shape[1], edges.shape[0], QImage.Format_Grayscale8)
-            pix = QPixmap(q_img)
+            return _gray_to_pixmap(gx)
 
         elif method == edgeMethodsClass.SOBEL_Y:
-            #edges = mySobel.getSobelY().astype(np.uint8)
-            edges = mySobel.getSobelY()
-            q_img = QImage(edges.data, edges.shape[1], edges.shape[0], QImage.Format_Grayscale8)
-            pix = QPixmap(q_img)
+            return _gray_to_pixmap(gy)
 
         elif method == edgeMethodsClass.SOBEL_XY:
-            myImageProcessing = GRIME_AI_Image_Processing()
-            edges = myImageProcessing.apply_sobel_filter(gray, sobelKernelSize)
-            q_img = QImage(edges.data, edges.shape[1], edges.shape[0], QImage.Format_Grayscale8)
-            pix = QPixmap(q_img)
+            # True gradient magnitude, sqrt(gx^2 + gy^2). Not cv2.Sobel(..., 1, 1, ...),
+            # which is the mixed second derivative and is not an edge strength measure.
+            mag = cv2.magnitude(gx, gy)
+            mySobel.setSobelXY(mag)
+            return _gray_to_pixmap(mag)
 
-        return(pix)
+        # Previously `pix` was simply unbound here, raising UnboundLocalError.
+        return QPixmap()
 
-
+    # ------------------------------------------------------------------------------------------------------------------
     def getGradientMagnitude(self, im):
         ddepth = cv2.CV_32F
         dx = cv2.Sobel(im, ddepth, 1, 0)
         dy = cv2.Sobel(im, ddepth, 0, 1)
-        magnitude = cv2.magnitude(dx, dy)
-        return magnitude
+        return cv2.magnitude(dx, dy)
 
     # ------------------------------------------------------------------------------------------------------------------
-    #
+    # LAPLACIAN
     # ------------------------------------------------------------------------------------------------------------------
-    def processLaplacian(self, img1):
-        # convert from RGB color-space to YCrCb
-        ycrcb_img = cv2.cvtColor(img1, cv2.COLOR_RGB2YCrCb)
+    def processLaplacian(self, gray, use_log=True, sigma=1.0):
+        """Laplacian / Laplacian-of-Gaussian edge detection.
 
-        # equalize the histogram of the Y channel
-        ycrcb_img[:, :, 0] = cv2.equalizeHist(ycrcb_img[:, :, 0])
+        SIGNATURE CHANGE: this now takes the GRAYSCALE image. It previously received the
+        3-channel color image while every sibling method received grayscale.
 
-        gray = cv2.cvtColor(ycrcb_img, cv2.COLOR_RGB2GRAY)
+        Removed from the old implementation:
+          - RGB -> YCrCb -> equalizeHist(Y) -> `cvtColor(ycrcb, COLOR_RGB2GRAY)`, which
+            reinterpreted YCrCb data as if it were RGB. If you want luma, take channel 0.
+          - equalizeHist() applied to the LoG response, which amplifies noise in flat
+            regions (sky, open water) far more than it helps real edges.
+          - cv2.dilate(gray,(5,5),gray) followed by cv2.erode(gray,(5,5),gray). The (5,5)
+            tuple is not a structuring element -- NumPy turns it into a shape-(2,) array --
+            and the pair amounts to a morphological closing that thickens and displaces
+            every edge. Both also wrote back into `gray` through the dst argument.
+        """
+        if gray is None or gray.size == 0:
+            return QPixmap()
 
-        # convert back to RGB color-space from YCrCb
-        lapImg = laplace_of_gaussian(gray)
-        gray = cv2.equalizeHist(lapImg)
-        cv2.dilate(gray, (5, 5), gray)
-        cv2.erode(gray, (5, 5), gray)
+        if gray.ndim == 3:
+            gray = cv2.cvtColor(gray, cv2.COLOR_RGB2GRAY)
 
-        gray = Image.fromarray(gray)
-        q_img = ImageQt.toqimage(gray)
+        if use_log:
+            return _gray_to_pixmap(laplace_of_gaussian(gray, sigma=sigma))
 
-        return(QPixmap.fromImage(q_img))
-
+        # CV_64F, then magnitude -- the Laplacian is signed like any other derivative.
+        return _gray_to_pixmap(cv2.Laplacian(gray, cv2.CV_64F, ksize=3))
 
     # ------------------------------------------------------------------------------------------------------------------
-    #
+    # SIFT
     # ------------------------------------------------------------------------------------------------------------------
     def processSIFT(self, img1, gray):
+        # The old version built `pix` and then fell off the end of the function, returning
+        # None. main.py's `if not pix == []` passed, then pix.scaled(...) raised
+        # AttributeError -- selecting SIFT crashed the application every time.
         edges = calcSIFT(img1, gray)
-        q_img = QImage(edges.data, edges.shape[1], edges.shape[0], QImage.Format_RGB888)
-        pix = QPixmap(q_img)
-
+        return _rgb_to_pixmap(edges)
 
     # ------------------------------------------------------------------------------------------------------------------
-    #
+    # ORB
     # ------------------------------------------------------------------------------------------------------------------
     def processORB(self, img1, gray, featureMethodSettings):
+        # REMOVED: the YCrCb / equalizeHist / laplace_of_gaussian / dilate / erode block.
+        # Its entire result was discarded on the very next line, which recomputed `gray`
+        # from ycrcb_img before calling calcOrb. It was pure wasted work per frame.
+        #
+        # ORB also wants ordinary image structure to find corners. Running it on a
+        # Laplacian-of-Gaussian zero-crossing map would give meaningless keypoints anyway.
+        nMaxFeatures = getattr(featureMethodSettings, "orbMaxFeatures", 500)
 
-        # convert from RGB color-space to YCrCb
-        ycrcb_img = cv2.cvtColor(img1, cv2.COLOR_RGB2YCrCb)
+        edges = calcOrb(img1, gray, nMaxFeatures)
 
-        # equalize the histogram of the Y channel
-        ycrcb_img[:, :, 0] = cv2.equalizeHist(ycrcb_img[:, :, 0])
+        # The old code did `del gray; del edges` BEFORE constructing the QPixmap, while the
+        # QImage still aliased the `edges` buffer -- a use-after-free. _rgb_to_pixmap()
+        # copies, so the arrays can be released safely by normal refcounting.
+        return _rgb_to_pixmap(edges)
 
-        gray = cv2.cvtColor(ycrcb_img, cv2.COLOR_RGB2GRAY)
-
-        lapImg = laplace_of_gaussian(gray)
-        gray = cv2.equalizeHist(lapImg)
-        cv2.dilate(gray, (5, 5), gray)
-        cv2.erode(gray, (5, 5), gray)
-
-        # gray = Image.fromarray(gray)
-
-        gray = cv2.cvtColor(ycrcb_img, cv2.COLOR_RGB2GRAY)
-        edges = calcOrb(gray, featureMethodSettings.orbMaxFeatures)
-        q_img = QImage(edges.data, edges.shape[1], edges.shape[0], QImage.Format_RGB888)
-
-        del gray
-        del edges
-
-        return(QPixmap(q_img))
-
-# ======================================================================================================================
-# THIS FUNCTION WILL PROCESS THE CURRENT IMAGE BASED UPON THE SETTINGS SELECTED BY THE END-USER.
-# THE IMAGE STORAGE TYPE IS mat
-# ======================================================================================================================
-###JES - THIS FUNCTION APPEARS TO BE UNUSED OR POSSIBLY OBSOLETE
-'''
-def processImageMat(self, myImage):
-    edges = []
-    img2 = []
-    imageFormat = 0
-
-    if not myImage == []:
-        img1 = myImage
-
-        if self.checkboxKMeans.isChecked():
-            myGRIMe_Color = GRIMe_Color()
-            qImg, clusterCenters, hist = myGRIMe_Color.KMeans(self, img1, self.spinBoxColorClusters.value())
-
-            checkColorMatch(clusterCenters, hist, self.roiList)
-
-        # CONVERT COLOR IMAGE TO GRAY SCALE
-        gray = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
-
-        # REMOVE NOISE FROM THE IMAGE
-        if len(gray) != 0:
-            gray = cv2.GaussianBlur(gray, (3, 3), 0)
-
-        # EDGE DETECTION METHODS
-        if len(gray) != 0:
-            if self.radioButtonCanny.isChecked():
-                highThreshold = self.spinBoxCannyHighThreshold.value()
-                lowThreshold = self.spinBoxCannyLowThreshold.value()
-                kernelSize = self.spinBoxCannyKernel.value()
-                edges = cv2.Canny(img1, highThreshold, lowThreshold, kernelSize)
-                # lines = cv2.HoughLinesP(edges, 1, np.pi / 180, 100, minLineLength=100, maxLineGap=10)
-                # for line in lines:
-                # x1, y1, x2, y2 = line[0]
-                # cv2.line(img1, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                # cv2.imwrite('C:/Users/Astrid Haugen/Documents/houghlines5.jpg', img1)
-
-            elif self.radioButtonSIFT.isChecked():
-                edges = calcSIFT(img1, gray)
-            elif self.radioButtonORB.isChecked():
-                value = self.spinBoxOrbMaxFeatures.value()
-                edges = calcOrb(img1, value)
-                # edges = cv2.cvtColor(edges, cv2.COLOR_RGBA2RGB)
-            elif self.radioButtonLaplacian.isChecked():
-                edges = cv2.Laplacian(img1, cv2.CV_64F)
-            elif self.radioButtonSobelX.isChecked() or self.radioButtonSobelY.isChecked() or self.radioButtonSobelXY.isChecked():
-                mySobel = sobelData()
-                sobelKernelSize = self.spinBoxSobelKernel.value()
-                mySobel.setSobelX(cv2.Sobel(img1, cv2.CV_64F, 1, 0, ksize=sobelKernelSize))
-                mySobel.setSobelY(cv2.Sobel(img1, cv2.CV_64F, 0, 1, ksize=sobelKernelSize))
-                mySobel.setSobelXY(cv2.Sobel(img1, cv2.CV_64F, 1, 1, ksize=sobelKernelSize))
-                if self.radioButtonSobelX.isChecked():
-                    edges = (mySobel.getSobelX() * 255 / mySobel.getSobelX().max()).astype(np.uint8)
-                elif self.radioButtonSobelY.isChecked():
-                    edges = (mySobel.getSobelY() * 255 / mySobel.getSobelY().max()).astype(np.uint8)
-                elif self.radioButtonSobelXY.isChecked():
-                    edges = (mySobel.getSobelXY() * 255 / mySobel.getSobelXY().max()).astype(np.uint8)
-
-            if self.radioButtonSIFT.isChecked():
-                imageFormat = QImage.Format_RGB888
-            elif self.radioButtonORB.isChecked():
-                imageFormat = QImage.Format_RGB888
-            else:
-                imageFormat = QImage.Format_Grayscale8
-
-    return edges, imageFormat
-'''
 
 # ======================================================================================================================
 #
@@ -269,33 +270,47 @@ def laplace_of_gaussian(gray_img, sigma=1., kappa=0.75, pad=False):
     :param pad:      flag to pad output w/ zero border, keeping input image size
     """
     assert len(gray_img.shape) == 2
+
     img = cv2.GaussianBlur(gray_img, (0, 0), sigma) if 0. < sigma else gray_img
     img = cv2.Laplacian(img, cv2.CV_64F)
     rows, cols = img.shape[:2]
+
     # min/max of 3x3-neighbourhoods
     min_map = np.minimum.reduce(list(img[r:rows - 2 + r, c:cols - 2 + c]
                                      for r in range(3) for c in range(3)))
     max_map = np.maximum.reduce(list(img[r:rows - 2 + r, c:cols - 2 + c]
                                      for r in range(3) for c in range(3)))
-    # bool matrix for image value positiv (w/out border pixels)
+
+    # bool matrix for image value positive (w/out border pixels)
     pos_img = 0 < img[1:rows - 1, 1:cols - 1]
+
     # bool matrix for min < 0 and 0 < image pixel
     neg_min = min_map < 0
-    neg_min[1 - pos_img] = 0
+    # WAS: neg_min[1 - pos_img] = 0
+    # `1 - pos_img` on a bool array yields an INT array of 0s and 1s. NumPy then treats it
+    # as integer row indexing, not as a logical-NOT mask -- so this zeroed rows 0 and 1 of
+    # the array instead of the intended pixels, silently and without error. Same below.
+    neg_min[~pos_img] = 0
+
     # bool matrix for 0 < max and image pixel < 0
     pos_max = 0 < max_map
     pos_max[pos_img] = 0
+
     # sign change at pixel?
-    zero_cross = neg_min + pos_max
+    zero_cross = neg_min | pos_max
+
     # values: max - min, scaled to 0--255; set to 0 for no sign change
     value_scale = 255. / max(1., img.max() - img.min())
     values = value_scale * (max_map - min_map)
-    values[1 - zero_cross] = 0.
+    values[~zero_cross] = 0.
+
     # optional thresholding
     if 0. <= kappa:
         thresh = float(np.absolute(img).mean()) * kappa
         values[values < thresh] = 0.
-    log_img = values.astype(np.uint8)
+
+    log_img = np.clip(values, 0, 255).astype(np.uint8)
+
     if pad:
         log_img = np.pad(log_img, pad_width=1, mode='constant', constant_values=0)
 
@@ -306,40 +321,55 @@ def laplace_of_gaussian(gray_img, sigma=1., kappa=0.75, pad=False):
 # THIS FUNCTION WILL USE THE SIFT FEATURE DETECTION ALGORITHM TO FIND FEATURES IN THE IMAGE THAT IS PASSED TO THIS FUNCTION.
 # ======================================================================================================================
 def calcSIFT(image, gray):
-    # REMOVE NOISE FROM THE IMAGE
-    img1 = cv2.GaussianBlur(gray, (3, 3), 0)
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_RGB2GRAY)
 
     sift = cv2.SIFT_create()
-    kp, des = sift.detectAndCompute(img1, None)
-    edges = cv2.drawKeypoints(gray, kp, img1)
+    kp, des = sift.detectAndCompute(gray, None)
 
-    return edges
+    # Draw onto a COLOR copy of the source. The old code passed `img1` -- which it had
+    # just rebound to the blurred GRAYSCALE image -- as drawKeypoints' outImg, then
+    # displayed the result as Format_RGB888. That read a 1-byte-per-pixel buffer as 3.
+    canvas = np.ascontiguousarray(image.copy())
+    if canvas.ndim == 2:
+        canvas = cv2.cvtColor(canvas, cv2.COLOR_GRAY2RGB)
+
+    return cv2.drawKeypoints(canvas, kp, None,
+                             color=(0, 255, 0),
+                             flags=cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
 
 
 # ======================================================================================================================
 # THIS FUNCTION WILL USE THE ORB FEATURE DETECTION ALGORITHM TO FIND FEATURES IN THE IMAGE THAT IS
 # PASSED TO THIS FUNCTION.
 # ======================================================================================================================
-def calcOrb(image, nMaxFeatures):
+def calcOrb(image, gray, nMaxFeatures):
 
-    if len(image.shape) == 3:
-       imageBW = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-    else:
-        imageBW = image
+    if gray is None:
+        gray = image
 
-    orb = cv2.ORB_create()
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_RGB2GRAY)
 
-    orb.setEdgeThreshold(50)
-    orb.setNLevels(10)
-    orb.setPatchSize(30)
-    orb.setMaxFeatures(nMaxFeatures)
+    # ORB's own default is 500. The dialog previously defaulted this to 100000, which
+    # carpets the image with keypoints and makes the detector crawl.
+    nMaxFeatures = max(1, int(nMaxFeatures))
 
-    kp = orb.detect(imageBW, None)
-    kp, des = orb.compute(imageBW, kp)
+    # edgeThreshold must be >= patchSize or the border exclusion zone silently discards
+    # keypoints the patch extractor would otherwise have accepted.
+    orb = cv2.ORB_create(nfeatures=nMaxFeatures,
+                         nlevels=8,
+                         edgeThreshold=31,
+                         patchSize=31)
 
-    edges = cv2.drawKeypoints(image, kp, None, color=(0, 255, 0), flags=0)
+    kp = orb.detect(gray, None)
+    kp, des = orb.compute(gray, kp)
 
-    return edges
+    canvas = np.ascontiguousarray(image.copy())
+    if canvas.ndim == 2:
+        canvas = cv2.cvtColor(canvas, cv2.COLOR_GRAY2RGB)
+
+    return cv2.drawKeypoints(canvas, kp, None, color=(0, 255, 0), flags=0)
 
 
 # ======================================================================================================================
@@ -347,11 +377,8 @@ def calcOrb(image, nMaxFeatures):
 # ======================================================================================================================
 def imageAlignment(referenceImageFilename, imageFilename):
 
-    # Open the image files.
-    #img1_color = cv2.imread("NM_Pecos_River_near_Acme___2023-08-17T00-00-46Z.jpg")  # Image to be aligned.
-    #img2_color = cv2.imread("NM_Pecos_River_near_Acme___2023-12-19T23-30-07Z.jpg")  # Reference image.
-    img1_color = cv2.imread(imageFilename)  # Image to be aligned.
-    img2_color = cv2.imread(referenceImageFilename)  # Reference image.
+    img1_color = cv2.imread(imageFilename)              # Image to be aligned.
+    img2_color = cv2.imread(referenceImageFilename)     # Reference image.
 
     # Convert to grayscale.
     img1 = cv2.cvtColor(img1_color, cv2.COLOR_BGR2GRAY)
@@ -362,21 +389,14 @@ def imageAlignment(referenceImageFilename, imageFilename):
     orb_detector = cv2.ORB_create(5000)
 
     # Find keypoints and descriptors.
-    # The first arg is the image, second arg is the mask
-    #  (which is not required in this case).
     kp1, d1 = orb_detector.detectAndCompute(img1, None)
     kp2, d2 = orb_detector.detectAndCompute(img2, None)
 
-    # Match features between the two images.
-    # We create a Brute Force matcher with
-    # Hamming distance as measurement mode.
+    # Match features between the two images using Hamming distance.
     matcher = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-
-    # Match the two sets of descriptors.
     matches = matcher.match(d1, d2)
 
     # Sort matches on the basis of their Hamming distance.
-    # matches.sort(key = lambda x: x.distance)
     matches = sorted(matches, key=lambda x: x.distance)
 
     # Take the top 90 % matches forward.
@@ -391,14 +411,12 @@ def imageAlignment(referenceImageFilename, imageFilename):
         p1[i, :] = kp1[matches[i].queryIdx].pt
         p2[i, :] = kp2[matches[i].trainIdx].pt
 
-        # Find the homography matrix.
+    # Find the homography matrix.
     homography, mask = cv2.findHomography(p1, p2, cv2.RANSAC)
 
-    # Use this matrix to transform the
-    # colored image wrt the reference image.
+    # Use this matrix to transform the colored image wrt the reference image.
     transformed_img = cv2.warpPerspective(img1_color, homography, (width, height))
 
-    # Save the output.
     cv2.imwrite('output.jpg', transformed_img)
 
-    return (transformed_img)
+    return transformed_img
