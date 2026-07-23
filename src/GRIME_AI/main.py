@@ -3597,10 +3597,16 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     def edgeDetectionMethod(self, edgeMethod):
         global g_edgeMethodSettings
+        global g_featureMethodSettings
+
+        # Symmetry with featureDetectionMethod(), which already clears the edge method.
+        # Without this, selecting SIFT and then Canny left the feature method set to SIFT.
+        g_featureMethodSettings.method = featureMethodsClass.NONE
+
         g_edgeMethodSettings = edgeMethod
 
-        processLocalImage(self)
-
+        # refreshImage() calls processImage() itself; the former processLocalImage() call
+        # here made that happen twice per parameter change.
         self.refreshImage()
 
     # ==================================================================================================================
@@ -4635,8 +4641,10 @@ def processLocalImage(self, nImageIndex=0, imageFileFolder=''):
 
         self.labelOriginalImage.setPixmap(currentImageRescaled)
 
-        pix = processImage(self, currentImage)
-        gray = cv2.cvtColor(numpyImage, cv2.COLOR_BGR2GRAY)
+        # REMOVED: `pix = processImage(self, currentImage)` and its companion
+        # grayscale conversion. The result was discarded -- the display block below
+        # that consumed it is commented out -- while refreshImage() recomputes the
+        # identical thing. Every parameter change was running the pipeline twice.
 
         '''
         entropy_image = entropy(gray, disk(7))
@@ -4657,6 +4665,23 @@ def processLocalImage(self, nImageIndex=0, imageFileFolder=''):
 
 
 # ======================================================================================================================
+# PREPROCESSING CONFIGURATION FOR EDGE / FEATURE DETECTION
+#
+# Set USE_CLAHE True to apply locally-adaptive contrast enhancement before edge detection.
+# Unlike the global cv2.equalizeHist() that was used here previously, CLAHE does not rescale
+# the intensity distribution on a per-frame basis, so threshold values remain meaningful and
+# reproducible across frames. Recommended for low-contrast water / sandbar boundaries.
+# ======================================================================================================================
+USE_CLAHE  = False
+CLAHE_CLIP = 2.0
+CLAHE_TILE = (8, 8)
+
+# Pre-blur kernel size. Must be odd. 5 is the standard choice ahead of Canny.
+# This was formerly 15, which destroyed the very gradients being detected.
+PREBLUR_KSIZE = 5
+
+
+# ======================================================================================================================
 # THIS FUNCTION WILL PROCESS THE CURRENT IMAGE BASED UPON THE SETTINGS SELECTED BY THE END-USER.
 # THE IMAGE STORAGE TYPE IS QImage
 # ======================================================================================================================
@@ -4666,43 +4691,84 @@ def processImage(self, myImage):
 
     pix = []
 
-    if not myImage == []:
-        # CONVERT IMAGE FROM QImage FORMAT TO Mat FORMAT (BYTE ORDER IS R, G, B)
-        img1 = GRIME_AI_Utils().convertQImageToMat(myImage.toImage())
+    if myImage is None or myImage == []:
+        return pix
 
-        #JES if self.checkboxKMeans.isChecked():
-        #    myGRIMe_Color = GRIMe_Color()
-        #    qImg, clusterCenters, hist = myGRIMe_Color.KMeans(img1, self.spinBoxColorClusters.value())
+    # CONVERT IMAGE FROM QImage FORMAT TO Mat FORMAT.
+    #
+    # convertQImageToMat() returns channel order R, G, B. If that ever changes, change it
+    # HERE and nowhere else. The original code disagreed with itself: this function used
+    # COLOR_RGB2GRAY while processLocalImage() used COLOR_BGR2GRAY on the same source. The
+    # luma weights are 0.299R + 0.587G + 0.114B, so swapping R and B is not cosmetic for
+    # river imagery -- water is blue-dominant and sandbars are red/tan-dominant, meaning the
+    # wrong conversion directly weakens contrast at the boundary of interest.
+    img_rgb = GRIME_AI_Utils().convertQImageToMat(myImage.toImage())
 
-        # CONVERT COLOR IMAGE TO GRAY SCALE
-        gray = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
+    if img_rgb is None or img_rgb.size == 0:
+        return pix
 
-        # REMOVE NOISE FROM THE IMAGE
-        if len(gray) != 0:
-            grayEQ = cv2.equalizeHist(gray)
-            grayBlur = cv2.GaussianBlur(grayEQ, (15, 15), 0)
-            cv2.erode(grayBlur, (7,7), gray)
+    # NOTE: len(arr) returns the ROW COUNT, not emptiness. The former `len(gray) != 0`
+    # guard was always true for any real image.
+    gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
 
-        # EDGE DETECTION METHODS
-        if len(gray) != 0:
+    # ------------------------------------------------------------------------------------
+    # PREPROCESSING
+    #
+    # Order is: contrast (optional, local only) -> denoise -> detect.
+    #
+    # Removed from this block:
+    #   cv2.equalizeHist()  - global equalization rescaled intensities per frame, which made
+    #                         every threshold value frame-dependent and non-reproducible.
+    #   (15,15) blur        - erased the gradients the operators are looking for.
+    #   cv2.erode(...)      - (7,7) was a shape-(2,) array, NOT a 7x7 structuring element;
+    #                         it also wrote into `gray` through the dst argument as a hidden
+    #                         side effect. Morphological erosion ahead of an edge operator
+    #                         displaces edge LOCATION by roughly the kernel radius, which is
+    #                         unacceptable when the edge is a measurement (waterline).
+    # ------------------------------------------------------------------------------------
+    if USE_CLAHE:
+        clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=CLAHE_TILE)
+        gray = clahe.apply(gray)
 
-            from GRIME_AI.GRIME_AI_ProcessImage import GRIME_AI_ProcessImage
-            myProcessImage = GRIME_AI_ProcessImage()
+    gray = cv2.GaussianBlur(gray, (PREBLUR_KSIZE, PREBLUR_KSIZE), 0)
 
-            if g_edgeMethodSettings.method == edgeMethodsClass.CANNY:
-                pix = myProcessImage.processCanny(img1, gray, g_edgeMethodSettings)
+    # ------------------------------------------------------------------------------------
+    # DISPATCH
+    #
+    # Edge and feature detection are now separate branches. Previously SIFT and ORB sat in
+    # the same elif chain gated on g_edgeMethodSettings.method, so they were only reachable
+    # by accident of the dialog zeroing out the edge method first.
+    # ------------------------------------------------------------------------------------
+    from GRIME_AI.GRIME_AI_ProcessImage import GRIME_AI_ProcessImage
+    myProcessImage = GRIME_AI_ProcessImage()
 
-            elif g_edgeMethodSettings.method == edgeMethodsClass.LAPLACIAN:
-                pix = myProcessImage.processLaplacian(img1)
+    edge_method    = g_edgeMethodSettings.method
+    feature_method = g_featureMethodSettings.method
 
-            elif g_edgeMethodSettings.method == edgeMethodsClass.SOBEL_X or g_edgeMethodSettings.method == edgeMethodsClass.SOBEL_Y or g_edgeMethodSettings.method == edgeMethodsClass.SOBEL_XY:
-                pix = myProcessImage.processSobel(gray, g_edgeMethodSettings.getSobelKernel(), g_edgeMethodSettings.method)
+    if edge_method != edgeMethodsClass.NONE:
 
-            elif g_featureMethodSettings.method == featureMethodsClass.SIFT:
-                pix = myProcessImage.processSIFT(img1, gray)
+        if edge_method == edgeMethodsClass.CANNY:
+            pix = myProcessImage.processCanny(img_rgb, gray, g_edgeMethodSettings)
 
-            elif g_featureMethodSettings.method == featureMethodsClass.ORB:
-                pix = myProcessImage.processORB(img1, gray, g_featureMethodSettings)
+        elif edge_method == edgeMethodsClass.LAPLACIAN:
+            # WAS: processLaplacian(img1) -- passed the 3-channel color image while every
+            # other branch passed grayscale.
+            pix = myProcessImage.processLaplacian(gray)
+
+        elif edge_method in (edgeMethodsClass.SOBEL_X,
+                             edgeMethodsClass.SOBEL_Y,
+                             edgeMethodsClass.SOBEL_XY):
+            pix = myProcessImage.processSobel(gray,
+                                              g_edgeMethodSettings.getSobelKernel(),
+                                              edge_method)
+
+    elif feature_method != featureMethodsClass.NONE:
+
+        if feature_method == featureMethodsClass.SIFT:
+            pix = myProcessImage.processSIFT(img_rgb, gray)
+
+        elif feature_method == featureMethodsClass.ORB:
+            pix = myProcessImage.processORB(img_rgb, gray, g_featureMethodSettings)
 
     return pix
 
