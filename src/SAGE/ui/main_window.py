@@ -190,6 +190,29 @@ class MainWindow(QMainWindow):
         self._sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._sidebar_scroll.setMinimumHeight(0)
+        self._sidebar_scroll.setStyleSheet("""
+            QScrollBar::handle:vertical {
+                background: #a6a6a6;
+                border-radius: 2px;
+             }
+            QScrollBar:vertical {
+                width: 12px;
+                background: #cccccc;
+                margin: 12px 0 12px 0;  /* reserve space for top/bottom arrows */
+            }
+            QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical {
+                width: 8px;
+                height: 8px;
+            }
+            QScrollBar::add-line:vertical {
+                height: 12px;
+                subcontrol-position: bottom;
+                subcontrol-origin: margin;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: none;
+            }
+        """)
         layout.addWidget(self._sidebar_scroll, stretch=1)
         main_layout.addLayout(layout, stretch=1)
 
