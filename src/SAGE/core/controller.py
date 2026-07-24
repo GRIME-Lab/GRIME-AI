@@ -68,7 +68,10 @@ class SegmentationController:
         return owned
 
     # ---- segmentation ----
-    def run_segmentation(self, label=None, color=None):
+    def run_segmentation(self, label=None, color=None, roi=None):
+        """roi: optional bool array. When given, it is a hard boundary - the
+        resulting mask is clipped to it, so a drawn shape can never annotate
+        anything outside itself."""
         if not self.fg_points and not self.bg_points:
             return None
 
@@ -87,9 +90,13 @@ class SegmentationController:
 
         if owned is not None:
             mask = mask & ~owned
-            if not mask.any():
-                self.clear_points()
-                return None
+
+        if roi is not None:
+            mask = mask & np.asarray(roi, dtype=bool)
+
+        if not mask.any():
+            self.clear_points()
+            return None
 
         mask_id = next(self._mask_id_counter)
         if color is None:

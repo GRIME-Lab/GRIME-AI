@@ -172,6 +172,8 @@ class MainWindow(QMainWindow):
         # when no label is active, instead of looping on every drag event.
         self.canvas._can_annotate = lambda: self.sidebar.get_active_label() is not None
         self.canvas.label_required.connect(self._warn_no_label)
+        self.canvas._is_owned_pixel = self._pixel_is_owned
+        self.canvas.annotation_blocked.connect(self._warn_pixel_owned)
         self.sidebar.tool_mode_changed.connect(self.canvas.set_tool_mode)
         self.canvas.mask_clicked.connect(self._on_canvas_mask_clicked)
 
@@ -1194,6 +1196,36 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "No Label Defined",
             "Please define or select a label class before annotating.")
 
+    def _pixel_is_owned(self, x, y):
+        """True if (x, y) already belongs to a mask, so drawing there must be
+        refused. The 'Other' fill is skipped - it is the complement of the real
+        masks, not an annotation, and would otherwise block the whole frame."""
+        if self.controller is None or self.image_np is None:
+            return False
+        h, w = self.image_np.shape[:2]
+        xi, yi = int(x), int(y)
+        if not (0 <= xi < w and 0 <= yi < h):
+            return False
+        for m in self.controller.masks:
+            if m.get("is_fill"):
+                continue
+            if m["mask"][yi, xi]:
+                return True
+        return False
+
+    def _warn_pixel_owned(self):
+        """Transient feedback when a click lands on an existing mask. Uses a
+        tooltip at the cursor rather than a status bar or a modal box: it costs
+        no layout, and a click-rate message must not be dismissable."""
+        from PyQt5.QtWidgets import QToolTip
+        from PyQt5.QtGui import QCursor
+
+        QToolTip.showText(
+            QCursor.pos(),
+            "Already annotated - delete the existing mask to draw here.",
+            self.canvas,
+        )
+
     def _compute_other_overlay(self):
         """Transient 'Other' preview: complement of the union of all real masks,
         in the Other color. Not stored — display only."""
@@ -1304,11 +1336,16 @@ class MainWindow(QMainWindow):
             self.controller.clear_points()
             return
         color = self.sidebar.get_color_for_label(label)
-        mask_entry = self.controller.run_segmentation(label=label, color=color)
+
+        # The drawn shape is a hard boundary, not just a seeding region:
+        # SAM2 may only annotate pixels inside it.
+        mask_entry = self.controller.run_segmentation(
+            label=label, color=color, roi=self._rasterize_roi(points)
+        )
 
         if mask_entry is not None:
             self.sidebar.refresh_masks()
-            self._update_canvas()
+        self._update_canvas()
 
     # ---------------------------------------------------------
     # Rendering
@@ -1396,6 +1433,25 @@ class MainWindow(QMainWindow):
                 self._update_canvas()
 
         super().keyPressEvent(event)
+
+    # ---------------------------------------------------------
+    # ROI rasterization
+    # ---------------------------------------------------------
+    def _rasterize_roi(self, points):
+        """
+        Fill the drawn shape (polygon vertices or freehand path) into a boolean
+        mask. cv2.fillPoly closes the ring implicitly, so both modes share this.
+        Returns None if the shape is degenerate.
+        """
+        if self.image_np is None or len(points) < 3:
+            return None
+
+        import cv2
+
+        h, w = self.image_np.shape[:2]
+        roi = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(roi, [np.array(points, dtype=np.int32)], 1)
+        return roi.astype(bool)
 
     # ---------------------------------------------------------
     # Polygon sampling strategies
