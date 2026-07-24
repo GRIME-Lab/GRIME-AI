@@ -5497,6 +5497,11 @@ def my_main():
     train_parser = subparsers.add_parser('train', help='Train / fine-tune a GRIME AI model from a site configuration (headless)')
     train_parser.add_argument('--config', required=True,
                               help='Path to a site_config.json (as produced by the Training tab)')
+    train_parser.add_argument('--label',  required=False, default=None,
+                              help="Training category to train against, overriding the config's "
+                                   "train_model.TRAINING_CATEGORIES. Accepts 'id - name' "
+                                   "(e.g. '1 - water'), a bare name, or a bare id. "
+                                   "Required when the config does not already specify one.")
     train_parser.add_argument('--mode',   required=True, choices=['sam2', 'segformer'],
                               help='Model type to train: sam2 or segformer')
 
@@ -5739,6 +5744,57 @@ def run_cli(args):
         print(f"[GRIME AI] Training mode: {args.mode.upper()}")
         print(f"[GRIME AI] Config:        {args.config}")
         print(f"[GRIME AI] Site:          {site_config.get('siteName', '?')}")
+
+        # ------------------------------------------------------------------
+        # Resolve the training label. Reuses the site config editor's helpers
+        # so the CLI, the editor, and the Training tab all agree on the
+        # 'id - name' format and on train_model.TRAINING_CATEGORIES.
+        # ------------------------------------------------------------------
+        from GRIME_AI.utils.GRIME_AI_site_config import (
+            collect_training_labels, get_training_categories,
+            set_training_categories, parse_label,
+        )
+
+        images_root = site_config.get('segmentation_images_path', '')
+        selected_folders = [str(s) for s in site_config.get('selected_folders', [])]
+
+        if args.label:
+            available, _coverage, _conflicts = collect_training_labels(
+                images_root, selected_folders)
+            wanted = str(args.label).strip()
+            resolved = None
+            for candidate in available:
+                parsed = parse_label(candidate)
+                if parsed is None:
+                    continue
+                label_id, label_name = parsed
+                if wanted in (candidate, label_id, label_name) or \
+                        wanted.lower() == label_name.lower():
+                    resolved = candidate
+                    break
+
+            if resolved is None:
+                print(f"[ERROR] Label '{wanted}' was not found in the selected datasets.",
+                      file=sys.stderr)
+                if not images_root or not selected_folders:
+                    print("        The config has no images root or no selected folders; "
+                          "open it in the Site Config Editor first.", file=sys.stderr)
+                else:
+                    print(f"        Available: {', '.join(available) or '(none)'}",
+                          file=sys.stderr)
+                sys.exit(1)
+
+            set_training_categories(site_config, resolved)
+            print(f"[GRIME AI] Label:         {resolved}  (--label overrides the config)")
+        else:
+            current_label = get_training_categories(site_config)
+            if not current_label:
+                print("[ERROR] No training label specified and the config does not set "
+                      "train_model.TRAINING_CATEGORIES.", file=sys.stderr)
+                print("        Pass --label, or set one in the Site Config Editor.",
+                      file=sys.stderr)
+                sys.exit(1)
+            print(f"[GRIME AI] Label:         {current_label}")
 
         # Build the SAM2 model config headlessly (the GUI path uses
         # @hydra.main); SegFormer does not need a Hydra cfg.

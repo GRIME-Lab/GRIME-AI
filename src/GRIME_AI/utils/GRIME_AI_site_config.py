@@ -350,6 +350,151 @@ def folder_details(root, rel_name):
     return len(data.get("images", [])), cats
 
 
+def load_categories(root, rel_name):
+    """Categories from one folder's annotation file, sorted by id.
+
+    Returns None when the file is missing or unparseable, matching the
+    Training tab's _load_categories contract.
+    """
+    ann = os.path.join(os.path.normpath(str(root)), str(rel_name), _ANNOTATION_FILENAME)
+    if not os.path.isfile(ann):
+        return None
+    try:
+        with open(ann, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        cats = [c for c in data.get("categories", []) if isinstance(c, dict) and "id" in c]
+        return sorted(cats, key=lambda c: c["id"])
+    except Exception:
+        return None
+
+
+def check_label_consistency(root, selected):
+    """Compare every selected folder against the canonical one.
+
+    Port of the Training tab's _check_label_consistency. The canonical ("gold")
+    dataset is simply the first entry in `selected`; drop it and the next entry
+    inherits the role, which is why the selected list must preserve insertion
+    order rather than sorting.
+
+    Returns {folder: status} where status is one of:
+        'gold'       this IS the canonical dataset
+        'ok'         schema matches the canonical exactly
+        'yellow'     subset of the canonical (missing categories, no conflicts)
+        'red'        id/name mismatch against the canonical
+        'unreadable' annotation file missing or unparseable
+    """
+    selected = list(selected)
+    if not selected:
+        return {}
+
+    gold_name = selected[0]
+    gold_cats = load_categories(root, gold_name)
+    if gold_cats is None:
+        return {name: "unreadable" for name in selected}
+
+    gold_by_name = {c["name"]: c["id"] for c in gold_cats}
+    gold_schema = tuple((c["id"], c["name"]) for c in gold_cats)
+
+    state = {gold_name: "gold"}
+    for name in selected[1:]:
+        cats = load_categories(root, name)
+        if cats is None:
+            state[name] = "unreadable"
+            continue
+        if tuple((c["id"], c["name"]) for c in cats) == gold_schema:
+            state[name] = "ok"
+            continue
+
+        conflict = False
+        for c in cats:
+            if c["name"] in gold_by_name and gold_by_name[c["name"]] != c["id"]:
+                conflict = True
+                break
+            for gc in gold_cats:
+                if gc["id"] == c["id"] and gc["name"] != c["name"]:
+                    conflict = True
+                    break
+            if conflict:
+                break
+
+        state[name] = "red" if conflict else "yellow"
+
+    return state
+
+
+def collect_training_labels(root, selected):
+    """Union of annotation categories across the selected dataset folders.
+
+    Label strings use the Training tab's exact format, 'id - name', so a value
+    written here parses identically in get_selected_training_labels().
+
+    Returns (labels, coverage, conflicts):
+      labels    - sorted 'id - name' strings, ordered by numeric id
+      coverage  - {label: set(folders containing it)}
+      conflicts - human-readable id/name collisions across folders
+    """
+    coverage = {}
+    ids_by_name = {}
+    names_by_id = {}
+
+    for rel in selected:
+        _n_images, cats = folder_details(root, rel)
+        for cat in cats:
+            cid = cat.get("id")
+            cname = str(cat.get("name", "")).strip()
+            if cid is None or not cname:
+                continue
+            coverage.setdefault(f"{cid} - {cname}", set()).add(rel)
+            ids_by_name.setdefault(cname, set()).add(cid)
+            names_by_id.setdefault(cid, set()).add(cname)
+
+    conflicts = []
+    for name, ids in sorted(ids_by_name.items()):
+        if len(ids) > 1:
+            conflicts.append(f"'{name}' is assigned conflicting IDs {sorted(ids)}")
+    for cid, names in sorted(names_by_id.items()):
+        if len(names) > 1:
+            conflicts.append(f"ID {cid} maps to multiple names {sorted(names)}")
+
+    def _sort_key(lbl):
+        head = lbl.split(" - ", 1)[0]
+        return (0, int(head)) if head.lstrip("-").isdigit() else (1, head)
+
+    return sorted(coverage, key=_sort_key), coverage, conflicts
+
+
+def parse_label(text):
+    """'1 - water' -> ('1', 'water'). Returns None when malformed."""
+    text = str(text or "").strip()
+    if " - " not in text:
+        return None
+    lid, lname = map(str.strip, text.split(" - ", 1))
+    return (lid, lname) if lid and lname else None
+
+
+def get_training_categories(cfg):
+    """Read train_model.TRAINING_CATEGORIES as an 'id - name' string, or ''."""
+    cats = (cfg.get("train_model") or {}).get("TRAINING_CATEGORIES") or []
+    if not isinstance(cats, list) or not cats:
+        return ""
+    first = cats[0]
+    if isinstance(first, dict):
+        lid = str(first.get("label_id", "")).strip()
+        lname = str(first.get("label_name", "")).strip()
+        return f"{lid} - {lname}" if lid and lname else ""
+    return str(first).strip()  # tolerate a bare 'id - name' string
+
+
+def set_training_categories(cfg, label_text):
+    """Write train_model.TRAINING_CATEGORIES in the Training tab's shape."""
+    train_model = cfg.setdefault("train_model", {})
+    parsed = parse_label(label_text)
+    train_model["TRAINING_CATEGORIES"] = (
+        [{"label_id": parsed[0], "label_name": parsed[1]}] if parsed else []
+    )
+    return train_model["TRAINING_CATEGORIES"]
+
+
 def build_path_section(root, selected, site_name="custom"):
     """Build the site_config 'Path' section from a root + selected folder names.
 
@@ -450,6 +595,11 @@ def _add_config_arguments(p):
                    metavar="FOLDER", help="Remove a folder from selected_folders; repeatable")
     g.add_argument("--clear-selection", dest="clear_selection", action="store_true",
                    help="Empty selected_folders")
+    g.add_argument("--list-labels", dest="list_labels", action="store_true",
+                   help="Print the annotation categories in the selected folders and exit")
+    g.add_argument("--label", dest="label", default=None, metavar="LABEL",
+                   help="Training category, as 'id - name', a bare name, or a bare id "
+                        "(sets train_model.TRAINING_CATEGORIES)")
     return p
 
 
@@ -546,6 +696,24 @@ def _apply_dataset_args(cfg, args):
     if (args.select or args.deselect or args.clear_selection or args.select_all):
         touched = True
 
+    if args.label is not None:
+        labels, _cov, _con = collect_training_labels(root, selected)
+        wanted = str(args.label).strip()
+        match = None
+        for lbl in labels:
+            lid, lname = parse_label(lbl)
+            if wanted in (lbl, lname, lid) or wanted.lower() == lname.lower():
+                match = lbl
+                break
+        if match is None:
+            raise ValueError(
+                f"'{wanted}' is not a category in the selected folders. "
+                f"Available: {', '.join(labels) or '(none)'}. Use --list-labels."
+            )
+        set_training_categories(cfg, match)
+        touched = True
+        msgs.append(f"Training label set to '{match}'.")
+
     if touched:
         cfg["selected_folders"] = selected
         # Keep the two lists disjoint and complementary, like the Training tab's panes.
@@ -583,17 +751,52 @@ def run_config(args):
         except (OSError, ValueError) as e:
             print(f"[ERROR] {e}", file=sys.stderr)
             return 1
-        sel = set(str(s) for s in cfg.get("selected_folders", []))
+        sel_order = [str(s) for s in cfg.get("selected_folders", [])]
+        sel = set(sel_order)
+        canonical = sel_order[0] if sel_order else None
         print(f"[GRIME AI] datasets under {root}:")
         for name in valid:
             n_img, cats = folder_details(root, name)
             labels = ", ".join(c.get("name", "?") for c in cats) or "no categories"
-            mark = "*" if name in sel else " "
+            mark = "\u2605" if name == canonical else ("*" if name in sel else " ")
             print(f"  {mark} {name:50s} {n_img:5d} images  [{labels}]")
-        print("  (* = currently selected)")
+        print("  (* = selected, \u2605 = canonical)")
         if incomplete:
             print()
             print(_describe_incomplete(incomplete))
+        return 0
+
+    if getattr(args, "list_labels", False):
+        root = args.images_root or cfg.get("segmentation_images_path", "")
+        selected = [str(x) for x in cfg.get("selected_folders", [])]
+        if not root or not selected:
+            print("[ERROR] Need an images root and at least one selected folder.",
+                  file=sys.stderr)
+            return 1
+        labels, coverage, conflicts = collect_training_labels(root, selected)
+        current = get_training_categories(cfg)
+        print(f"[GRIME AI] categories across {len(selected)} selected folder(s):")
+        for lbl in labels:
+            have = len(coverage.get(lbl, ()))
+            mark = "*" if lbl == current else " "
+            flag = "" if have == len(selected) else "   <-- missing from some folders"
+            print(f"  {mark} {lbl:40s} {have}/{len(selected)} folder(s){flag}")
+        print("  (* = currently selected)")
+
+        state = check_label_consistency(root, selected)
+        legend = {"gold": "CANONICAL", "ok": "matches", "yellow": "missing categories",
+                  "red": "CONFLICT", "unreadable": "UNREADABLE"}
+        print()
+        print("Consistency vs the canonical (first selected) dataset:")
+        for name in selected:
+            st = state.get(name, "ok")
+            star = "*" if st == "gold" else " "
+            print(f"  {star} {name:44s} {legend.get(st, st)}")
+        if conflicts:
+            print()
+            print("Conflicts:")
+            for c in conflicts:
+                print(f"  - {c}")
         return 0
 
     if args.show:
@@ -605,6 +808,9 @@ def run_config(args):
             print(f"  {'split_linked':28s} = {_fmt(cfg['split_linked'])}")
         if "segmentation_images_path" in cfg:
             print(f"  {'segmentation_images_path':28s} = {_fmt(cfg['segmentation_images_path'])}")
+        current_label = get_training_categories(cfg)
+        if current_label:
+            print(f"  {'TRAINING_CATEGORIES':28s} = {_fmt(current_label)}")
         for key in ("available_folders", "selected_folders"):
             if key in cfg:
                 print(f"  {key:28s} = {len(cfg[key])} folder(s)")
@@ -697,7 +903,7 @@ def _get_editor_class():
         QFileDialog, QMessageBox, QFrame, QGroupBox, QSplitter, QTreeWidget,
         QTreeWidgetItem, QAbstractItemView, QApplication, QComboBox,
     )
-    from PyQt5.QtGui import QFont
+    from PyQt5.QtGui import QFont, QColor
     from PyQt5.QtCore import Qt
 
     _JSON_FILTER = "Site config (*.json);;All files (*)"
@@ -944,6 +1150,22 @@ def _get_editor_class():
                 lambda item, _c: self._move_items(self._sel_tree, self._avail_tree, [item]))
             col.addWidget(self._sel_tree, 1)
 
+            # Training label — the category SAM2 is trained against, drawn from
+            # the annotation files of whatever is currently selected.
+            label_row = QHBoxLayout()
+            label_row.addWidget(QLabel("Training label:"))
+            self._label_combo = QComboBox()
+            self._label_combo.setToolTip(
+                "Category to train on, read from instances_default.json in the "
+                "selected folders. Saved as train_model.TRAINING_CATEGORIES.")
+            self._label_combo.currentIndexChanged.connect(self._on_label_changed)
+            label_row.addWidget(self._label_combo, 1)
+            col.addLayout(label_row)
+
+            self._label_status = QLabel("")
+            self._label_status.setWordWrap(True)
+            col.addWidget(self._label_status)
+
             self._refresh_list_labels()
             return box
 
@@ -961,6 +1183,8 @@ def _get_editor_class():
         def _add_folder_to_tree(self, tree, folder_name):
             """Add a dataset as a top-level node with image count and labels beneath."""
             parent = QTreeWidgetItem(tree, [folder_name])
+            # Display text may gain a ★ prefix; the canonical name lives in UserRole.
+            parent.setData(0, Qt.UserRole, folder_name)
             parent.setFlags(parent.flags() | Qt.ItemIsSelectable)
 
             child_font = QFont()
@@ -993,11 +1217,28 @@ def _get_editor_class():
             return [it for it in tree.selectedItems() if it in top]
 
         def _names_in(self, tree):
-            return [it.text(0) for it in self._all_top_level(tree)]
+            return [(it.data(0, Qt.UserRole) or it.text(0))
+                    for it in self._all_top_level(tree)]
 
-        def _set_tree_names(self, tree, names):
+        def _set_tree_names(self, tree, names, sort=True):
+            """Rebuild a tree's contents.
+
+            Available is sorted (it is a lookup list). Selected must NOT be:
+            its first entry is the canonical dataset, so order is meaningful
+            and user-controlled.
+            """
+            names = [str(n) for n in names]
+            if sort:
+                names = sorted(set(names))
+            else:
+                seen, ordered = set(), []
+                for n in names:
+                    if n not in seen:
+                        seen.add(n)
+                        ordered.append(n)
+                names = ordered
             tree.clear()
-            for name in sorted(set(str(n) for n in names)):
+            for name in names:
                 self._add_folder_to_tree(tree, name)
 
         def _move_items(self, src, dst, items):
@@ -1005,17 +1246,178 @@ def _get_editor_class():
             items = [it for it in (items or []) if it is not None and it.parent() is None]
             if not items:
                 return
-            moving = [it.text(0) for it in items]
+            moving = [(it.data(0, Qt.UserRole) or it.text(0)) for it in items]
             remaining = [n for n in self._names_in(src) if n not in moving]
-            self._set_tree_names(src, remaining)
-            self._set_tree_names(dst, self._names_in(dst) + moving)
+            self._set_tree_names(src, remaining, sort=(src is self._avail_tree))
+            self._set_tree_names(dst, self._names_in(dst) + moving,
+                                 sort=(dst is self._avail_tree))
             self._refresh_list_labels()
+            self._refresh_training_labels()
+
+        # ---- canonical dataset / label consistency ----
+        _FOLDER_COLORS = {
+            "gold":       "black",
+            "ok":         "black",
+            "yellow":     (180, 120, 0),
+            "red":        "red",
+            "unreadable": "red",
+        }
+
+        def _apply_folder_colors(self):
+            """Color the Selected tree against the canonical (first) dataset.
+
+            Mirrors the Training tab: ★ and black on the canonical entry, black
+            on an exact schema match, dark yellow on a subset, red on a conflict
+            or unreadable annotation file. Individual label rows whose ID
+            disagrees with the canonical turn red and their folder expands.
+            """
+            root = self._root_edit.text().strip()
+            selected = self._names_in(self._sel_tree)
+            state = check_label_consistency(root, selected) if (root and selected) else {}
+            self._folder_state = state
+
+            gold_cats = load_categories(root, selected[0]) if (root and selected) else None
+            gold_by_name = {c["name"]: c["id"] for c in (gold_cats or [])}
+
+            child_font = QFont()
+            child_font.setItalic(True)
+
+            for item in self._all_top_level(self._sel_tree):
+                name = item.data(0, Qt.UserRole) or item.text(0)
+                status = state.get(name, "ok")
+                spec = self._FOLDER_COLORS.get(status, "black")
+                color = QColor(*spec) if isinstance(spec, tuple) else QColor(spec)
+
+                item.setText(0, f"\u2605 {name}" if status == "gold" else name)
+                item.setForeground(0, color)
+                item.setToolTip(0, self._status_tooltip(status, name))
+
+                for j in range(item.childCount()):
+                    child = item.child(j)
+                    child.setFont(0, child_font)
+                    child.setForeground(0, QColor("black"))
+                    if status == "gold":
+                        continue
+                    parsed = self._parse_child_label(child.text(0))
+                    if parsed is None:
+                        continue
+                    label_name, child_id = parsed
+                    gold_id = gold_by_name.get(label_name)
+                    if gold_id is not None and child_id != gold_id:
+                        child.setForeground(0, QColor("red"))
+                        item.setExpanded(True)
+
+        @staticmethod
+        def _parse_child_label(text):
+            """'water (ID=2)' -> ('water', 2); None when it is not a label row."""
+            parts = str(text).split(" (ID=")
+            if len(parts) != 2:
+                return None
+            try:
+                return parts[0].strip(), int(parts[1].rstrip(")"))
+            except ValueError:
+                return None
+
+        @staticmethod
+        def _status_tooltip(status, name):
+            return {
+                "gold": f"Canonical dataset — every other folder is compared against {name}.",
+                "ok": "Category schema matches the canonical dataset exactly.",
+                "yellow": "Subset of the canonical dataset: missing categories, but no conflicts.",
+                "red": "Conflicts with the canonical dataset: a label ID or name disagrees.",
+                "unreadable": "Annotation file is missing or could not be parsed.",
+            }.get(status, "")
 
         def _refresh_list_labels(self):
             self._avail_label.setText(
                 f"Available Training Folders  ({self._avail_tree.invisibleRootItem().childCount()})")
             self._sel_label.setText(
                 f"Selected Training Folders  ({self._sel_tree.invisibleRootItem().childCount()})")
+
+        # ---- training label ----
+        def _refresh_training_labels(self, preferred=None):
+            """Rebuild the label combo from the categories in the selected folders."""
+            combo = self._label_combo
+            keep = preferred if preferred is not None else combo.currentText().strip()
+
+            root = self._root_edit.text().strip()
+            selected = self._names_in(self._sel_tree)
+            labels, coverage, conflicts = (
+                collect_training_labels(root, selected) if (root and selected) else ([], {}, []))
+
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(labels)
+            for i, lbl in enumerate(labels):
+                have = len(coverage.get(lbl, ()))
+                combo.setItemData(
+                    i, f"Present in {have} of {len(selected)} selected folder(s)",
+                    Qt.ToolTipRole)
+            if keep and keep in labels:
+                combo.setCurrentIndex(labels.index(keep))
+            combo.blockSignals(False)
+
+            self._label_scan = (labels, coverage, conflicts, selected)
+            self._apply_folder_colors()
+            self._update_label_status(labels, coverage, conflicts, selected, keep)
+
+        def _update_label_status(self, labels, coverage, conflicts, selected, previous=""):
+            """Explain coverage gaps and id/name collisions under the combo."""
+            if not selected:
+                self._label_status.setText("Select at least one folder to list its labels.")
+                self._label_status.setStyleSheet("color: gray;")
+                return
+            if not labels:
+                self._label_status.setText(
+                    "No categories found in the selected folders' annotation files.")
+                self._label_status.setStyleSheet("color: #c0392b;")
+                return
+
+            msgs, severity = [], "ok"
+
+            if previous and previous not in labels:
+                msgs.append(f"Previous label '{previous}' is not in the current selection.")
+                severity = "warn"
+
+            current = self._label_combo.currentText().strip()
+            have = len(coverage.get(current, ()))
+            total = len(selected)
+            if current and have < total:
+                missing = sorted(set(selected) - coverage.get(current, set()))
+                preview = ", ".join(missing[:3]) + ("…" if len(missing) > 3 else "")
+                msgs.append(f"'{current}' is missing from {total - have} of {total} "
+                            f"folder(s): {preview}")
+                severity = "warn"
+            elif current:
+                msgs.append(f"'{current}' present in all {total} selected folder(s).")
+
+            state = getattr(self, "_folder_state", {}) or {}
+            if selected:
+                msgs.insert(0, f"Canonical: {selected[0]}.")
+            bad = sorted(n for n, st in state.items() if st in ("red", "unreadable"))
+            subset = sorted(n for n, st in state.items() if st == "yellow")
+            if subset:
+                msgs.append(f"{len(subset)} folder(s) missing categories vs canonical: "
+                            + ", ".join(subset[:3]) + ("…" if len(subset) > 3 else ""))
+                severity = "warn"
+            if bad:
+                msgs.append(f"{len(bad)} folder(s) conflict with the canonical dataset: "
+                            + ", ".join(bad[:3]) + ("…" if len(bad) > 3 else ""))
+                severity = "error"
+
+            if conflicts:
+                msgs.append("Conflicts: " + "; ".join(conflicts))
+                severity = "error"
+
+            colors = {"ok": "gray", "warn": "#b8860b", "error": "#c0392b"}
+            self._label_status.setText("  ".join(msgs))
+            self._label_status.setStyleSheet(f"color: {colors[severity]};")
+
+        def _on_label_changed(self, _index):
+            # Selection changed within the existing list; no need to re-read disk.
+            labels, coverage, conflicts, selected = getattr(
+                self, "_label_scan", ([], {}, [], []))
+            self._update_label_status(labels, coverage, conflicts, selected)
 
         # ---- root folder actions ----
         def _on_browse_root(self):
@@ -1065,9 +1467,10 @@ def _get_editor_class():
 
             # Anything already selected stays selected; the rest becomes available.
             selected = [n for n in self._names_in(self._sel_tree) if n in valid]
-            self._set_tree_names(self._sel_tree, selected)
+            self._set_tree_names(self._sel_tree, selected, sort=False)
             self._set_tree_names(self._avail_tree, [n for n in valid if n not in selected])
             self._refresh_list_labels()
+            self._refresh_training_labels()
 
             if not valid:
                 QMessageBox.information(
@@ -1143,9 +1546,10 @@ def _get_editor_class():
 
             selected = _clean(self._cfg.get("selected_folders"))
             available = [n for n in _clean(self._cfg.get("available_folders")) if n not in selected]
-            self._set_tree_names(self._sel_tree, selected)
+            self._set_tree_names(self._sel_tree, selected, sort=False)
             self._set_tree_names(self._avail_tree, available)
             self._refresh_list_labels()
+            self._refresh_training_labels(preferred=get_training_categories(self._cfg))
 
         def _refresh_path_label(self):
             self._path_label.setText(self._path if self._path else "No file loaded (Open… to begin)")
@@ -1177,6 +1581,7 @@ def _get_editor_class():
             self._cfg["segmentation_images_path"] = os.path.normpath(root) if root else ""
             self._cfg["available_folders"] = self._names_in(self._avail_tree)
             self._cfg["selected_folders"] = selected
+            set_training_categories(self._cfg, self._label_combo.currentText())
             if root:
                 self._cfg["Path"] = build_path_section(
                     root, selected, self._cfg.get("siteName", "custom"))
@@ -1192,6 +1597,15 @@ def _get_editor_class():
                     "No training folders are selected, so this config cannot start a "
                     "training run as-is.\n\nSave anyway?",
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes
+
+            if not get_training_categories(self._cfg):
+                if QMessageBox.question(
+                        self, "No Training Label Selected",
+                        "No training label is selected, so SAM2 has no target "
+                        "category to train against.\n\nSave anyway?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No) != QMessageBox.Yes:
+                    return False
 
             missing = [n for n in selected
                        if not os.path.isfile(os.path.join(root, n, _ANNOTATION_FILENAME))]

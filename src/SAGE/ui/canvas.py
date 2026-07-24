@@ -12,6 +12,7 @@ class Canvas(QGraphicsView):
     edge_trace_interval_changed = pyqtSignal(int) # new interval value for HUD
     label_required = pyqtSignal()                 # drawing attempted with no active label
     mask_clicked = pyqtSignal(int)                # Select mode: mask_id clicked on canvas
+    annotation_blocked = pyqtSignal()             # drawing attempted on already-annotated pixels
 
     def __init__(self, on_left_click, on_right_click, parent=None):
         super().__init__(parent)
@@ -212,6 +213,18 @@ class Canvas(QGraphicsView):
 
         super().mouseDoubleClickEvent(event)
 
+    def _pixel_is_owned(self, x, y):
+        """True if (x, y) already belongs to a mask. Backed by the
+        `_is_owned_pixel` callback the main window installs; returns False when
+        no callback is set, so the canvas stays usable standalone."""
+        fn = getattr(self, "_is_owned_pixel", None)
+        if fn is None:
+            return False
+        try:
+            return bool(fn(x, y))
+        except Exception:
+            return False
+
     def set_tool_mode(self, mode: str):
         """Top-level interaction mode: 'draw' (annotate), 'select' (pick a mask),
         or 'pan' (drag the image)."""
@@ -299,9 +312,29 @@ class Canvas(QGraphicsView):
         if event.button() == Qt.RightButton:
             scene_pos = self.mapToScene(event.pos())
 
-            # If any item at this position is a MaskItem, wait for potential double-click
-            mask_hit = any(isinstance(i, MaskItem) for i in self._scene.items(scene_pos))
-            if mask_hit:
+            # A polygon in progress owns the right button. This must come before
+            # the MaskItem check below: that check defers to the base class to
+            # wait for a possible right-double-click delete, which swallows the
+            # press and leaves the polygon permanently open when the click lands
+            # over an existing mask.
+            if (
+                self._segmentation_mode in ("polygon", "manual_polygon")
+                and self._manual_polygon_points
+            ):
+                if len(self._manual_polygon_points) >= 3:
+                    self._close_manual_polygon()
+                else:
+                    self._cancel_manual_polygon()
+                event.accept()
+                return
+
+            # Refuse to drop a negative prompt point on pixels that already
+            # belong to a mask. Tested per-pixel rather than by MaskItem hit:
+            # the 'Other' fill is also a MaskItem, so an item-based test blocks
+            # the entire frame whenever the fill is displayed. Still deferred to
+            # the base class so a right-double-click can delete the mask.
+            if self._pixel_is_owned(scene_pos.x(), scene_pos.y()):
+                self.annotation_blocked.emit()
                 super().mousePressEvent(event)
                 return
 
@@ -383,6 +416,13 @@ class Canvas(QGraphicsView):
                     return
 
                 else:
+                    # Refuse to start or extend an annotation on pixels that
+                    # already belong to a mask. Overlap is unsupported for now.
+                    if self._pixel_is_owned(x, y):
+                        self.annotation_blocked.emit()
+                        event.accept()
+                        return
+
                     if self._segmentation_mode in ("polygon", "manual_polygon"):
                         self._add_manual_polygon_vertex(x, y)
 
