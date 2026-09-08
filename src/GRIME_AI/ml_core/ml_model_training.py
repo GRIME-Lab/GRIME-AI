@@ -338,6 +338,12 @@ class MLModelTraining:
                 task_type="FEATURE_EXTRACTION"
             )
             model = lora.apply(base_model, device=cfg.device)
+            # Persist the exact LoRA config with the checkpoint so inference
+            # rebuilds the identical LoraConfig (same target_modules -> same
+            # adapter key names) instead of hardcoding. Without this the load
+            # side guesses target_modules and strict=False silently drops the
+            # adapters, yielding an untrained model.
+            trainer.lora_config_dict = lora.to_dict()
             optimizer = lora.configure_optimizer(lr=cfg.lr, weight_decay=cfg.weight_decay)
             trained = trainer.train(
                 image_dirs, ann_paths,

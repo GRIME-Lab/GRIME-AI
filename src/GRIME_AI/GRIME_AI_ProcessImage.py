@@ -95,44 +95,30 @@ class GRIME_AI_ProcessImage:
     # ------------------------------------------------------------------------------------------------------------------
     # CANNY
     # ------------------------------------------------------------------------------------------------------------------
+    def canny_edges(self, gray, edgeMethodSettings):
+        """Array core for Canny. Returns the uint8 0/255 edge map (no Qt).
+        Single source of truth for Canny in the app: processCanny() wraps this to a
+        pixmap; the Sandbar Analyzer calls it directly for the raw edge array.
+        Thresholds/aperture come from the same edgeMethodSettings the Edge Detection
+        dialog populates, so every Canny in the app is identical.
+        """
+        highThreshold = edgeMethodSettings.getCannyThresholdHigh()
+        lowThreshold  = edgeMethodSettings.getCannyThresholdLow()
+        kernelSize = getattr(edgeMethodSettings, "canny_kernel", 3)
+        if kernelSize not in (3, 5, 7):
+            kernelSize = 3
+        if lowThreshold > highThreshold:
+            lowThreshold, highThreshold = highThreshold, lowThreshold
+        return cv2.Canny(gray, lowThreshold, highThreshold,
+                         apertureSize=kernelSize, L2gradient=True)
+
     def processCanny(self, img1, gray, edgeMethodSettings, overlay_contours=False):
         """Canny edge detection.
 
         Set overlay_contours True to draw contours over the source image instead of
         returning the edge map itself.
         """
-        highThreshold = edgeMethodSettings.getCannyThresholdHigh()
-        lowThreshold  = edgeMethodSettings.getCannyThresholdLow()
-
-        # Aperture must be 3, 5 or 7. Falls back to 3 if edgeMethodsClass does not yet
-        # carry the field (add `canny_kernel` to constants.py to make the spinbox live).
-        kernelSize = getattr(edgeMethodSettings, "canny_kernel", 3)
-        if kernelSize not in (3, 5, 7):
-            kernelSize = 3
-
-        # Enforce the hysteresis invariant explicitly rather than relying on OpenCV's
-        # internal swap, so the values mean what the dialog labels say they mean.
-        if lowThreshold > highThreshold:
-            lowThreshold, highThreshold = highThreshold, lowThreshold
-
-        # NOTE: main.py already blurred `gray`. A second blur here would compound the
-        # smoothing and further erode the gradients, so it has been removed.
-        #
-        # WAS: cv2.Canny(img_blur, highThreshold, lowThreshold, kernelSize)
-        #   - argument order was (high, low); the signature is (image, low, high)
-        #   - the 4th POSITIONAL parameter of cv2.Canny is `edges` (the output array),
-        #     NOT apertureSize. Passing kernelSize there was silently ignored, so the
-        #     aperture was permanently stuck at the default of 3.
-        edges = cv2.Canny(gray,
-                          lowThreshold,
-                          highThreshold,
-                          apertureSize=kernelSize,
-                          L2gradient=True)
-
-        # REMOVED: two full-image cv2.threshold() calls computing Otsu and Triangle
-        # thresholds. Both results were fed through getThresholdRange() and then never
-        # used -- the lines that consumed them are commented out. They also passed
-        # lowThreshold/highThreshold as thresh/maxval, which THRESH_OTSU ignores entirely.
+        edges = self.canny_edges(gray, edgeMethodSettings)
 
         if not overlay_contours:
             return _gray_to_pixmap(edges)
@@ -156,20 +142,21 @@ class GRIME_AI_ProcessImage:
     # ------------------------------------------------------------------------------------------------------------------
     # SOBEL
     # ------------------------------------------------------------------------------------------------------------------
-    def processSobel(self, gray, sobelKernelSize, method):
-
+    def sobel_components(self, gray, sobelKernelSize):
+        """Array core for Sobel. Returns (gx, gy, magnitude) as float64 arrays.
+        processSobel() selects one of these for display; the Sandbar Analyzer uses
+        the magnitude directly.
+        """
         if sobelKernelSize not in (1, 3, 5, 7):
             sobelKernelSize = 3
-
-        mySobel = sobelData()
-
-        # CV_64F is correct here -- gradients are signed. The failure was downstream: the
-        # float64 result was handed straight to QImage as Format_Grayscale8, so Qt read an
-        # 8-bytes-per-pixel buffer as 1 byte per pixel. That displayed roughly one eighth
-        # of the image as noise. _to_u8() now does the magnitude conversion properly.
         gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=sobelKernelSize)
         gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=sobelKernelSize)
+        return gx, gy, cv2.magnitude(gx, gy)
 
+    def processSobel(self, gray, sobelKernelSize, method):
+
+        mySobel = sobelData()
+        gx, gy, _mag = self.sobel_components(gray, sobelKernelSize)
         mySobel.setSobelX(gx)
         mySobel.setSobelY(gy)
 
@@ -199,6 +186,19 @@ class GRIME_AI_ProcessImage:
     # ------------------------------------------------------------------------------------------------------------------
     # LAPLACIAN
     # ------------------------------------------------------------------------------------------------------------------
+    def laplacian_response(self, gray, use_log=True, sigma=1.0):
+        """Array core for Laplacian / Laplacian-of-Gaussian. Returns a float array
+        (no Qt). processLaplacian() wraps this to a pixmap; the Sandbar Analyzer uses
+        the array.
+        """
+        if gray is None or gray.size == 0:
+            return None
+        if gray.ndim == 3:
+            gray = cv2.cvtColor(gray, cv2.COLOR_RGB2GRAY)
+        if use_log:
+            return laplace_of_gaussian(gray, sigma=sigma)
+        return cv2.Laplacian(gray, cv2.CV_64F, ksize=3)
+
     def processLaplacian(self, gray, use_log=True, sigma=1.0):
         """Laplacian / Laplacian-of-Gaussian edge detection.
 

@@ -93,22 +93,72 @@ class SegFormerInferenceEngine:
 
         print(f"Built classifier with {base.decode_head.classifier.out_channels} output channels")
 
-        # Apply LoRA wrapper
-        lora_cfg = LoraConfig(
-            r=16,
-            lora_alpha=32,
-            lora_dropout=0.05,
-            bias="none",
-            target_modules=["query", "key", "value", "proj"],
-            modules_to_save=["decode_head.classifier"],
-        )
+        # Rebuild the LoRA config from the checkpoint so adapter key names match
+        # exactly what training saved. Falls back to the legacy hardcoded config
+        # only for old checkpoints that predate the saved lora_config, and warns
+        # so the mismatch is visible rather than silent.
+        saved_lora = ckpt.get("lora_config")
+        if saved_lora:
+            lora_cfg = LoraConfig(**saved_lora)
+            print(f"[LoRA] Rebuilt config from checkpoint: "
+                  f"target_modules={saved_lora.get('target_modules')}")
+        else:
+            lora_cfg = LoraConfig(
+                r=16, lora_alpha=32, lora_dropout=0.05, bias="none",
+                target_modules=["query", "key", "value", "proj"],
+                modules_to_save=["decode_head.classifier"],
+            )
+            print("[LoRA] WARNING: checkpoint has no saved lora_config "
+                  "(pre-fix checkpoint). Using legacy hardcoded target_modules; "
+                  "adapter keys may not match. Retrain to embed the config.")
         model = get_peft_model(base, lora_cfg)
 
         print(f"Applied LoRA wrapper")
 
         # Load state dict
-        model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        load_result = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+
+        # strict=False silently drops weights whose key names don't match the
+        # reconstructed (LoRA-wrapped) model. If the trained classifier head or
+        # LoRA adapters land in missing_keys, they never load -> the model runs
+        # on random/pretrained init and predicts background everywhere (empty
+        # masks) with no error raised. Surface that here.
+        missing = list(getattr(load_result, "missing_keys", []) or [])
+        unexpected = list(getattr(load_result, "unexpected_keys", []) or [])
+        print(f"[load_state_dict] missing_keys: {len(missing)}, "
+              f"unexpected_keys: {len(unexpected)}")
+
+        def _flag(keys, needles):
+            return [k for k in keys if any(n in k for n in needles)]
+
+        crit_missing = _flag(missing, ("classifier", "lora_A", "lora_B",
+                                       "modules_to_save"))
+        if crit_missing:
+            print("[load_state_dict] *** CRITICAL: trained weights NOT loaded "
+                  "(these keys are missing from the checkpoint match):")
+            for k in crit_missing[:20]:
+                print(f"    MISSING: {k}")
+            if len(crit_missing) > 20:
+                print(f"    ... and {len(crit_missing) - 20} more")
+            print("[load_state_dict] The model is running on un-trained weights "
+                  "for these layers -> empty/garbage masks are expected.")
+        if unexpected:
+            crit_unexpected = _flag(unexpected, ("classifier", "lora_A", "lora_B",
+                                                 "modules_to_save"))
+            for k in crit_unexpected[:20]:
+                print(f"    UNEXPECTED (in ckpt, no home in model): {k}")
+
         print(f"Successfully loaded checkpoint")
+
+        # Adopt the F1-optimal probability threshold saved at training, unless the
+        # caller explicitly passed one. Falls back to 0.5 for pre-fix checkpoints.
+        if self.threshold is None:
+            saved_thr = ckpt.get("val_best_threshold")
+            if saved_thr is not None:
+                self.threshold = float(saved_thr)
+                print(f"[threshold] Using saved F1-optimal threshold: {self.threshold:.4f}")
+            else:
+                print("[threshold] No saved threshold in checkpoint; defaulting to 0.5.")
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         return model.to(device).eval()
@@ -136,13 +186,19 @@ class SegFormerInferenceEngine:
         )
 
         probs = torch.softmax(logits, dim=1)
-        
-        # For multi-class models: use argmax to find class with highest probability
-        preds_multiclass = torch.argmax(probs, dim=1)  # [H, W] with class indices
-        pred_resized = (preds_multiclass[0] == self.class_index).cpu().numpy().astype(np.uint8)
-        
-        # Keep probability map for visualization
+
+        # Target-class probability map.
         class_prob_resized = probs[0, self.class_index].cpu().numpy()
+
+        # Decision rule: threshold the target-class probability, NOT argmax.
+        # For a minority class (sandbar is a small fraction of pixels) argmax
+        # almost never selects it -- background wins per-pixel -- so an argmax
+        # mask comes out empty even when the model ranks the class well
+        # (high mIoU). Thresholding the class probability is the correct binary
+        # segmentation rule. self.threshold is the F1-optimal value saved at
+        # training; fall back to 0.5 only if the checkpoint predates it.
+        thr = self.threshold if self.threshold is not None else 0.5
+        pred_resized = (class_prob_resized >= thr).astype(np.uint8)
 
         # --- Map predictions back to original image size ---
         pred = cv2.resize(pred_resized, (w, h), interpolation=cv2.INTER_NEAREST)
@@ -178,6 +234,18 @@ class SegFormerInferenceEngine:
 
         image_id = 1
         annotation_id = 1
+        images_processed = 0
+        images_found = 0
+        images_not_found = 0
+        # Resolve the target category name from the selection for reporting.
+        target_category_name = "sandbar"
+        try:
+            if selected_label_categories:
+                first = selected_label_categories[0]
+                target_category_name = first.get("name", target_category_name) \
+                    if isinstance(first, dict) else str(first)
+        except Exception:
+            pass
 
         for img_index, image in enumerate(images_list):
             if progressBar is not None and progressBar.isVisible():
@@ -203,6 +271,11 @@ class SegFormerInferenceEngine:
             score = float(np.mean(water_prob))  # informational only
 
             add_coco_entries(coco_data, image_path, mask, image_array, image_id, annotation_id)
+            images_processed += 1
+            if int(mask.sum()) > 0:
+                images_found += 1
+            else:
+                images_not_found += 1
             image_id += 1
             annotation_id += 1
 
@@ -210,7 +283,17 @@ class SegFormerInferenceEngine:
             progressBar.close()
 
         save_coco_json(coco_data, self.predictions_output_path)
-        return self  # matches Block B's return of the engine instance
+        # Return a stats dict (not self) so ML_Segmentation_Dispatcher's
+        # `isinstance(result, dict)` accumulation works — otherwise it reports
+        # 0 images / "unknown" / a false cancellation.
+        return {
+            "predictor": self,
+            "images_processed": images_processed,
+            "images_found": images_found,
+            "images_not_found": images_not_found,
+            "target_category_name": target_category_name,
+            "cancelled": False,
+        }
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

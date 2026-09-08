@@ -191,7 +191,7 @@ class GRIME_AI_Utils:
                            'Downloads/PBT',   'Downloads/PBT/Images',   'Downloads/PBT/data',   'Downloads/PBT/Videos',   'Downloads/PBT/EXIF', \
                            'Downloads/OTHER', 'Downloads/OTHER/Images', 'Downloads/OTHER/data', 'Downloads/OTHER/Videos', 'Downloads/OTHER/EXIF', \
                            'Downloads/KOLA',  'Downloads/KOLA/Images',  'Downloads/KOLA/data',  'Downloads/KOLA/Videos',  'Downloads/KOLA/EXIF', \
-                           'Models', 'Artifacts']
+                           'Models', 'Artifacts', 'plugins']
 
         for folder in default_folders:
             make_these_folders = os.path.join(rootFolder, folder)

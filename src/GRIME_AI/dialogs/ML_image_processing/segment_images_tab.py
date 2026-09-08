@@ -581,32 +581,6 @@ QLineEdit:focus {
         # ── Dark mode support ─────────────────────────────────────────────────
         self._apply_dark_mode_if_active()
 
-        # ===== TEMPORARY FONT DIAGNOSTIC (remove after debugging) =====
-        try:
-            _app = QtWidgets.QApplication.instance()
-            print("========== SEGMENT TAB FONT DIAGNOSTIC ==========")
-            print("APP font:", _app.font().family(), "bold=", _app.font().bold(),
-                  "weight=", _app.font().weight())
-            print("APP stylesheet len:", len(_app.styleSheet() or ""))
-            for _name in ("checkBox_save_predicted_masks",
-                          "radioButton_segment_model_segformer",
-                          "lineEdit_output_folder"):
-                _w = getattr(self, _name, None)
-                if _w is None:
-                    print(_name, "-> MISSING")
-                    continue
-                _f = _w.font()
-                print(f"{_name}: bold={_f.bold()} weight={_f.weight()} "
-                      f"family={_f.family()} pt={_f.pointSize()}")
-                print(f"   widget.styleSheet()={_w.styleSheet()!r}")
-                _par = _w.parent()
-                print(f"   parent={type(_par).__name__} "
-                      f"parent.styleSheet()={(_par.styleSheet() if _par else '')!r:.160}")
-            print("=================================================")
-        except Exception as _e:
-            print("[FONT DIAGNOSTIC] error:", _e)
-        # ===== END TEMPORARY DIAGNOSTIC =====
-
         # ── Splitter initial sizes (left panel gets most space) ───────────────
         try:
             # Re-parent splitter_main children into a _ToggleSplitter so the
