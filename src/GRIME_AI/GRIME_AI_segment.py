@@ -36,7 +36,6 @@ Optional flags
     --no-mask        Skip saving the binary mask PNG
     --no-copy        Skip copying the original image to the output folder
     --model-cfg      SAM2 model config YAML (default: sam2.1_hiera_l.yaml)
-    --threshold      Probability threshold for SegFormer (default: 0.2)
     --no-gui         Suppress Qt progress wheel (useful in headless environments)
 """
 
@@ -71,8 +70,8 @@ def parse_args():
                         help="Label category name (default: Vegetation)")
     parser.add_argument("--model-cfg",     default="sam2.1_hiera_l.yaml",
                         help="SAM2 model config YAML (default: sam2.1_hiera_l.yaml)")
-    parser.add_argument("--threshold",     type=float, default=0.2,
-                        help="Probability threshold for SegFormer mask (default: 0.2)")
+    parser.add_argument("--threshold",     type=float, default=None,
+                        help="(Deprecated, ignored) SegFormer uses argmax over classes.")
     parser.add_argument("--no-mask",       action="store_true",
                         help="Skip saving binary mask PNG")
     parser.add_argument("--no-copy",       action="store_true",
@@ -236,7 +235,8 @@ def run_segformer(args, device, category, progressBar, image_list=None):
 
         probs = torch.softmax(logits, dim=1)
         target_prob = probs[0, args.category_id]
-        mask = (target_prob > args.threshold).cpu().numpy().astype(np.uint8)
+        # argmax decision rule -- identical to segformer_trainer and the engine
+        mask = (torch.argmax(probs, dim=1)[0] == args.category_id).cpu().numpy().astype(np.uint8)
         prob_map = target_prob.cpu().numpy()
         score = float(target_prob.mean().item())
 

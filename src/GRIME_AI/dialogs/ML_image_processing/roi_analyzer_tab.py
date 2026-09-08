@@ -82,9 +82,9 @@ class ROIAnalyzerTab(QWidget):
         from PyQt5.QtWidgets import QFrame
         lw.setFrameShape(QFrame.NoFrame)
 
-        # Fix the height to exactly one icon row
+        # Fix the height to one icon row plus the index label under it
         icon_h = lw.iconSize().height()
-        lw.setFixedHeight(icon_h)
+        lw.setFixedHeight(icon_h + 16)
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
@@ -443,10 +443,17 @@ class ROIAnalyzerTab(QWidget):
 
         # Create one blank item per image path
         iconSize = lw.iconSize()
+        from PyQt5.QtCore import QSize
+        label_h = 16  # room for the index label under each thumbnail
         for idx, path in enumerate(image_paths):
-            item = QListWidgetItem(QIcon(), "")
+            # 1-based index label: matches the data-row numbering in the
+            # metrics/report spreadsheets so chart anomalies map directly
+            # to filmstrip positions.
+            item = QListWidgetItem(QIcon(), str(idx + 1))
+            item.setTextAlignment(Qt.AlignHCenter | Qt.AlignBottom)
+            item.setToolTip(f"#{idx + 1} - {os.path.basename(path)}")
             item.setData(Qt.UserRole, idx)
-            item.setSizeHint(iconSize)
+            item.setSizeHint(QSize(iconSize.width(), iconSize.height() + label_h))
             lw.addItem(item)
             self._pendingThumbnails.append((item, path, token))
 
@@ -685,20 +692,28 @@ class ROIAnalyzerTab(QWidget):
         first_img_path = self._pairs[0][0]
         image_folder = os.path.dirname(first_img_path)
 
-        # Determine a datetime prefix for filenames from the FIRST image that matches the pattern
-        file_dt_prefix = "no_datetime"
-        for img_path, _ in self._pairs:
-            img_name = os.path.basename(img_path)
-            match_prefix_dt = dt_pattern.search(img_name)
-            if match_prefix_dt:
-                # Example output: 2025-09-20_163002
-                file_dt_prefix = f"{match_prefix_dt.group(1)}_{match_prefix_dt.group(2).replace('-', '')}"
-                break
+        # Optional: correlate NWIS sensor data into the feature file.
+        # Cancel simply skips correlation and extraction proceeds as before.
+        sensor_file, _sf_filter = QFileDialog.getOpenFileName(
+            self,
+            "Correlate sensor data (optional - press Cancel to extract without it)",
+            image_folder,
+            "NWIS sensor data (*.txt *.csv);;All files (*.*)")
+
+        # Filename prefix is the run date/time, per the GRIME AI convention
+        # used by all analysis outputs (e.g. ImageTriage_YYYYMMDD_HHMMSS).
+        from datetime import datetime as _dt
+        file_dt_prefix = _dt.now().strftime("%Y%m%d_%H%M%S")
+
+        # All correlation outputs (csv, xlsx, pngs) go into a 'correlation'
+        # subfolder so they don't pollute the image/data folder.
+        correlation_folder = os.path.join(output_folder, "correlation")
+        os.makedirs(correlation_folder, exist_ok=True)
 
         # Output file paths with datetime prefix
-        csv_path = os.path.join(output_folder, f"{file_dt_prefix}_roi_metrics.csv")
-        xlsx_path = os.path.join(output_folder, f"{file_dt_prefix}_roi_metrics.xlsx")
-        aligned_xlsx_path = os.path.join(output_folder, f"{file_dt_prefix}_aligned_results.xlsx")
+        csv_path = os.path.join(correlation_folder, f"{file_dt_prefix}_roi_metrics.csv")
+        xlsx_path = os.path.join(correlation_folder, f"{file_dt_prefix}_roi_metrics.xlsx")
+        aligned_xlsx_path = os.path.join(correlation_folder, f"{file_dt_prefix}_aligned_results.xlsx")
 
         # 2) Prepare header and container for all rows
         clustering_method = self._get_clustering_method()
@@ -802,6 +817,11 @@ class ROIAnalyzerTab(QWidget):
             total=total_iterations,
             on_close=lambda: setattr(self, "progress_bar_closed", True)
         )
+        # Keep the wheel visible above the main window.
+        # NOTE: QProgressWheel shows itself in its constructor, and changing
+        # window flags on a shown window hides it - so show() again after.
+        progressBar.setWindowFlags(progressBar.windowFlags() | Qt.WindowStaysOnTopHint)
+        progressBar.show()
 
         # 3) Iterate pairs, run analysis, collect results
         try:
@@ -881,6 +901,25 @@ class ROIAnalyzerTab(QWidget):
         df = pd.DataFrame(rows[1:], columns=header)
         self.roi_metrics_df = df  # Keep in memory for subsequent steps
 
+        # Correlate the selected sensor file (if any) and append its values.
+        # Failure here degrades gracefully to an uncorrelated feature file.
+        sensor_df = None
+        if sensor_file:
+            try:
+                from GRIME_AI.GRIME_AI_SensorImageCorrelator import GRIME_AI_SensorImageCorrelator
+                sensor_df = GRIME_AI_SensorImageCorrelator().sensor_values_for_images(
+                    df["Image Path"].tolist(), sensor_file)
+                df = pd.concat([df.reset_index(drop=True),
+                                sensor_df.reset_index(drop=True)], axis=1)
+                header = header + list(sensor_df.columns)
+                self.roi_metrics_df = df
+            except Exception as e:
+                sensor_df = None
+                QMessageBox.warning(
+                    self, "Sensor Correlation",
+                    f"Could not correlate sensor data - features will be "
+                    f"exported without it:\n{e}")
+
         # Print first 5 rows of each DataFrame
         print("\nFirst 5 rows of ROI Metrics DataFrame:")
         print(self.roi_metrics_df.head())
@@ -954,6 +993,16 @@ class ROIAnalyzerTab(QWidget):
                 for offset, value in enumerate(cluster_values, start=21):
                     ws.cell(row=row_idx, column=offset, value=float(value))
 
+                if sensor_df is not None:
+                    sensor_base = 21 + len(cluster_values)
+                    for s_off, s_col in enumerate(sensor_df.columns):
+                        raw = sensor_df.iloc[row_idx - 2][s_col]
+                        try:
+                            cell_value = float(raw)
+                        except (TypeError, ValueError):
+                            cell_value = "" if raw is None else raw
+                        ws.cell(row=row_idx, column=sensor_base + s_off, value=cell_value)
+
             wb.save(xlsx_path)
 
         except ImportError:
@@ -964,6 +1013,18 @@ class ROIAnalyzerTab(QWidget):
             )
         except Exception as e:
             print(f"Error writing XLSX to {xlsx_path}: {e}")
+
+        # Sensor-vs-ROI analysis report: per-parameter chart tabs + assessment
+        analysis_path = None
+        if sensor_df is not None:
+            try:
+                from GRIME_AI.GRIME_AI_SensorROIAnalysis import GRIME_AI_SensorROIAnalysis
+                analysis_path = os.path.join(correlation_folder, f"{file_dt_prefix}_sensor_analysis.xlsx")
+                png_dir = os.path.join(correlation_folder, f"{file_dt_prefix}_figures")
+                GRIME_AI_SensorROIAnalysis().write_report(df, analysis_path, png_dir=png_dir)
+            except Exception as e:
+                analysis_path = None
+                print(f"Error writing sensor analysis report: {e}")
 
         # 6) Align ROI metrics with related CSV by nearest timestamp and export aligned results
         aligned_written = False
@@ -1037,6 +1098,9 @@ class ROIAnalyzerTab(QWidget):
             + ("\nAligned results written to:\n" + aligned_xlsx_path if aligned_written and _exists(aligned_xlsx_path)
                else "\nAligned results skipped or write failed")
             + ("\nRelated CSV loaded into self.related_csv_df" if self.related_csv_df is not None else "\nNo related CSV found")
+            + (f"\nSensor data correlated from:\n{sensor_file}" if sensor_df is not None
+               else "\nNo sensor data correlated")
+            + (f"\nSensor analysis report:\n{analysis_path}" if analysis_path else "")
         )
 
     def reject(self):

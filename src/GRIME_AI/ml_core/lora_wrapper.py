@@ -21,6 +21,19 @@ class GeneralLoRAWrapper:
         self.modules_to_save = modules_to_save or []
         self._peft_model = None
 
+    def to_dict(self):
+        """LoRA config as a plain dict, saved into the checkpoint so inference
+        rebuilds the identical LoraConfig instead of hardcoding target_modules.
+        Keys match LoraConfig kwargs so it round-trips as LoraConfig(**d)."""
+        return {
+            "r": self.r,
+            "lora_alpha": self.alpha,
+            "lora_dropout": self.dropout,
+            "bias": self.bias,
+            "target_modules": list(self.target_modules),
+            "modules_to_save": list(self.modules_to_save),
+        }
+
     def apply(self, model, device="cuda"):
         """
         Wrap an existing base model with LoRA. Returns the wrapped model.

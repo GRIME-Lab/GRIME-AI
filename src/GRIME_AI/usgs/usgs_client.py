@@ -53,6 +53,26 @@ class USGSClient:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def set_show_hidden(self, show: bool) -> None:
+        """Include or exclude hidden cameras in the site list."""
+        self._svc.set_show_hidden(show)
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def toggle_show_hidden(self) -> bool:
+        """Flip hidden-camera visibility. Returns the new state (True = shown)."""
+        new_state = not self._svc.show_hidden()
+        self._svc.set_show_hidden(new_state)
+        return new_state
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def is_hidden(self, cam_id: str) -> bool:
+        """True if the camera is flagged hidden by USGS."""
+        return self._svc.is_hidden(cam_id)
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
     def get_sites(self) -> List[str]:
         """Return a sorted list of site/camera IDs."""
         return self._svc.camera_list()

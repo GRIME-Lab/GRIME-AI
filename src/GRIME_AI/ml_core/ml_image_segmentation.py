@@ -220,7 +220,7 @@ class MLImageSegmentation:
                     self.SEGFORMER_MODEL,
                     input_dir,
                     output_dir,
-                    class_index=1		###JES - CHANGE THIS!!!
+                    class_index=1   # sandbar = class 1 in the binary (bg + target) model
                 )
                 result = engine.run_segformer_inference(
                     copy_original_image, save_masks, selected_label_categories, progressBar

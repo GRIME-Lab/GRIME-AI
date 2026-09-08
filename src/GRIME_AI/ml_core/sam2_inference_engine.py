@@ -148,6 +148,27 @@ class SAM2InferenceEngine:
         print(f"Loaded {sum(len(v) for v in self.category_centroids.values())} centroids across "
               f"{len(self.category_centroids)} categories")
 
+        # PROMPT PROTOCOL: reproduce exactly what this checkpoint was validated
+        # with.  New checkpoints carry a "prompt_protocol" block.  Legacy
+        # checkpoints (no block) were validated with EVERY pooled positive and
+        # 3:1 negatives, so that is what they get -- no cap.
+        from GRIME_AI.ml_core.ml_helpers import DEFAULT_NEGATIVE_BALANCE
+        _pp = checkpoint.get("prompt_protocol")
+        if _pp:
+            self.max_positives    = _pp.get("max_positives")          # int or None
+            self.negative_balance = int(_pp.get("negative_balance", DEFAULT_NEGATIVE_BALANCE))
+            self.prompt_protocol_mode = _pp.get("mode", "pooled")
+        else:
+            self.max_positives    = None                               # legacy: all positives
+            self.negative_balance = DEFAULT_NEGATIVE_BALANCE
+            self.prompt_protocol_mode = "legacy"
+        print(f"Prompt protocol: {self.prompt_protocol_mode} "
+              f"max_positives={self.max_positives if self.max_positives else 'all'} "
+              f"negative_balance={self.negative_balance}:1")
+        if len(self.category_centroids) < 2:
+            print("Note: checkpoint has centroids for the target category only; "
+                  "inference runs with positive prompts only (pre-protocol behavior).")
+
         # Store target category name from checkpoint
         self.target_category_name = checkpoint.get("target_category_name", None)
         if self.target_category_name:
@@ -320,7 +341,9 @@ class SAM2InferenceEngine:
             image_w=w,
             image_h=h,
             device=self.device,
-            random_seed=42
+            random_seed=42,
+            max_positives=getattr(self, "max_positives", None),     # None = no cap (legacy)
+            negative_balance=getattr(self, "negative_balance", 3),
         )
 
         if point_coords is None:

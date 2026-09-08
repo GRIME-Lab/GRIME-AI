@@ -63,16 +63,22 @@ class GRIME_AI_PhenoCam:
         dailyImagesList = dailyList([], [])
 
         # ----------
-        # DETERMINE NUMBER OF IMAGES AVAILABLE FOR THE SELECTED DATE AND BUILT A LIST OF FILENAMES
-        r = requests.get(dailyURLvisible)
+        # FETCH THE DAILY BROWSE PAGE (single request; the old code fetched twice).
+        # PhenoCam redirects day -> month -> year -> site root when no page exists
+        # for the requested date, and the final page returns 200.  If we scraped
+        # that page we would harvest unrelated thumbnail images, so treat any
+        # redirect away from the requested day URL as "no images for this date".
+        # ----------
+        response = requests.get(dailyURLvisible)
 
-        if r.status_code != 404:
+        redirected_away = bool(
+            response.history
+            and response.url.rstrip('/') != dailyURLvisible.rstrip('/')
+        )
+
+        if response.status_code == 200 and not redirected_away:
             List = []
 
-            # ----------
-            # GET THE FILENAMES OF EACH VISIBLE LIGHT IMAGE FOR THE SELECTED DATE
-            # ----------
-            response = requests.get(dailyURLvisible)
             soup = BeautifulSoup(response.text, 'html5lib')
 
             links=[]
@@ -107,7 +113,10 @@ class GRIME_AI_PhenoCam:
 
             dailyImagesList.setVisibleList(List)
         else:
-            print("404: Update Daily Images")
+            if redirected_away:
+                print(f"No images posted for this date (redirected to {response.url})")
+            else:
+                print(f"{response.status_code}: Update Daily Images")
 
         return dailyImagesList
 
@@ -133,14 +142,14 @@ class GRIME_AI_PhenoCam:
         strTemp = htmlParse.text
         nIndex = strTemp.find("Start")
         strStartDate = strTemp[nIndex:nIndex+50]
-        arrStartDate = re.search('\d{4}-\d{2}-\d{2}', strStartDate)
+        arrStartDate = re.search(r'\d{4}-\d{2}-\d{2}', strStartDate)
         nStartYear = int(arrStartDate.group().split(delimiter)[0])
         nStartMonth = int(arrStartDate.group().split(delimiter)[1])
         nStartDay = int(arrStartDate.group().split(delimiter)[2])
 
         nIndex = strTemp.find("Last")
         strLastDate = strTemp[nIndex:nIndex+50]
-        arrLastDate = re.search('\d{4}-\d{2}-\d{2}', strLastDate)
+        arrLastDate = re.search(r'\d{4}-\d{2}-\d{2}', strLastDate)
         nEndYear = int(arrLastDate.group().split(delimiter)[0])
         nEndMonth = int(arrLastDate.group().split(delimiter)[1])
         nEndDay = int(arrLastDate.group().split(delimiter)[2])
@@ -168,7 +177,7 @@ class GRIME_AI_PhenoCam:
             strTemp = htmlParse.text
             nIndex = strTemp.find("Start")
             strStartDate = strTemp[nIndex:nIndex+50]
-            arrStartDate = re.search('\d{4}-\d{2}-\d{2}', strStartDate)
+            arrStartDate = re.search(r'\d{4}-\d{2}-\d{2}', strStartDate)
             nYear = int(arrStartDate.group().split(delimiter)[0])
             nMonth = int(arrStartDate.group().split(delimiter)[1])
             nDay = int(arrStartDate.group().split(delimiter)[2])
@@ -205,7 +214,7 @@ class GRIME_AI_PhenoCam:
             strTemp = htmlParse.text
             nIndex = strTemp.find("Last")
             strLastDate = strTemp[nIndex:nIndex+50]
-            arrLastDate = re.search('\d{4}-\d{2}-\d{2}', strLastDate)
+            arrLastDate = re.search(r'\d{4}-\d{2}-\d{2}', strLastDate)
             nYear = int(arrLastDate.group().split(delimiter)[0])
             nMonth = int(arrLastDate.group().split(delimiter)[1])
             nDay = int(arrLastDate.group().split(delimiter)[2])

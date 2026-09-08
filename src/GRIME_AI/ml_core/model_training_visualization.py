@@ -751,6 +751,14 @@ class ModelTrainingVisualization:
             underfit_threshold: float = 0.75,
             instability_std_threshold: float = 0.015,
             good_val_acc_threshold: float = 0.90,
+            lr_scheduler_enabled: bool = None,
+            lr_reductions: int = None,
+            config: dict = None,
+            num_train_images: int = None,
+            num_val_images: int = None,
+            early_stopped: bool = False,
+            best_epoch: int = None,
+            val_best_threshold: float = None,
     ) -> dict:
         """
         Analyzes training curves and returns a structured diagnostic report.
@@ -777,12 +785,24 @@ class ModelTrainingVisualization:
             underfit_threshold:       Val accuracy below which underfitting is flagged.
             instability_std_threshold: Std dev of val accuracy flagging instability.
             good_val_acc_threshold:   Val accuracy above which convergence is good.
+            lr_scheduler_enabled:     Whether an LR scheduler was active (suppresses
+                                      the "add a scheduler" suggestion).
+            lr_reductions:            Number of LR reductions the scheduler performed.
+            config:                   site_config dict actually used for the run. Enables
+                                      concrete recommendations (key: current -> suggested).
+            num_train_images / num_val_images: dataset sizes.
+            early_stopped:            Whether early stopping terminated the run.
+            best_epoch:               1-based epoch of the best checkpoint.
+            val_best_threshold:       F1-optimal probability threshold on the final
+                                      validation pass (0.5 == well calibrated).
 
         Returns:
             dict with keys:
               - 'severity':     'good' | 'warning' | 'critical'
               - 'findings':     list of (severity, finding_text) tuples
               - 'suggestions':  list of suggestion strings
+              - 'recommendations': list of dicts {key, current, suggested, reason}
+                                 -- concrete config changes for the next run
               - 'summary':      single human-readable summary string
               - 'report_text':  full formatted report string
         """
@@ -810,52 +830,69 @@ class ModelTrainingVisualization:
         final_val_loss = float(vl_loss[-1])
 
         # 1. Overfitting
-        if n_epochs >= plateau_window:
-            mean_gap = float(np.mean(tr_acc[-plateau_window:] - vl_acc[-plateau_window:]))
-        else:
-            mean_gap = float(tr_acc[-1] - vl_acc[-1])
+        window = min(plateau_window, n_epochs)
+        mean_gap = float(np.mean(tr_acc[-window:] - vl_acc[-window:]))
+        window_txt = f"over the final {window} epochs" if window > 1 else "at the final epoch"
 
-        if mean_gap > overfit_gap_threshold * 2:
-            findings.append(("critical", f"Severe overfitting: train/val accuracy gap is {mean_gap:.3f} over the final {plateau_window} epochs."))
-            suggestions.append("Reduce training epochs or add regularization (increase weight decay or dropout).")
-            suggestions.append("Consider using more training images or stronger data augmentation.")
+        overfit = mean_gap > overfit_gap_threshold * 2
+        if overfit:
+            findings.append(("critical", f"Severe overfitting: train/val accuracy gap is {mean_gap:.3f} {window_txt}."))
         elif mean_gap > overfit_gap_threshold:
-            findings.append(("warning", f"Mild overfitting: train/val accuracy gap is {mean_gap:.3f} over the final {plateau_window} epochs."))
+            findings.append(("warning", f"Mild overfitting: train/val accuracy gap is {mean_gap:.3f} {window_txt}."))
             suggestions.append("If deploying, prefer the checkpoint with the best validation accuracy rather than the final epoch.")
 
         # 2. Underfitting
         max_val_acc = float(np.max(vl_acc))
-        if max_val_acc < underfit_threshold:
-            findings.append(("critical", f"Underfitting: peak validation accuracy is only {max_val_acc:.3f} (threshold: {underfit_threshold:.2f})."))
+        underfit = max_val_acc < underfit_threshold
+
+        # Overfit + underfit together (train high, val low from epoch 1) is not a
+        # capacity or LR problem -- it is a train/val protocol mismatch (prompts,
+        # preprocessing, label mapping). Don't emit contradictory LR/epoch advice.
+        if overfit and underfit:
+            findings.append(("critical", "Large train/val gap with low peak validation accuracy indicates a train/validation pipeline mismatch (prompting, preprocessing, or label mapping), not a hyperparameter problem."))
+            suggestions.append("Verify that validation uses the same prompt protocol, preprocessing, and label mapping as training before tuning hyperparameters.")
+        elif overfit:
+            suggestions.append("Reduce training epochs or add regularization (increase weight decay or dropout).")
+            suggestions.append("Consider using more training images or stronger data augmentation.")
+        elif underfit:
             suggestions.append("Increase the number of training epochs.")
             suggestions.append("Try a higher learning rate — current value may be too conservative.")
             suggestions.append("Check annotation quality: low accuracy may indicate label errors.")
             if lr is not None and lr < 1e-4:
                 suggestions.append(f"Learning rate {lr:.5f} may be too low — consider trying 3e-4 or 1e-3.")
+        if underfit:
+            findings.append(("critical", f"Underfitting: peak validation accuracy is only {max_val_acc:.3f} (threshold: {underfit_threshold:.2f})."))
 
         # 3. Early plateau
         if n_epochs >= plateau_window * 2:
             midpoint = n_epochs // 2
             early_max = float(np.max(vl_acc[:midpoint]))
             late_max = float(np.max(vl_acc[midpoint:]))
-            if late_max - early_max < 0.005:
-                plateau_epoch = int(np.argmax(vl_acc)) + 1
+            best_epoch_1b = int(np.argmax(vl_acc)) + 1
+            # Only a plateau if the best epoch is in the FIRST half; a curve
+            # that is still (slowly) improving and peaks at the end is not one.
+            if late_max - early_max < 0.005 and best_epoch_1b <= midpoint:
+                plateau_epoch = best_epoch_1b
                 findings.append(("warning", f"Validation accuracy plateaued at epoch {plateau_epoch} ({early_max:.3f}) with no meaningful improvement in the second half of training."))
                 suggestions.append(f"Consider stopping training at epoch {plateau_epoch} to save time.")
-                suggestions.append("A learning rate scheduler (e.g., ReduceLROnPlateau) may help break through the plateau.")
+                if lr_scheduler_enabled is False:
+                    suggestions.append("A learning rate scheduler (e.g., ReduceLROnPlateau) may help break through the plateau.")
+                elif lr_scheduler_enabled and (lr_reductions is not None and lr_reductions > 0):
+                    suggestions.append(f"LR scheduler was active and reduced the rate {lr_reductions} time(s) without breaking the plateau; the model has likely converged for this data.")
 
         # 4. Instability
         if n_epochs >= 5:
-            val_std = float(np.std(vl_acc))
+            # Measure over the tail only; a steep early rise is learning, not instability.
+            val_std = float(np.std(vl_acc[-window:]))
             if val_std > instability_std_threshold:
-                findings.append(("warning", f"Unstable validation accuracy detected (std dev: {val_std:.4f})."))
+                findings.append(("warning", f"Unstable validation accuracy over the final {window} epochs (std dev: {val_std:.4f})."))
                 suggestions.append("Reduce the learning rate — instability often indicates the learning rate is too high.")
                 suggestions.append("Increase batch size if GPU memory allows.")
 
         # 5. Loss divergence
-        if n_epochs >= plateau_window:
-            train_loss_trend = float(tr_loss[-1]) - float(tr_loss[-plateau_window])
-            val_loss_trend = float(vl_loss[-1]) - float(vl_loss[-plateau_window])
+        if n_epochs >= 2:
+            train_loss_trend = float(tr_loss[-1]) - float(tr_loss[-window])
+            val_loss_trend = float(vl_loss[-1]) - float(vl_loss[-window])
             if train_loss_trend < -0.01 and val_loss_trend > 0.01:
                 findings.append(("critical", f"Loss divergence: train loss decreasing ({train_loss_trend:.4f}) while val loss increasing ({val_loss_trend:.4f})."))
                 suggestions.append("Stop training — the model is memorizing training data.")
@@ -880,6 +917,27 @@ class ModelTrainingVisualization:
         # 8. Good convergence fallback
         if not findings:
             findings.append(("good", f"Good convergence: validation accuracy reached {final_val_acc:.3f} with a train/val gap of {mean_gap:.3f}."))
+
+        # ------------------------------------------------------------------
+        # Concrete, config-aware recommendations for the next run.
+        # Each is {key, current, suggested, reason}; key is the site_config
+        # key (identical in GRIME AI and OpsiLum) so the user can act on it.
+        # ------------------------------------------------------------------
+        recommendations = self._build_recommendations(
+            config=config or {},
+            n_epochs=n_epochs, vl_acc=vl_acc, vl_loss=vl_loss,
+            mean_gap=mean_gap, max_val_acc=max_val_acc,
+            overfit=overfit, underfit=underfit,
+            lr=lr, lr_scheduler_enabled=lr_scheduler_enabled,
+            lr_reductions=lr_reductions,
+            num_train_images=num_train_images, num_val_images=num_val_images,
+            early_stopped=early_stopped, best_epoch=best_epoch,
+            val_best_threshold=val_best_threshold,
+            underfit_threshold=underfit_threshold,
+        )
+        for r in recommendations:
+            if r.get("severity") == "warning":
+                findings.append(("warning", r["reason"]))
 
         # Deduplicate suggestions
         seen = set()
@@ -927,6 +985,14 @@ class ModelTrainingVisualization:
             report_lines.append("  SUGGESTIONS:")
             for i, s in enumerate(unique_suggestions, 1):
                 report_lines.append(f"    {i}. {s}")
+        if recommendations:
+            report_lines.append("-" * 70)
+            report_lines.append("  RECOMMENDED SETTINGS FOR NEXT RUN:")
+            for r in recommendations:
+                if r['current'] == r['suggested']:
+                    report_lines.append(f"    [{r['key']}] {r['reason']}")
+                else:
+                    report_lines.append(f"    {r['key']}: {r['current']} -> {r['suggested']}   ({r['reason']})")
         report_lines.append("=" * 70)
         report_text = "\n".join(report_lines)
 
@@ -936,9 +1002,111 @@ class ModelTrainingVisualization:
             "severity": overall_severity,
             "findings": findings,
             "suggestions": unique_suggestions,
+            "recommendations": recommendations,
             "summary": summary,
             "report_text": report_text,
         }
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _build_recommendations(config, n_epochs, vl_acc, vl_loss, mean_gap, max_val_acc,
+                               overfit, underfit, lr, lr_scheduler_enabled, lr_reductions,
+                               num_train_images, num_val_images, early_stopped, best_epoch,
+                               val_best_threshold, underfit_threshold):
+        """
+        Rule-based translation of diagnostics into concrete config changes.
+        Deterministic and explainable: every entry names the site_config key,
+        the value used, the value to try, and why.
+        """
+        recs = []
+
+        def _get(key, fallback=None):
+            v = config.get(key, None)
+            return fallback if v in (None, "", []) else v
+
+        def _add(key, current, suggested, reason, severity=None):
+            if current == suggested:
+                return
+            recs.append({"key": key, "current": current, "suggested": suggested,
+                         "reason": reason, "severity": severity})
+
+        epochs_cfg = int(_get("number_of_epochs", n_epochs))
+        patience = int(_get("patience", 3))
+        es_on = bool(_get("early_stopping", False))
+        sched_pat = int(_get("lr_scheduler_patience", 3))
+        sched_on = bool(_get("lr_scheduler_enabled", True)) if lr_scheduler_enabled is None else bool(lr_scheduler_enabled)
+        lr_val = float(lr) if lr is not None else float((_get("learningRates", [1e-4]) or [1e-4])[0])
+        best = int(best_epoch) if best_epoch else int(np.argmax(vl_acc)) + 1
+        val_still_improving = (n_epochs >= 3 and float(vl_loss[-1]) < float(np.min(vl_loss[:-2])))
+
+        # --- Calibration / protocol mismatch (highest priority) --------------
+        if val_best_threshold is not None and (val_best_threshold < 0.35 or val_best_threshold > 0.65):
+            recs.append({
+                "key": "train_prompt_mode / val_prompt_mode",
+                "current": f"{_get('train_prompt_mode', 'pooled')} / {_get('val_prompt_mode', 'pooled')}",
+                "suggested": "pooled / pooled",
+                "reason": (f"Validation is miscalibrated (F1-optimal threshold {val_best_threshold:.2f}, "
+                           f"expected ~0.50). Validation prompts/preprocessing differ from training; "
+                           f"fix the pipeline before changing any hyperparameter."),
+                "severity": "warning"})
+            return recs  # everything else would be tuning a broken metric
+        if overfit and underfit:
+            return recs  # pipeline-mismatch finding already emitted upstream
+
+        # --- Early stopping ----------------------------------------------------
+        if es_on and early_stopped and (n_epochs - best) <= patience and best >= n_epochs - patience - 1 \
+                and patience < 5:
+            _add("patience", patience, max(5, patience + 3),
+                 f"Early stopping fired at epoch {n_epochs} with the best checkpoint at epoch {best}; "
+                 f"patience {patience} is too short to distinguish noise from a real plateau.")
+        if not es_on and epochs_cfg > 15:
+            _add("early_stopping", False, True,
+                 "Long runs without early stopping waste time past convergence and risk overfitting.")
+
+        # --- Not converged -------------------------------------------------------
+        if not early_stopped and best >= n_epochs - 1 and val_still_improving:
+            _add("number_of_epochs", epochs_cfg, epochs_cfg + 20,
+                 f"Best checkpoint is epoch {best} of {n_epochs} and validation loss is still falling; "
+                 f"the run ended before converging.")
+
+        # --- Scheduler / ES interplay ------------------------------------------------
+        if sched_on and es_on and sched_pat >= patience:
+            _add("lr_scheduler_patience", sched_pat, max(1, patience // 2),
+                 f"lr_scheduler_patience ({sched_pat}) >= patience ({patience}): training stops before "
+                 f"the learning rate is ever reduced.")
+        if sched_on and lr_reductions and lr_reductions >= 2 and not val_still_improving and not early_stopped:
+            _add("number_of_epochs", epochs_cfg, max(5, best + 3),
+                 f"LR was reduced {lr_reductions} times with no further validation gain after epoch {best}; "
+                 f"the model has converged.")
+
+        # --- Capacity / data ----------------------------------------------------------
+        if overfit and not underfit:
+            wd = float(_get("weight_decay", 0.01))
+            _add("weight_decay", wd, round(min(wd * 5, 0.1), 4),
+                 f"Train/val gap of {mean_gap:.3f} with good validation accuracy: more regularization "
+                 f"or more training images will narrow it.")
+            if num_train_images is not None and num_train_images < 200:
+                _add("training images", num_train_images, ">= 200",
+                     "Small training sets overfit quickly; add annotated images, especially difficult conditions.")
+        if underfit and not overfit:
+            if lr_val < 1e-4:
+                _add("learningRates", [lr_val], [1e-4],
+                     f"Peak validation accuracy {max_val_acc:.3f} < {underfit_threshold:.2f} with a low "
+                     f"learning rate; 1e-4 is a safe step up for decoder-only SAM2 fine-tuning.")
+            if n_epochs < 10:
+                _add("number_of_epochs", epochs_cfg, max(epochs_cfg, 30),
+                     "Too few epochs to judge underfitting; allow the run to converge.")
+
+        # --- Validation set size -------------------------------------------------------
+        if num_val_images is not None and num_val_images < 50:
+            recs.append({
+                "key": "val_split", "current": _get("val_split", 0.2), "suggested": _get("val_split", 0.2),
+                "reason": (f"Only {num_val_images} validation images: epoch-to-epoch changes below ~0.02 "
+                           f"are noise. Increase the dataset or the split before trusting small differences."),
+                "severity": None})
+
+        return recs
 
     # ------------------------------------------------------------------------------------------------------------------
     # ✅ NEW: Save diagnostic report as a formatted PDF using fpdf2
@@ -971,6 +1139,12 @@ class ModelTrainingVisualization:
             early_stopped: bool = False,      # whether early stopping triggered
             early_stop_epoch: int = None,     # epoch at which training stopped early
             training_time_seconds: float = None,  # total wall-clock training time
+            lr_scheduler_enabled: bool = None,    # was ReduceLROnPlateau active
+            lr_reductions: int = None,            # number of LR reductions performed
+            config: dict = None,                  # site_config used for the run
+            val_best_threshold: float = None,     # F1-optimal threshold from validator
+            val_dice_best_threshold: float = None,  # Dice at that threshold
+            time_breakdown: dict = None,          # {"encode","train","validate"} seconds
     ) -> dict:
         """
         Runs analyze_training_results() and saves a formatted PDF report
@@ -1015,9 +1189,18 @@ class ModelTrainingVisualization:
             lr=lr,
             miou_values=miou_values,
             dice_values=dice_values,
+            lr_scheduler_enabled=lr_scheduler_enabled,
+            lr_reductions=lr_reductions,
+            config=config,
+            num_train_images=num_train_images,
+            num_val_images=num_val_images,
+            early_stopped=early_stopped,
+            best_epoch=best_epoch,
+            val_best_threshold=val_best_threshold,
         )
 
         severity = result["severity"]
+        recommendations = result.get("recommendations", [])
         findings = result["findings"]
         suggestions = result["suggestions"]
 
@@ -1093,6 +1276,16 @@ class ModelTrainingVisualization:
             meta_rows.append(("Final mIoU", f"{float(miou_values[-1]):.4f}"))
         if dice_values:
             meta_rows.append(("Final Dice", f"{float(dice_values[-1]):.4f}"))
+        if val_best_threshold is not None:
+            _thr = f"{val_best_threshold:.2f}"
+            _d = f"{val_dice_best_threshold:.4f}" if val_dice_best_threshold is not None else "N/A"
+            meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr}; 0.50 = calibrated)"))
+        if time_breakdown and any(v is not None for v in time_breakdown.values()):
+            def _fmt(v):
+                if v is None: return "N/A"
+                v = int(round(v)); return f"{v // 60}m {v % 60:02d}s"
+            meta_rows.append(("Time encode / train / val",
+                              f"{_fmt(time_breakdown.get('encode'))} / {_fmt(time_breakdown.get('train'))} / {_fmt(time_breakdown.get('validate'))}"))
         if weight_decay is not None:
             meta_rows.append(("Weight Decay", str(weight_decay)))
         if batch_size is not None:
@@ -1173,6 +1366,21 @@ class ModelTrainingVisualization:
                 pdf.set_x(15)
                 pdf.multi_cell(page_w, 6, _safe(f"  {i}.  {s}"), border=0)
                 pdf.ln(1)
+            pdf.ln(4)
+
+        # --- Recommended settings for next run ---
+        if recommendations:
+            _section_header("Recommended Settings for Next Run")
+            for r in recommendations:
+                pdf.set_x(15)
+                pdf.set_font("Helvetica", "B", 10)
+                head = (f"  {r['key']}" if r['current'] == r['suggested']
+                        else f"  {r['key']}:  {r['current']}  ->  {r['suggested']}")
+                pdf.multi_cell(page_w, 6, _safe(head), border=0)
+                pdf.set_x(15)
+                pdf.set_font("Helvetica", "", 9)
+                pdf.multi_cell(page_w, 5, _safe(f"      {r['reason']}"), border=0)
+                pdf.ln(2)
             pdf.ln(4)
 
         # --- Embedded graphs ---

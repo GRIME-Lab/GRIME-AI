@@ -2,9 +2,20 @@
 # -*- coding: utf-8 -*-
 
 import os
+
+# torch.use_deterministic_algorithms(True) (set in train_sam) requires this
+# for cuBLAS matmuls on CUDA >= 10.2; without it the first GPU matmul under
+# deterministic mode raises RuntimeError. cuBLAS reads it at handle creation,
+# so it must be set before any CUDA matmul runs in the process. setdefault
+# preserves an externally configured value. NOTE: if the host application
+# performs GPU work before this module is imported, this is too late -- the
+# entry point (main.py) must set it instead.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import sys
 import random
 import math
+import time as _time
 import json
 from datetime import datetime
 import importlib.util
@@ -41,11 +52,17 @@ from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
 from GRIME_AI.utils.datasetutils import DatasetUtils
-from GRIME_AI.ml_core.ml_helpers import build_centroid_point_prompts
+from GRIME_AI.ml_core.ml_helpers import (build_centroid_point_prompts, sample_pooled_prompts,
+                                         DEFAULT_MAX_POSITIVES as _DEFAULT_MAX_POSITIVES,
+                                         DEFAULT_NEGATIVE_BALANCE as _DEFAULT_NEGATIVE_BALANCE)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 print(sam2_base.__file__)
+
+# Sentinel distinguishing "image not yet seen" from "image cached as unusable (None)"
+# in the cross-epoch training cache. See _train_one_epoch.
+_CACHE_MISS = object()
 
 
 # ------------------------------------------------------------------------
@@ -214,14 +231,25 @@ class SAM2Trainer:
 
         self.site_name = self.site_config['siteName']
         self.learning_rates = self.site_config['learningRates']
-        self.optimizer_type = self.site_config['optimizer']
-        self.loss_function = self.site_config.get('loss_function', 'BCE + Dice + Score')
+        # Optimizer and loss are fixed by the trainer (AdamW; 0.5*BCE + 0.5*Dice
+        # + 0.05*score). The GUI selectors were removed; do not read stale
+        # 'optimizer' / 'loss_function' keys from site_config or the report
+        # will describe something that never ran.
+        self.optimizer_type = "AdamW"
+        self.loss_function = "BCE + Dice + Score"
         self.weight_decay = self.site_config['weight_decay']
         self.num_epochs = self.site_config['number_of_epochs']
         self.max_best_checkpoints = int(self.site_config.get(
             'max_best_checkpoints', ModelConfigManager.get_default('max_best_checkpoints')))
         self.early_stopping = self.site_config['early_stopping']
         self.patience = self.site_config['patience']
+
+        # Mini-batch size for SAM2 training (GUI "Batch Size" spinbox).
+        # Accepts either key spelling; clamped to >= 1. Resolved value is
+        # printed at the start of training so a misnamed config key is
+        # visible immediately (it will resolve to 1).
+        self.batch_size = max(1, int(self.site_config.get(
+            'batch_size', self.site_config.get('batchSize', 1))))
 
         # Blob filter radius — stored as fraction of image diagonal
         # Default: 50px / diagonal of a 2000x1000 image ≈ 0.02236
@@ -535,11 +563,11 @@ class SAM2Trainer:
         # --- END HYDRA PATCH
 
         total_params = sum(p.numel() for p in model.parameters())
-        print(f"Full fine-tuning: {total_params:,} trainable parameters")
+        print(f"Model loaded: {total_params:,} total parameters. "
+              f"Actual trained modules are reported by the gradient-flow audit at the first training step.")
 
         self.sam2_model = model.to(device).train()
 
-        import time as _time
         _training_start = _time.perf_counter()
 
         if self.TEST_MODE:
@@ -637,7 +665,13 @@ class SAM2Trainer:
 
         self.reset_metrics()
 
-        total_iterations = epochs * (len(train_images) + (len(val_images) if val_images else 0))
+        # Progress budget: per epoch, one tick per trained sample and per
+        # validation image, PLUS a one-time Phase 1 budget of two ticks per
+        # training image (one for preflight prep, one for encoding). Later
+        # epochs re-enter Phase 1 only for transient retries, which are
+        # negligible against this budget.
+        total_iterations = epochs * (len(train_images) + (len(val_images) if val_images else 0)) \
+            + 2 * len(train_images)
 
         progressBar = QProgressWheel(
             title="Training in-progress...", total=total_iterations,
@@ -770,8 +804,12 @@ class SAM2Trainer:
         # ─────────────────────────────────────────────────────────────────────
 
         try:
+            self.time_train_seconds = 0.0
+            self.time_val_seconds = 0.0
+            self.time_encode_seconds = 0.0   # epoch-0 preflight + embedding cache (train) and val encode
             for epoch in range(epochs):
                 print(f"\nEpoch {epoch + 1}/{epochs}")
+                _t_epoch = _time.perf_counter()
 
                 if use_amp:
                     avg_epoch_loss, train_accuracy, train_dice, train_iou = self._train_one_epoch(
@@ -794,6 +832,12 @@ class SAM2Trainer:
                         use_amp=use_amp,
                         target_label = target_label
                     )
+
+                _dt = _time.perf_counter() - _t_epoch
+                _enc = float(getattr(self, "_last_encode_seconds", 0.0))
+                self.time_encode_seconds += _enc
+                self.time_train_seconds += max(0.0, _dt - _enc)
+                self._last_encode_seconds = 0.0
 
                 if avg_epoch_loss is None:
                     return
@@ -830,15 +874,14 @@ class SAM2Trainer:
                     break
 
                 # Deduplicate centroids after first epoch to prevent memory leak
-                if epoch == 0:
+                if epoch == 0 and not getattr(self, "_centroids_finalized", False):
                     print("\n=== Finalizing Centroid Collection ===")
                     self._deduplicate_centroids()
-                    total_centroids = sum(len(v) for v in self.category_centroids.values())
-                    print(f"Total unique centroids collected: {total_centroids}")
-                    print("Centroid collection frozen - will not accumulate in future epochs\n")
+                    self._centroids_finalized = True
 
 
                 if val_cache:
+                    _t_val = _time.perf_counter()
                     avg_val_loss, val_accuracy, miou, avg_val_dice, avg_val_iou = self._validate_one_epoch(
                         val_cache=val_cache,
                         predictor=predictor,
@@ -846,6 +889,12 @@ class SAM2Trainer:
                         target_label=target_label,
                         save_overlays=self._should_save_overlays(epoch + 1, epochs)
                     )
+
+                    _dt_val = _time.perf_counter() - _t_val
+                    _enc = float(getattr(self, "_last_encode_seconds", 0.0))
+                    self.time_encode_seconds += _enc
+                    self.time_val_seconds += max(0.0, _dt_val - _enc)
+                    self._last_encode_seconds = 0.0
 
                     if avg_val_loss is None:
                         return
@@ -1211,15 +1260,43 @@ class SAM2Trainer:
             target_label=None
     ):
         """
-        Runs one training epoch. Returns (avg_epoch_loss, train_accuracy, avg_dice, avg_iou).
+        Runs one training epoch with true mini-batching.
+        Returns (avg_epoch_loss, train_accuracy, avg_dice, avg_iou).
 
-        CORRECTIONS APPLIED:
-        - Uses BCEWithLogitsLoss properly on logits
-        - Only applies sigmoid when computing Dice loss and metrics
-        - Maintains numerical stability
+        Structure (per epoch):
+          PHASE 1 -- PREFLIGHT + ENCODE: images not yet in the cross-epoch
+            cache get their mask decoded, prompts derived, and embeddings
+            computed. Encoding runs through predictor.set_image_batch() in
+            chunks of self.batch_size (per-image set_image() fallback if the
+            installed sam2 lacks batch support). On the first epoch this is
+            all images; on later epochs it is only transient retries
+            (e.g. previously file-locked images).
+          PHASE 2 -- BATCHED TRAINING: samples are drawn from the cache in
+            chunks of self.batch_size. Per step: embeddings are stacked
+            [B,...], prompt sets are padded to the max count in the batch
+            (pad label -1 = SAM2 not-a-point), one prompt-encoder and one
+            mask-decoder forward runs for the whole batch
+            (repeat_image=False since each sample has its own embedding),
+            per-sample losses are averaged, and the optimizer steps once
+            per batch. Gradients are therefore averaged over batch_size
+            samples per update.
+
+        The cross-epoch cache invariant is unchanged: set_image()/
+        set_image_batch() run under no_grad, so the image encoder receives
+        no gradient updates and embeddings are constant across epochs. In
+        this batched design the decoder consumes cached embeddings directly,
+        which makes encoder training impossible by construction; the
+        gradient-flow audit will flag a configuration error if encoder
+        gradients ever appear.
+
+        CORRECTIONS PRESERVED FROM PRIOR VERSIONS:
+        - BCEWithLogitsLoss on logits; sigmoid only for Dice/metrics
         - Direct progress_bar_closed attribute access (Issue #8)
+        - Blob filter: uint8 GPU-side cast, connectedComponentsWithStats,
+          vectorized isin rebuild (output-identical to per-blob loop)
+        - Pixel accuracy computed on-GPU, scalar-only transfer
         """
-        import torch.nn.functional as F  # ✅ Moved import to top of method
+        import torch.nn.functional as F
 
         self.sam2_model.train()
 
@@ -1234,31 +1311,91 @@ class SAM2Trainer:
         bce_loss_fn = nn.BCEWithLogitsLoss()
         dice_loss_fn = DiceLoss()
 
-        # --- FILTER MASK BY TARGET_LABEL ---
         if target_label is None:
             raise ValueError("target_label is required but was None.")
 
-        for idx, image_file in enumerate(train_images):
+        # RESOLVE TARGET_ID (once per epoch; deterministic per category)
+        target_id = next((c["id"] for c in self.categories if c["name"] == target_label), None)
+        if target_id is None:
+            available = ", ".join(f'{c["name"]}:{c["id"]}' for c in self.categories)
+            raise ValueError(f"Unknown target_label '{target_label}'. Available: {available}")
+
+        # ============================================================
+        # CENTROID DIAGNOSTIC TRACKING (epoch 0 only)
+        # Tracks why each image did or did not contribute a centroid.
+        # Written to a CSV report in the model output folder at end of epoch 0.
+        # ============================================================
+        if epoch == 0 and not hasattr(self, "_centroid_diag_rows"):
+            self._centroid_diag_rows = []   # list of dicts, one per image
+
+        # ================================================================
+        # CROSS-EPOCH TRAINING CACHE (embeddings + masks + prompts)
+        # ----------------------------------------------------------------
+        # set_image()/set_image_batch() run under no_grad, so gradients flow
+        # only through the prompt encoder and mask decoder. Embeddings are
+        # therefore constant across epochs and cached on first encounter,
+        # along with the decoded ground-truth mask and prompt centroids.
+        #
+        # Cache entry per image_file:
+        #   dict  -> usable sample (embeddings on CPU/pinned)
+        #   None  -> structurally unusable (empty mask, no foreground
+        #            blobs); skipped without I/O on later epochs
+        #   absent-> transient failure (file lock); retried next epoch
+        #
+        # Host RAM cost is ~17 MB/image for hiera-large fp32 embeddings.
+        # Negative centroids are cached UNBALANCED; the 3:1 random
+        # subsampling happens per epoch at batch-assembly time.
+        # ================================================================
+        if not hasattr(self, "cache_embeddings"):
+            self.cache_embeddings = True
+        if epoch == 0 or not hasattr(self, "_train_cache"):
+            self._train_cache = {}
+            self._pinned_bytes = 0
+
+        # Pinned (page-locked) host memory cannot be paged out and, on
+        # Windows/WDDM, draws from a constrained pool; unbounded pinning at
+        # ~17 MB/image destabilizes the OS on large datasets (1266 images
+        # ~= 21 GB page-locked). Pin only up to a budget; beyond it, cache
+        # in ordinary pageable memory. Batch-assembly non_blocking copies
+        # silently degrade to synchronous for unpinned tensors -- slower,
+        # never incorrect. Override with self.pin_budget_bytes.
+        _pin_budget = getattr(self, "pin_budget_bytes", 4 * 1024 ** 3)
+
+        def _cache_tensor(t):
+            t = t.detach().cpu()
+            if device.type == "cuda" and self._pinned_bytes + t.nbytes <= _pin_budget:
+                try:
+                    t = t.pin_memory()
+                    self._pinned_bytes += t.nbytes
+                except RuntimeError:
+                    # Pinned allocation failed; pageable tensor is fine.
+                    pass
+            return t
+
+        batch_size = max(1, int(getattr(self, "batch_size", 1)))
+        if epoch == 0:
+            print(f"[SAM2Trainer] Mini-batch size: {batch_size} (from site_config)")
+
+        # ================================================================
+        # PHASE 1: PREFLIGHT + BATCHED ENCODING
+        # ================================================================
+        _t_phase1 = _time.perf_counter()
+        pending = [f for f in train_images if f not in self._train_cache]
+        prepped = []   # (image_file, image_np, prep dict)
+
+        if pending:
+            print(f"[SAM2Trainer] Phase 1: preflighting {len(pending)} images "
+                  f"(mask decode + prompt derivation)...", flush=True)
+
+        for idx, image_file in enumerate(pending):
             if self.progress_bar_closed:
                 self._terminate_training(progressBar)
                 return None, None, None, None
 
-            # ----------------------------------------
-            # LOAD GROUND TRUTH MASK
-            # ----------------------------------------
-            # RESOLVE TARGET_ID
-            target_id = next((c["id"] for c in self.categories if c["name"] == target_label), None)
-            if target_id is None:
-                available = ", ".join(f'{c["name"]}:{c["id"]}' for c in self.categories)
-                raise ValueError(f"Unknown target_label '{target_label}'. Available: {available}")
-
-            # ============================================================
-            # CENTROID DIAGNOSTIC TRACKING (epoch 0 only)
-            # Tracks why each image did or did not contribute a centroid.
-            # Written to a CSV report in the model output folder at end of epoch 0.
-            # ============================================================
-            if epoch == 0 and not hasattr(self, "_centroid_diag_rows"):
-                self._centroid_diag_rows = []   # list of dicts, one per image
+            # One tick per preflighted image regardless of outcome; this both
+            # advances the bar and pumps the Qt event loop so the wheel keeps
+            # repainting during CPU-bound prep (training runs on the GUI thread).
+            progressBar.setValue(progressBar.getValue() + 1)
 
             # LOAD GROUND TRUTH MASK
             result = self.dataset_util.load_true_mask(image_file, self.annotation_index, mode="binary", target_id=target_id)
@@ -1275,6 +1412,7 @@ class SAM2Trainer:
                         "centroid_norm": "",
                         "detail": f"load_true_mask returned None or zero mask for target_id={target_id}"
                     })
+                self._train_cache[image_file] = None
                 continue
 
             if true_mask.ndim == 3:
@@ -1294,9 +1432,16 @@ class SAM2Trainer:
                         "centroid_norm": "",
                         "detail": "Image file inaccessible at training time"
                     })
+                # Transient rather than structural: do not cache None; the
+                # image is retried on the next epoch.
                 continue
-            image = np.array(Image.open(image_file).convert("RGB"))
-            predictor.set_image(image)
+
+            # NOTE: the image itself is deliberately NOT loaded here.
+            # Preflight needs only masks and centroids; decoding every frame
+            # up front and retaining it until encoding finished held all
+            # full-res RGB arrays in RAM at once (~6 MB/image at 1080p,
+            # ~7.5 GB for 1266 images; 4x that at 4K). Images are now
+            # loaded per encode chunk below and released immediately.
 
             # ============================================================
             # COMPUTE CENTROIDS FOR POSITIVE PROMPTS (selected category)
@@ -1304,7 +1449,7 @@ class SAM2Trainer:
             h, w = true_mask.shape[:2]
             num_labels, labels = cv2.connectedComponents(true_mask.astype(np.uint8))
             positive_coords = []
-            
+
             for lbl in range(1, num_labels):  # skip background
                 ys, xs = np.nonzero(labels == lbl)
                 if xs.size > 0:
@@ -1343,6 +1488,7 @@ class SAM2Trainer:
                         "detail": f"Mask loaded OK but connectedComponents found 0 blobs  "
                                   f"mask_sum={int(true_mask.sum())}"
                     })
+                self._train_cache[image_file] = None
                 continue
 
             # ============================================================
@@ -1352,16 +1498,16 @@ class SAM2Trainer:
 
             # Get all categories except the target (dynamic - not hardcoded!)
             negative_categories = [
-                c for c in self.categories 
+                c for c in self.categories
                 if c["name"] != target_label
             ]
-            
+
             for neg_category in negative_categories:
                 neg_id = neg_category["id"]
-                
+
                 # Load mask for this negative category
                 neg_result = self.dataset_util.load_true_mask(
-                    image_file, self.annotation_index, 
+                    image_file, self.annotation_index,
                     mode="binary", target_id=neg_id
                 )
                 neg_mask = neg_result[0] if isinstance(neg_result, tuple) else neg_result
@@ -1369,151 +1515,363 @@ class SAM2Trainer:
                 # Skip if no annotation for this category in this image
                 if neg_mask is None or neg_mask.sum() == 0:
                     continue
-                
+
                 if neg_mask.ndim == 3:
                     neg_mask = neg_mask[..., 0]
-                
+
                 # Compute centroids for negative regions
                 num_labels_neg, labels_neg = cv2.connectedComponents(neg_mask.astype(np.uint8))
+                nh, nw = neg_mask.shape[:2]
                 for lbl in range(1, num_labels_neg):
                     ys, xs = np.nonzero(labels_neg == lbl)
                     if xs.size > 0:
                         cx, cy = float(xs.mean()), float(ys.mean())
                         negative_coords.append([cx, cy])
-            
-            # Balance negatives to avoid overwhelming positive prompts
-            # (SAM2 works best with balanced prompt sets)
-            if len(negative_coords) > len(positive_coords) * 3:
-                negative_coords = random.sample(negative_coords, len(positive_coords) * 3)
-            
-            # ============================================================
-            # COMBINE POSITIVE AND NEGATIVE PROMPTS
-            # ============================================================
-            all_coords = positive_coords + negative_coords
-            all_labels = [1] * len(positive_coords) + [0] * len(negative_coords)
-            
-            # Log prompt counts for monitoring
-            if idx % 10 == 0:  # Log every 10th image
-                print(f"  Image {os.path.basename(image_file)}: "
-                      f"{len(positive_coords)} positive, {len(negative_coords)} negative prompts")
+                        # Record non-target centroids too. The checkpoint's
+                        # category_centroids feeds inference; without these,
+                        # deployment has no negative prompts at all.
+                        if epoch == 0:
+                            self.category_centroids.setdefault(int(neg_id), []).append({
+                                "centroid_px": (int(round(cx)), int(round(cy))),
+                                "centroid_norm": _normalize_centroid(cx, cy, nw, nh),
+                            })
 
-            # --- Build tensors for all centroids (positive + negative) ---
-            point_coords = torch.tensor(all_coords, device=device, dtype=torch.float32)
-            point_labels = torch.tensor(all_labels, device=device, dtype=torch.int64)
+            prepped.append((image_file, {
+                "true_mask": true_mask,
+                "positive_coords": positive_coords,
+                "negative_coords": list(negative_coords),
+            }))
 
-            # Prompt embeddings using multiple points (positive and negative)
-            sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(
-                points=(point_coords.unsqueeze(0), point_labels.unsqueeze(0)),
-                boxes=None,
-                masks=None,
-            )
+        # ---- BATCHED ENCODING of newly prepared images ----
+        # The ENCODE chunk size is deliberately decoupled from the training
+        # batch size. Encoding is activation-heavy (~1.5 GB VRAM per image
+        # through hiera-large at 1024x1024, fp32), and on Windows/WDDM an
+        # oversubscribed batch does not raise OOM -- it silently spills to
+        # shared system memory and runs orders of magnitude slower. The chunk
+        # is therefore sized from actually-free VRAM, capped by batch_size.
+        # Training batches (decoder-only, cheap) still use full batch_size.
+        # Override with self.encode_batch_size or site_config
+        # 'encode_batch_size' if the estimate misjudges a given card.
+        encode_chunk = 1
+        if device.type == "cuda":
+            try:
+                free_bytes, _total = torch.cuda.mem_get_info()
+                _PER_IMAGE_ENCODE_BYTES = int(1.5 * 1024 ** 3)
+                encode_chunk = max(1, int((free_bytes * 0.6) // _PER_IMAGE_ENCODE_BYTES))
+            except Exception:
+                encode_chunk = 1
+        encode_chunk = min(encode_chunk, batch_size)
+        _cfg_encode = self.site_config.get('encode_batch_size', getattr(self, 'encode_batch_size', None))
+        if _cfg_encode:
+            encode_chunk = max(1, int(_cfg_encode))
+        if prepped:
+            print(f"[SAM2Trainer] Phase 1: encoding {len(prepped)} images "
+                  f"(encode chunk={encode_chunk}, training batch={batch_size})...", flush=True)
 
-            batched_mode = True
-            high_res_features = [feat_level[-1].unsqueeze(0) for feat_level in predictor._features["high_res_feats"]]
+        newly_encoded = 0
+        for start in range(0, len(prepped), encode_chunk):
+            if self.progress_bar_closed:
+                self._terminate_training(progressBar)
+                return None, None, None, None
+
+            chunk = prepped[start:start + encode_chunk]
+
+            # Load this chunk's images only now; a file that vanished or got
+            # locked between preflight and encode is skipped without caching,
+            # so it is retried next epoch (same policy as the preflight
+            # file-missing case).
+            loaded = []
+            for image_file, prep in chunk:
+                try:
+                    img = np.array(Image.open(image_file).convert("RGB"))
+                except (OSError, ValueError) as e:
+                    print(f"[WARNING] Failed to load {image_file} at encode time ({e}); "
+                          f"will retry next epoch.")
+                    continue
+                loaded.append((image_file, img, prep))
+
+            if not loaded:
+                if not self.progress_bar_closed:
+                    progressBar.setValue(progressBar.getValue() + len(chunk))
+                continue
+
+            imgs = [c[1] for c in loaded]
+
+            encoded_batched = False
+            if len(imgs) > 1 and hasattr(predictor, "set_image_batch"):
+                try:
+                    predictor.set_image_batch(imgs)
+                    encoded_batched = True
+                except Exception as e:
+                    print(f"[SAM2Trainer] set_image_batch failed ({e}); "
+                          f"falling back to per-image encoding for this chunk.")
+
+            if encoded_batched:
+                for i, (image_file, _img, prep) in enumerate(loaded):
+                    self._train_cache[image_file] = {
+                        "image_embed": _cache_tensor(predictor._features["image_embed"][i:i + 1]),
+                        "high_res_feats": [_cache_tensor(t[i:i + 1]) for t in predictor._features["high_res_feats"]],
+                        "orig_hw": [predictor._orig_hw[i]],
+                        "true_mask": prep["true_mask"],
+                        "positive_coords": prep["positive_coords"],
+                        "negative_coords": prep["negative_coords"],
+                    }
+                    newly_encoded += 1
+            else:
+                for image_file, img, prep in loaded:
+                    predictor.set_image(img)
+                    self._train_cache[image_file] = {
+                        "image_embed": _cache_tensor(predictor._features["image_embed"]),
+                        "high_res_feats": [_cache_tensor(t) for t in predictor._features["high_res_feats"]],
+                        "orig_hw": list(predictor._orig_hw),
+                        "true_mask": prep["true_mask"],
+                        "positive_coords": prep["positive_coords"],
+                        "negative_coords": prep["negative_coords"],
+                    }
+                    newly_encoded += 1
+
+            # One tick per encoded image, applied per chunk; also pumps the
+            # Qt event loop between encoder calls so the wheel repaints.
+            del loaded, imgs
+            if not self.progress_bar_closed:
+                progressBar.setValue(progressBar.getValue() + len(chunk))
+            print(f"[SAM2Trainer]   encoded {min(start + len(chunk), len(prepped))}/{len(prepped)}", flush=True)
+
+        del prepped
+        self._last_encode_seconds = _time.perf_counter() - _t_phase1
+
+        # Freeze and deduplicate the centroid population BEFORE the first
+        # optimizer step so that pooled-prompt training, validation and the
+        # checkpoint all see the same population.
+        if epoch == 0 and not getattr(self, "_centroids_finalized", False):
+            print("\n=== Finalizing Centroid Collection ===")
+            self._deduplicate_centroids()
+            self._centroids_finalized = True
+            print(f"Total unique centroids: "
+                  f"{sum(len(v) for v in self.category_centroids.values())} across "
+                  f"{len(self.category_centroids)} categories\n")
+
+        train_prompt_mode = getattr(self, "train_prompt_mode",
+                                    self.site_config.get("train_prompt_mode", "pooled"))
+        if epoch == 0:
+            print(f"[SAM2Trainer] Prompt protocol: {train_prompt_mode} "
+                  f"({'deployment-identical pooled centroids' if train_prompt_mode == 'pooled' else 'per-image ground-truth centroids'})")
+        _prompt_rng = random.Random()  # unseeded: new draw every epoch (augmentation)
+
+        # ================================================================
+        # PHASE 2: BATCHED TRAINING from cache
+        # ================================================================
+        samples = [f for f in train_images if isinstance(self._train_cache.get(f), dict)]
+        num_steps = 0
+        _since_cache_clear = 0
+
+        for start in range(0, len(samples), batch_size):
+            if self.progress_bar_closed:
+                self._terminate_training(progressBar)
+                return None, None, None, None
+
+            chunk_files = samples[start:start + batch_size]
+            entries = [self._train_cache[f] for f in chunk_files]
+            B = len(entries)
+
+            # ---- Stack cached embeddings into batch tensors ----
+            image_embed = torch.cat(
+                [e["image_embed"] for e in entries], dim=0
+            ).to(device, non_blocking=True)
+            n_levels = len(entries[0]["high_res_feats"])
+            high_res_features = [
+                torch.cat([e["high_res_feats"][lv] for e in entries], dim=0
+                          ).to(device, non_blocking=True)
+                for lv in range(n_levels)
+            ]
+
+            # ---- Per-sample prompts, balanced per epoch, padded to Pmax ----
+            coords_list, labels_list = [], []
+            for i, e in enumerate(entries):
+                if train_prompt_mode == "pooled":
+                    # Deployment protocol: sample from the pooled population,
+                    # exactly as sam2_inference_engine does at segmentation time.
+                    hh, ww = e["orig_hw"][-1]
+                    c, l = sample_pooled_prompts(
+                        target_id, self.category_centroids, ww, hh,
+                        max_positives=int(self.site_config.get("max_positives", _DEFAULT_MAX_POSITIVES)),
+                        negative_balance=int(self.site_config.get("negative_balance", _DEFAULT_NEGATIVE_BALANCE)),
+                        rng=_prompt_rng)
+                    if c is None:  # cannot happen once preflight recorded >=1 target blob
+                        c, l = e["positive_coords"], [1] * len(e["positive_coords"])
+                    coords_list.append(c)
+                    labels_list.append(l)
+                    pos, neg = [p for p, lab in zip(c, l) if lab == 1], [p for p, lab in zip(c, l) if lab == 0]
+                else:
+                    pos = e["positive_coords"]
+                    neg = list(e["negative_coords"])
+                    if len(neg) > len(pos) * 3:
+                        neg = random.sample(neg, len(pos) * 3)
+                    coords_list.append(pos + neg)
+                    labels_list.append([1] * len(pos) + [0] * len(neg))
+
+                # Log prompt counts for monitoring (every 10th sample)
+                if (processed_count + i) % 10 == 0:
+                    print(f"  Image {os.path.basename(chunk_files[i])}: "
+                          f"{len(pos)} positive, {len(neg)} negative prompts")
+
+            Pmax = max(len(c) for c in coords_list)
+            point_coords = torch.zeros((B, Pmax, 2), dtype=torch.float32, device=device)
+            # Pad label -1 = SAM2 "not a point"; the prompt encoder embeds it
+            # with not_a_point_embed, so padded slots contribute nothing.
+            point_labels = torch.full((B, Pmax), -1, dtype=torch.int64, device=device)
+            for i, (c, l) in enumerate(zip(coords_list, labels_list)):
+                # Map pixel-space centroids into the model's 1024x1024 input
+                # frame -- same transform predictor.predict() applies
+                # internally. Without this the prompt encoder receives
+                # out-of-frame coordinates and the prompts are noise.
+                # Cached coords stay pixel-space (the blob filter needs them
+                # in the original frame); the transform is applied only here.
+                c_t = predictor._transforms.transform_coords(
+                    torch.tensor(c, dtype=torch.float32),
+                    normalize=True,
+                    orig_hw=entries[i]["orig_hw"][-1],
+                )
+                point_coords[i, :len(c)] = c_t.to(device)
+                point_labels[i, :len(l)] = torch.tensor(l, dtype=torch.int64)
 
             optimizer.zero_grad()
 
             # Pick dtype depending on device
             if device.type == "cuda":
-                autocast_dtype = torch.float16  # or torch.bfloat16 if you prefer
+                # bf16: same range as fp32, no loss scaling / overflow risk.
+                # Falls back to fp16 + GradScaler on pre-Ampere cards.
+                autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
             else:  # CPU
                 autocast_dtype = torch.bfloat16  # CPU autocast only supports bfloat16
 
             with autocast(device_type=device.type, dtype=autocast_dtype, enabled=use_amp):
+                # Prompt embeddings for the whole batch
+                sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(
+                    points=(point_coords, point_labels),
+                    boxes=None,
+                    masks=None,
+                )
+
+                decoder_kwargs = dict(
+                    image_embeddings=image_embed,
+                    image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
+                    sparse_prompt_embeddings=sparse_embeddings,
+                    dense_prompt_embeddings=dense_embeddings,
+                    multimask_output=False,
+                    repeat_image=False,   # one embedding per prompt set
+                    high_res_features=high_res_features,
+                )
+
                 # Use pre-selected SDPA backend (selected once in train_sam)
                 if hasattr(self, 'selected_backend') and self.selected_backend is not None:
                     with sdpa_kernel(self.selected_backend):
-                        low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(
-                            image_embeddings=predictor._features["image_embed"][-1].unsqueeze(0),
-                            image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
-                            sparse_prompt_embeddings=sparse_embeddings,
-                            dense_prompt_embeddings=dense_embeddings,
-                            multimask_output=False,
-                            repeat_image=batched_mode,
-                            high_res_features=high_res_features,
-                        )
+                        low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(**decoder_kwargs)
                 else:
                     # Fallback to default if backend selection failed
-                    low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(
-                        image_embeddings=predictor._features["image_embed"][-1].unsqueeze(0),
-                        image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
-                        sparse_prompt_embeddings=sparse_embeddings,
-                        dense_prompt_embeddings=dense_embeddings,
-                        multimask_output=False,
-                        repeat_image=batched_mode,
-                        high_res_features=high_res_features,
-                    )
+                    low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(**decoder_kwargs)
 
-                prd_masks = predictor._transforms.postprocess_masks(low_res_masks, predictor._orig_hw[-1])
+                # ---- Per-sample losses, averaged over the batch ----
+                batch_loss_sum = None
+                batch_valid = 0
+                for i in range(B):
+                    true_mask = entries[i]["true_mask"]
+                    h, w = true_mask.shape[:2]
+                    gt_mask = torch.tensor(true_mask, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(1)
+                    if gt_mask.sum() == 0:
+                        # Defensive; preflight guarantees nonzero masks.
+                        print(f"Skipping {chunk_files[i]} - ground-truth mask is empty for label {target_label}.")
+                        continue
 
-                gt_mask = torch.tensor(true_mask, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(1)
-                if gt_mask.sum() == 0:
-                    print(f"Skipping {image_file} - ground-truth mask is empty for label {target_label}.")
+                    # Keep predictions as LOGITS (don't apply sigmoid yet)
+                    prd_mask_logits = low_res_masks[i:i + 1, 0:1]  # [1,1,h,w] - raw logits
+
+                    # Upsample logits to ground-truth resolution
+                    if prd_mask_logits.shape[-2:] != gt_mask.shape[-2:]:
+                        prd_mask_logits = F.interpolate(
+                            prd_mask_logits,
+                            size=gt_mask.shape[-2:],
+                            mode="bilinear",
+                            align_corners=False
+                        )
+
+                    if prd_mask_logits.shape != gt_mask.shape:
+                        raise ValueError(f"Shape mismatch {prd_mask_logits.shape} vs {gt_mask.shape} for {chunk_files[i]}")
+
+                    # USE BCEWithLogitsLoss on logits (more stable than manual BCE on probabilities)
+                    seg_loss = bce_loss_fn(prd_mask_logits, gt_mask)
+
+                    # FOR DICE LOSS, WE NEED PROBABILITIES, SO APPLY SIGMOID
+                    prd_mask_probs = torch.sigmoid(prd_mask_logits)
+
+                    dice_loss = dice_loss_fn(prd_mask_probs, gt_mask)
+
+                    # COMPUTE IOU FOR SCORE PREDICTION LOSS
+                    prd_mask_binary = (prd_mask_probs > 0.5).float()
+
+                    # FILTER OUT BLOBS NOT OVERLAPPING CENTROID PROMPTS
+                    # (uint8 on-GPU cast, WithStats single pass, vectorized
+                    # isin rebuild -- output-identical to the per-blob loop)
+                    labels_np = prd_mask_binary.squeeze().to(torch.uint8).cpu().numpy()
+                    num_labels, labels, blob_stats, blob_centroids = cv2.connectedComponentsWithStats(labels_np)
+
+                    # ADAPTIVE RADIUS THRESHOLD BASED ON IMAGE SIZE.
+                    # FRACTION IS SET BY USER IN GUI AND STORED IN site_config + .torch METADATA.
+                    img_diagonal = math.sqrt(h * h + w * w)
+                    radius_threshold = max(10, int(self.blob_filter_radius * img_diagonal))
+
+                    kept_labels = []
+                    for lbl in range(1, num_labels):  # skip background
+                        if blob_stats[lbl, cv2.CC_STAT_AREA] == 0:
+                            continue
+                        cx_blob, cy_blob = blob_centroids[lbl]  # (x, y) pixel-mean centroid
+
+                        # KEEP ONLY IF BLOB CENTROID IS CLOSE TO ONE OF THE PROMPT CENTROIDS
+                        for cx, cy in entries[i]["positive_coords"]:
+                            if np.linalg.norm([cx - cx_blob, cy - cy_blob]) < radius_threshold:
+                                kept_labels.append(lbl)
+                                break
+
+                    if kept_labels:
+                        valid_mask = np.isin(labels, kept_labels).astype(np.uint8)
+                    else:
+                        valid_mask = np.zeros_like(labels, dtype=np.uint8)
+
+                    prd_mask_binary = torch.tensor(valid_mask, device=device).unsqueeze(0).unsqueeze(1).float()
+
+                    inter = (gt_mask * prd_mask_binary).sum((1, 2, 3))
+                    union = gt_mask.sum((1, 2, 3)) + prd_mask_binary.sum((1, 2, 3)) - inter
+                    iou = inter / (union + 1e-6)
+                    iou[union == 0] = 1.0
+
+                    # Align decoder score with IoU
+                    score_loss = torch.abs(prd_scores[i:i + 1, 0] - iou).mean()
+
+                    # Combined per-sample loss (weights unchanged)
+                    sample_loss = 0.5 * seg_loss + 0.5 * dice_loss + 0.05 * score_loss
+                    batch_loss_sum = sample_loss if batch_loss_sum is None else batch_loss_sum + sample_loss
+                    batch_valid += 1
+
+                    # Metrics (use probabilities for evaluation)
+                    dice_sum += dice_coeff_from_probs(prd_mask_probs, gt_mask)
+                    iou_sum += iou_from_probs(prd_mask_probs, gt_mask)
+
+                    # Pixel accuracy computed on-GPU; only the scalar crosses to host.
+                    with torch.no_grad():
+                        train_correct += ((prd_mask_probs > 0.5).float() == gt_mask).sum().item()
+                    train_total += gt_mask.numel()
+
+                    del prd_mask_logits, prd_mask_probs, prd_mask_binary, gt_mask
+                    del seg_loss, dice_loss, score_loss, iou
+
+                if batch_valid == 0:
                     continue
 
-                # Keep predictions as LOGITS (don't apply sigmoid yet)
-                prd_mask_logits = prd_masks[:, 0].unsqueeze(1)  # [1,1,H,W] - raw logits
+                # Mean over valid samples: gradients are averaged over the batch.
+                loss = batch_loss_sum / batch_valid
 
-                # Resize logits if mismatch
-                if prd_mask_logits.shape[-2:] != gt_mask.shape[-2:]:
-                    prd_mask_logits = F.interpolate(
-                        prd_mask_logits,
-                        size=gt_mask.shape[-2:],
-                        mode="bilinear",
-                        align_corners=False
-                    )
-
-                if prd_mask_logits.shape != gt_mask.shape:
-                    raise ValueError(f"Shape mismatch {prd_mask_logits.shape} vs {gt_mask.shape} for {image_file}")
-
-                # USE BCEWithLogitsLoss on logits (more stable than manual BCE on probabilities)
-                seg_loss = bce_loss_fn(prd_mask_logits, gt_mask)
-
-                # FOR DICE LOSS, WE NEED PROBABILITIES, SO APPLY SIGMOID
-                prd_mask_probs = torch.sigmoid(prd_mask_logits)
-
-                dice_loss = dice_loss_fn(prd_mask_probs, gt_mask)
-
-                # COMPUTE IOU FOR SCORE PREDICTION LOSS
-                prd_mask_binary = (prd_mask_probs > 0.5).float()
-
-                # FILTER OUT BLOBS NOT OVERLAPPING CENTROID PROMPTS
-                labels_np = prd_mask_binary.squeeze().cpu().numpy().astype(np.uint8)
-                num_labels, labels = cv2.connectedComponents(labels_np)
-                valid_mask = np.zeros_like(labels, dtype=np.uint8)
-
-                # ADAPTIVE RADIUS THRESHOLD BASED ON IMAGE SIZE.
-                # FRACTION IS SET BY USER IN GUI AND STORED IN site_config + .torch METADATA.
-                img_diagonal = math.sqrt(h * h + w * w)
-                radius_threshold = max(10, int(self.blob_filter_radius * img_diagonal))
-
-                for lbl in range(1, num_labels):  # skip background
-                    ys, xs = np.nonzero(labels == lbl)
-                    if xs.size == 0:
-                        continue
-                    cx_blob, cy_blob = xs.mean(), ys.mean()
-
-                    # KEEP ONLY IF BLOB CENTROID IS CLOSE TO ONE OF THE PROMPT CENTROIDS
-                    for cx, cy in positive_coords:
-                        if np.linalg.norm([cx - cx_blob, cy - cy_blob]) < radius_threshold:
-                            valid_mask[labels == lbl] = 1
-                            break
-
-                prd_mask_binary = torch.tensor(valid_mask, device=device).unsqueeze(0).unsqueeze(1).float()
-
-                inter = (gt_mask * prd_mask_binary).sum((1, 2, 3))
-                union = gt_mask.sum((1, 2, 3)) + prd_mask_binary.sum((1, 2, 3)) - inter
-                iou = inter / (union + 1e-6)
-                iou[union == 0] = 1.0
-
-                # Align decoder score with IoU
-                score_loss = torch.abs(prd_scores[:, 0] - iou).mean()
-
-                # Combined loss
-                loss = 0.5 * seg_loss + 0.5 * dice_loss + 0.05 * score_loss
-
-            # Backward
-            if use_amp and scaler is not None:
+            # Backward -- one optimizer step per batch
+            if use_amp and scaler is not None and autocast_dtype == torch.float16:
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(self.sam2_model.parameters(), max_norm=1.0)
@@ -1524,31 +1882,51 @@ class SAM2Trainer:
                 torch.nn.utils.clip_grad_norm_(self.sam2_model.parameters(), max_norm=1.0)
                 optimizer.step()
 
-            # Metrics (use probabilities for evaluation)
-            d_metric = dice_coeff_from_probs(prd_mask_probs, gt_mask)
-            j_metric = iou_from_probs(prd_mask_probs, gt_mask)
+            # ================================================================
+            # ONE-TIME GRADIENT-FLOW AUDIT (first backward of epoch 0)
+            # Reports, per top-level module, how many parameters actually
+            # received gradients -- measured, not assumed. In the batched
+            # design the decoder consumes cached embeddings directly, so
+            # encoder gradients here would indicate a configuration error.
+            # ================================================================
+            if epoch == 0 and not getattr(self, "_grad_audit_done", False):
+                self._grad_audit_done = True
+                grad_counts = {}
+                total_with_grad = 0
+                for name, p in self.sam2_model.named_parameters():
+                    if p.grad is not None:
+                        top = name.split(".")[0]
+                        grad_counts[top] = grad_counts.get(top, 0) + p.numel()
+                        total_with_grad += p.numel()
+                print(f"[SAM2Trainer] Gradient-flow audit: {total_with_grad:,} parameters received gradients:")
+                for top, n in sorted(grad_counts.items()):
+                    print(f"[SAM2Trainer]     {top}: {n:,}")
+                if any(k.startswith("image_encoder") for k in grad_counts):
+                    print("[SAM2Trainer] ERROR: image encoder received gradients under cached-embedding "
+                          "batched training. This is a configuration error; encoder updates cannot take "
+                          "effect because the decoder consumes cached embeddings. Results are unreliable.")
 
-            dice_sum += d_metric
-            iou_sum += j_metric
-            epoch_loss += loss.item()
-            processed_count += 1
+            epoch_loss += batch_loss_sum.item()
+            processed_count += batch_valid
+            num_steps += 1
 
             # Periodically clear GPU cache to prevent VRAM fragmentation
-            if processed_count % 20 == 0 and torch.cuda.is_available():
+            _since_cache_clear += batch_valid
+            if _since_cache_clear >= 20 and torch.cuda.is_available():
                 torch.cuda.empty_cache()
+                _since_cache_clear = 0
 
-            pred_binary = (prd_mask_probs > 0.5).cpu().numpy()
-            true_binary = gt_mask.cpu().numpy()
-            train_correct += np.sum(pred_binary == true_binary)
-            train_total += np.prod(true_binary.shape)
-
-            # Explicitly free tensors to prevent VRAM accumulation across iterations
-            del loss, prd_mask_logits, prd_mask_probs, prd_mask_binary, gt_mask, seg_loss, dice_loss, score_loss
+            # Explicitly free batch tensors to prevent VRAM accumulation
+            del loss, batch_loss_sum, low_res_masks, prd_scores
             del point_coords, point_labels, sparse_embeddings, dense_embeddings
-            del low_res_masks, prd_scores, prd_masks, high_res_features, iou
+            del image_embed, high_res_features
 
-            if not self.progress_bar_closed:  # ✅ ISSUE #8 FIX: Direct attribute access
-                progressBar.setValue(progressBar.getValue() + 1)
+            if not self.progress_bar_closed:  # Issue #8: direct attribute access
+                progressBar.setValue(progressBar.getValue() + B)
+
+        print(f"[SAM2Trainer] Epoch {epoch + 1}: {processed_count} samples in {num_steps} steps "
+              f"(batch_size={batch_size}, {newly_encoded} newly encoded, "
+              f"{processed_count - newly_encoded if processed_count >= newly_encoded else 0} pre-cached).")
 
         avg_epoch_loss = epoch_loss / processed_count if processed_count > 0 else 0.0
         train_accuracy = train_correct / train_total if train_total > 0 else 0.0
@@ -1637,6 +2015,65 @@ class SAM2Trainer:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def _gt_prompts_for_image(self, image_file, target_label, true_mask=None,
+                              negative_balance=3):
+        """
+        Per-image point prompts derived from ground truth -- the SAME protocol
+        _train_one_epoch uses (positives = centroid of each target blob,
+        negatives = centroids of every other category's blobs, balanced to
+        negative_balance:1).
+
+        Returns (coords [N,2] float32 numpy in pixel space, labels [N] int64
+        numpy) or (None, None) if the image has no target blob.
+        """
+        target_id = next((c["id"] for c in self.categories if c["name"] == target_label), None)
+        if target_id is None:
+            return None, None
+
+        if true_mask is None:
+            result = self.dataset_util.load_true_mask(
+                image_file, self.annotation_index, mode="binary", target_id=target_id)
+            true_mask = result[0] if isinstance(result, tuple) else result
+        if true_mask is None or true_mask.sum() == 0:
+            return None, None
+        if true_mask.ndim == 3:
+            true_mask = true_mask[..., 0]
+
+        positives = []
+        n_lbl, lbls = cv2.connectedComponents(true_mask.astype(np.uint8))
+        for lbl in range(1, n_lbl):
+            ys, xs = np.nonzero(lbls == lbl)
+            if xs.size:
+                positives.append([float(xs.mean()), float(ys.mean())])
+        if not positives:
+            return None, None
+
+        negatives = []
+        for cat in self.categories:
+            if cat["name"] == target_label:
+                continue
+            res = self.dataset_util.load_true_mask(
+                image_file, self.annotation_index, mode="binary", target_id=cat["id"])
+            neg = res[0] if isinstance(res, tuple) else res
+            if neg is None or neg.sum() == 0:
+                continue
+            if neg.ndim == 3:
+                neg = neg[..., 0]
+            n_lbl, lbls = cv2.connectedComponents(neg.astype(np.uint8))
+            for lbl in range(1, n_lbl):
+                ys, xs = np.nonzero(lbls == lbl)
+                if xs.size:
+                    negatives.append([float(xs.mean()), float(ys.mean())])
+
+        if len(negatives) > len(positives) * negative_balance:
+            negatives = random.sample(negatives, len(positives) * negative_balance)
+
+        coords = np.asarray(positives + negatives, dtype=np.float32)
+        labels = np.asarray([1] * len(positives) + [0] * len(negatives), dtype=np.int64)
+        return coords, labels
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
     def _validate_one_epoch(self, val_cache, predictor, progressBar, target_label,
                             save_overlays=False):
         """
@@ -1684,23 +2121,52 @@ class SAM2Trainer:
                 val_image   = cached["image_np"]
                 val_true_mask = cached["true_mask"]
 
-                # Re-encode image each epoch (images served from memory cache)
-                predictor.set_image(val_image)
+                # Encode once, reuse the embedding on later epochs (the image
+                # encoder is frozen -- its output never changes).
+                if "_feat" in cached:
+                    predictor.reset_predictor()
+                    predictor._features = {
+                        "image_embed": cached["_feat"]["image_embed"].to(device, non_blocking=True),
+                        "high_res_feats": [t.to(device, non_blocking=True)
+                                           for t in cached["_feat"]["high_res_feats"]],
+                    }
+                    predictor._orig_hw = list(cached["_feat"]["orig_hw"])
+                    predictor._is_image_set = True
+                    predictor._is_batch = False
+                else:
+                    _t_enc = _time.perf_counter()
+                    predictor.set_image(val_image)
+                    cached["_feat"] = {
+                        "image_embed": predictor._features["image_embed"].detach().cpu(),
+                        "high_res_feats": [t.detach().cpu() for t in predictor._features["high_res_feats"]],
+                        "orig_hw": list(predictor._orig_hw),
+                    }
+                    self._last_encode_seconds = getattr(self, "_last_encode_seconds", 0.0) + (_time.perf_counter() - _t_enc)
 
-                # Build centroid prompts
+                # Build point prompts.
+                #   "gt":    this image's own GT centroids + 3:1 negatives --
+                #            oracle prompts; an upper bound, not a deployment number.
+                #   "pooled" (default): sampled population centroids, identical to
+                #            training (train_prompt_mode="pooled") and to
+                #            sam2_inference_engine. This is the deployment number.
                 h_img, w_img = val_image.shape[:2]
-                point_coords, point_labels = build_centroid_point_prompts(
-                    category_id=target_id,
-                    category_centroids=self.category_centroids,
-                    image_w=w_img,
-                    image_h=h_img,
-                    device=device,
-                    random_seed=42
-                )
+                val_prompt_mode = getattr(self, "val_prompt_mode",
+                                          self.site_config.get("val_prompt_mode", "pooled"))
+                if val_prompt_mode == "pooled":
+                    c, l = sample_pooled_prompts(
+                        target_id, self.category_centroids, w_img, h_img,
+                        max_positives=int(self.site_config.get("max_positives", _DEFAULT_MAX_POSITIVES)),
+                        negative_balance=int(self.site_config.get("negative_balance", _DEFAULT_NEGATIVE_BALANCE)),
+                        rng=random.Random(42 + val_idx))
+                    point_coords = None if c is None else np.asarray(c, dtype=np.float32)
+                    point_labels = None if l is None else np.asarray(l, dtype=np.int64)
+                else:
+                    point_coords, point_labels = self._gt_prompts_for_image(
+                        cached["file"], target_label, true_mask=val_true_mask)
 
                 if point_coords is None:
                     print(f"  Validation skipped for {cached['file']} — "
-                          f"no centroids yet for category '{target_label}' (ID {target_id}).")
+                          f"no prompts for category '{target_label}' (ID {target_id}).")
                     continue
 
                 try:
@@ -1784,17 +2250,22 @@ class SAM2Trainer:
 
                 # Overlay images: only on the last epoch to avoid repeated disk I/O
                 if save_overlays and val_idx < self.validation_overlay_samples:
-                    img_vis = val_image.copy()
-                    overlay = (prob_upsampled.squeeze().cpu().numpy() * 255).astype(np.uint8)
-                    overlay_color = cv2.applyColorMap(overlay, cv2.COLORMAP_JET)
-                    blended = cv2.addWeighted(img_vis, 1.0, overlay_color, 0.4, 0.0)
+                    # val_image is RGB (PIL). Work in BGR for OpenCV, and tint
+                    # each pixel in proportion to its probability so background
+                    # stays untouched (a uniform 0.4 JET layer darkens the frame).
+                    img_bgr = cv2.cvtColor(val_image, cv2.COLOR_RGB2BGR)
+                    prob_np = prob_upsampled.squeeze().cpu().numpy().astype(np.float32)
+                    heat = cv2.applyColorMap((prob_np * 255).astype(np.uint8), cv2.COLORMAP_JET)
+                    alpha = (0.55 * prob_np)[..., None]
+                    blended = (img_bgr.astype(np.float32) * (1.0 - alpha)
+                               + heat.astype(np.float32) * alpha).astype(np.uint8)
                     overlay_dir = os.path.join(self.model_output_folder, "validation_overlays")
                     os.makedirs(overlay_dir, exist_ok=True)
                     out_path = os.path.join(
                         overlay_dir,
                         f"{self.formatted_time}_{self.site_name}_val_overlay_e{len(self.epoch_list)}_{val_idx}.png"
                     )
-                    cv2.imwrite(out_path, cv2.cvtColor(blended, cv2.COLOR_RGB2BGR))
+                    cv2.imwrite(out_path, blended)  # already BGR
                     self._overlays_written = True
 
                 del logit_tensor, logit_upsampled, prob_upsampled, pred_binary, val_true_mask_tensor, iou_actual
@@ -1807,6 +2278,16 @@ class SAM2Trainer:
         avg_val_dice = dice_sum / n_items if n_items > 0 else 0.0
         avg_val_iou = iou_sum / n_items if n_items > 0 else 0.0
         miou = compute_mean_iou(self.val_true_list, self.val_pred_list)
+
+        # Calibration check: Dice/IoU at the F1-optimal threshold on the
+        # sampled pixels. A large gap vs the 0.5-threshold numbers means the
+        # model ranks pixels well but its logits are shifted -- a prompt /
+        # protocol problem, not a capacity problem.
+        self.val_best_thr, self.val_dice_best_thr, self.val_iou_best_thr = (
+            self._threshold_optimal_metrics(self.val_true_list, self.val_score_list))
+        print(f"[SAM2Trainer] Val @0.5: dice={avg_val_dice:.3f} iou={avg_val_iou:.3f} | "
+              f"@thr={self.val_best_thr:.2f} (F1-opt): dice={self.val_dice_best_thr:.3f} "
+              f"iou={self.val_iou_best_thr:.3f}")
 
         # Clear GPU cache after validation to prevent memory accumulation
         if torch.cuda.is_available():
@@ -1823,6 +2304,26 @@ class SAM2Trainer:
             self._prev_val_vram_mb = cur_mb
 
         return avg_val_loss, val_accuracy, miou, avg_val_dice, avg_val_iou
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    @staticmethod
+    def _threshold_optimal_metrics(y_true, y_score):
+        """Pixel-level Dice/IoU at the threshold maximising F1 (Dice == F1)."""
+        if not y_true:
+            return 0.5, 0.0, 0.0
+        t = np.asarray(y_true, dtype=np.int8)
+        p = np.asarray(y_score, dtype=np.float32)
+        order = np.argsort(-p)
+        t, p = t[order], p[order]
+        tp = np.cumsum(t)
+        fp = np.cumsum(1 - t)
+        fn = t.sum() - tp
+        f1 = 2 * tp / np.maximum(2 * tp + fp + fn, 1)
+        k = int(np.argmax(f1))
+        dice = float(f1[k])
+        iou = dice / (2 - dice) if dice < 1 else 1.0
+        return float(p[k]), dice, float(iou)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -1851,6 +2352,13 @@ class SAM2Trainer:
             "target_category_name": target_category_name,
             "base_model": "sam2",
             "category_centroids": self.category_centroids,
+            # Prompt protocol the decoder was trained with. Inference MUST
+            # reproduce it (see sam2_inference_engine.load_sam2_model).
+            "prompt_protocol": {
+                "mode": getattr(self, "train_prompt_mode", self.site_config.get("train_prompt_mode", "pooled")),
+                "max_positives": int(self.site_config.get("max_positives", _DEFAULT_MAX_POSITIVES)),
+                "negative_balance": int(self.site_config.get("negative_balance", _DEFAULT_NEGATIVE_BALANCE)),
+            },
             "blob_filter_radius": self.blob_filter_radius
         }
 
@@ -2007,9 +2515,26 @@ class SAM2Trainer:
                     text_file.write(f"Final Learning Rate: {_lrs[-1]:.3e}\n")
                     text_file.write(f"LR Reductions: {sum(1 for i in range(1, len(_lrs)) if _lrs[i] < _lrs[i-1])}\n")
             text_file.write(f"Validation Overlay Mode: {getattr(self, 'validation_overlay_mode', 'last')}\n")
+            text_file.write(f"Train Prompt Mode: {self.site_config.get('train_prompt_mode', 'pooled')}\n")
+            text_file.write(f"Val Prompt Mode: {self.site_config.get('val_prompt_mode', 'pooled')}\n")
+            text_file.write(f"Max Positive Prompts: {self.site_config.get('max_positives', _DEFAULT_MAX_POSITIVES)}\n")
+            text_file.write(f"Negative Balance: {self.site_config.get('negative_balance', _DEFAULT_NEGATIVE_BALANCE)}:1\n")
+            text_file.write(f"Batch Size: {getattr(self, 'batch_size', 1)}\n")
+            _amp = "bf16" if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else "fp16"
+            text_file.write(f"AMP dtype: {_amp}\n")
+            if getattr(self, "val_best_thr", None) is not None:
+                text_file.write(f"Val F1-optimal threshold: {self.val_best_thr:.3f} "
+                                f"(Dice {self.val_dice_best_thr:.4f}, IoU {self.val_iou_best_thr:.4f})\n")
+            if getattr(self, "time_train_seconds", None) is not None:
+                text_file.write(f"Time (encode/train/val): {self.time_encode_seconds:.0f}s / "
+                                f"{self.time_train_seconds:.0f}s / {self.time_val_seconds:.0f}s\n")
             text_file.write(f"Device: {device}\n")
-            text_file.write(f"Folders: {self.folders}\n")
-            text_file.write(f"Annotations: {self.annotation_files}\n")
+            # self.folders / self.annotation_files are never populated after
+            # __init__; the real inputs live in all_folders / all_annotations.
+            _folders = getattr(self, 'all_folders', None) or self.folders
+            _annots = getattr(self, 'all_annotations', None) or self.annotation_files
+            text_file.write(f"Folders: {_folders}\n")
+            text_file.write(f"Annotations: {_annots}\n")
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -2193,6 +2718,17 @@ class SAM2Trainer:
             early_stopped=getattr(self, "early_stopped", False),
             early_stop_epoch=getattr(self, "early_stop_epoch", None),
             training_time_seconds=getattr(self, "training_time_seconds", None),
+            lr_scheduler_enabled=getattr(self, "lr_scheduler_enabled", None),
+            lr_reductions=sum(1 for i in range(1, len(getattr(self, "lr_values", [])))
+                              if self.lr_values[i] < self.lr_values[i - 1]),
+            config=self.site_config,
+            val_best_threshold=getattr(self, "val_best_thr", None),
+            val_dice_best_threshold=getattr(self, "val_dice_best_thr", None),
+            time_breakdown={
+                "encode": getattr(self, "time_encode_seconds", None),
+                "train": getattr(self, "time_train_seconds", None),
+                "validate": getattr(self, "time_val_seconds", None),
+            },
         )
 
     # ------------------------------------------------------------------------

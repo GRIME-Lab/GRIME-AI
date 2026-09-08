@@ -11,12 +11,8 @@ from PyQt5.QtWidgets import QFileDialog, QListWidgetItem, QAbstractItemView, QSi
 
 from GRIME_AI import PROJECT_ROOT
 from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_DARK_RED, BUTTON_CSS_YELLOW, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
-from PyQt5.QtGui import QPalette, QColor, QIcon
+from PyQt5.QtGui import QPalette, QColor, QIcon, QPixmap, QPainter, QPen, QPainterPath
 
-try:
-    from GRIME_AI.dialogs.ML_image_processing.chain_link_resources import get_icon as _get_chain_icon
-except Exception:
-    _get_chain_icon = None
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
 from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
@@ -233,6 +229,12 @@ class TrainingTab(QtWidgets.QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Bump this tag on every edit. Printed to console AND shown as a
+        # tooltip (hover the "Training Parameters" box) so the loaded file
+        # version is verifiable even when the app runs without a console.
+        _TRAINING_TAB_BUILD = "2026-08-10.8-dialog-fits-content"
+        self._build_tag = _TRAINING_TAB_BUILD
+        print(f"[TrainingTab] build {_TRAINING_TAB_BUILD} loaded from {__file__}")
         ui_path = Path(__file__).parent / "training_tab.ui"
         uic.loadUi(str(ui_path), self)
 
@@ -276,8 +278,27 @@ class TrainingTab(QtWidgets.QWidget):
         if hasattr(self, "groupBox_loraHyperparameters"):
             self._lora_widgets.append(self.groupBox_loraHyperparameters)
 
+        # LoRA parameter sub-controls: grayed out when "Use LoRA" is unchecked
+        # (a full fine-tune ignores rank/alpha/dropout/bias/target-modules).
+        self._lora_param_widgets = [
+            getattr(self, n, None) for n in (
+                "spinBox_loraRank", "spinBox_loraAlpha", "doubleSpinBox_loraDropout",
+                "comboBox_loraBias", "checkBox_loraQuery", "checkBox_loraKey",
+                "checkBox_loraValue",
+            )
+        ]
+        if hasattr(self, "checkBox_useLoRA"):
+            self.checkBox_useLoRA.toggled.connect(self._set_lora_params_enabled)
+            self._set_lora_params_enabled(self.checkBox_useLoRA.isChecked())
+
         # Start with LoRA controls disabled; they will be enabled only when LoRA is selected
         self._set_lora_enabled(False)
+
+        # --- Augmentation UI: SegFormer-only for now; grayed out for SAM2/YOLO ---
+        self._augmentation_widgets = []
+        if hasattr(self, "groupBox_augmentation"):
+            self._augmentation_widgets.append(self.groupBox_augmentation)
+        self._set_augmentation_enabled(False)
 
         # Default selection — must be set before _populate_ui_from_config
         # so _update_context_sensitive_ui knows which model is active
@@ -300,6 +321,25 @@ class TrainingTab(QtWidgets.QWidget):
         # Apply context-sensitive UI for the initial model selection
         self._update_context_sensitive_ui()
 
+        # Wrap the Training Parameters panel in Advanced / Guided tabs.
+        # Guarded so a missing/broken guided module never blocks the tab.
+        try:
+            from GRIME_AI.dialogs.ML_image_processing.training_params_panel import install_guided_panel
+            install_guided_panel(self)
+        except Exception as e:
+            print(f"[TrainingTab] Guided parameters panel unavailable: {e}")
+
+        # Hoverable version check: hover the "Training Parameters" group box
+        # (or the parameters form itself) to see which build is loaded.
+        try:
+            _ver_tip = f"training_tab.py build: {self._build_tag}\n{__file__}"
+            _wrapper = self.findChild(QtWidgets.QGroupBox, "groupBox_trainingParametersWrapper")
+            if _wrapper is not None:
+                _wrapper.setToolTip(_ver_tip)
+            self.groupBox_trainingParameters.setToolTip(_ver_tip)
+        except Exception:
+            pass
+
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def setup_ui_properties(self):
@@ -310,22 +350,60 @@ class TrainingTab(QtWidgets.QWidget):
         self.listWidget_selectedFolders.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.listWidget_selectedFolders.setMinimumHeight(120)
 
-        # Device — GPU is mandatory for training; auto-detect, no user choice
-        self.comboBox_device.clear()
+        # GPU is mandatory for training — detect and gate the Train button.
+        # No device widget: there is nothing for the user to choose.
         try:
             import torch
             gpu_available = torch.cuda.is_available()
         except Exception:
             gpu_available = False
 
-        if gpu_available:
-            self.comboBox_device.addItem("gpu")
-        else:
-            self.comboBox_device.addItem("gpu (not detected)")
+        if not gpu_available:
             self.pushButton_train.setEnabled(False)
             self.pushButton_train.setToolTip(
                 "No CUDA-capable GPU detected. Training requires a GPU."
             )
+
+        # Uniform parameter field widths, computed from font metrics so the
+        # result is deterministic (no reliance on style/polish timing).
+        # The Validation Overlays combo defines the width: its longest item
+        # plus room for the frame and drop-down arrow. Every other field
+        # (except Model Name) is fixed to the same width.
+        try:
+            from PyQt5.QtGui import QFontMetrics
+            _combo = self.comboBox_validationOverlayMode
+            _fm = QFontMetrics(_combo.font())
+            _longest = max(
+                (_combo.itemText(i) for i in range(_combo.count())),
+                key=lambda s: _fm.horizontalAdvance(s), default="Last epoch only")
+            _field_width = _fm.horizontalAdvance(_longest) + 48  # text + frame + arrow
+
+            for _name in (
+                "comboBox_validationOverlayMode",
+                "lineEdit_learningRates",
+                "doubleSpinBox_weightDecay",
+                "spinBox_epochs",
+                "spinBox_batchSize",
+                "spinBox_patience",
+                "comboBox_backboneSize",
+                "comboBox_lossFunction",
+                "spinBox_validationOverlayInterval",
+                "spinBox_validationOverlaySamples",
+                "doubleSpinBox_lrSchedulerFactor",
+                "spinBox_lrSchedulerPatience",
+                "lineEdit_lrSchedulerMinLR",
+                "spinBox_maxBestCheckpoints",
+                "comboBox_yoloWeights",
+            ):
+                _widget = getattr(self, _name, None)
+                if _widget is not None:
+                    _widget.setFixedWidth(_field_width)
+
+            # Model Name stays wider — site names are long
+            self.lineEdit_siteName.setMaximumWidth(260)
+            print(f"[TrainingTab] uniform field width applied: {_field_width}px")
+        except Exception as _e:
+            print(f"[TrainingTab] field width setup failed: {_e}")
         try:
             self.verticalLayout_available.setStretch(0, 0)  # label — fixed
             self.verticalLayout_available.setStretch(1, 1)  # tree  — expand
@@ -352,64 +430,98 @@ class TrainingTab(QtWidgets.QWidget):
         self.horizontalMainLayout.setStretch(1, 2)
         self.horizontalMainLayout.setStretch(2, 1)
 
-        # Cap spinbox widths so they don't stretch full column width
+        # NOTE: Parameter-column field widths are set ONCE, earlier in this
+        # method (uniform width derived from the Validation Overlays combo).
+        # Do not add setMaximumWidth/setFixedWidth calls for those widgets
+        # here — a later call silently overrides the uniform width (this was
+        # the cause of the ragged column). Widgets OUTSIDE the parameters
+        # column (blob filter, LoRA panel, training splits) are capped here.
         for sb in [
-            self.spinBox_epochs, self.spinBox_batchSize,
-            self.spinBox_maxBestCheckpoints,
-            self.spinBox_patience, self.spinBox_blobFilterRadius,
-            self.spinBox_validationOverlayInterval,
-            self.spinBox_validationOverlaySamples,
-            self.spinBox_lrSchedulerPatience,
+            self.spinBox_blobFilterRadius,
             self.spinBox_loraRank, self.spinBox_loraAlpha,
             self.spinBox_trainSplit, self.spinBox_valSplit,
         ]:
             sb.setMaximumWidth(90)
+        self.doubleSpinBox_loraDropout.setMaximumWidth(110)
 
-        self.comboBox_validationOverlayMode.setMaximumWidth(150)
-        self.doubleSpinBox_lrSchedulerFactor.setMaximumWidth(110)
-        self.lineEdit_lrSchedulerMinLR.setMaximumWidth(110)
-        self.checkBox_lrScheduler.toggled.connect(self._update_lr_scheduler_enabled)
-        self._update_lr_scheduler_enabled()
         self.comboBox_validationOverlayMode.currentIndexChanged.connect(
             self._update_overlay_interval_enabled)
         self._update_overlay_interval_enabled()
 
-        self.doubleSpinBox_weightDecay.setMaximumWidth(110)
-        self.doubleSpinBox_loraDropout.setMaximumWidth(110)
+        self.checkBox_lrScheduler.toggled.connect(self._update_lr_scheduler_enabled)
+        self._update_lr_scheduler_enabled()
 
-        # Chain link toggle for Training Splits
+        # Chain link toggle for Training Splits — flat, MS-Paint-style,
+        # drawn with QPainter so it needs no icon assets and follows the
+        # palette text color in light and dark themes.
         self._split_linked = getattr(self, "_split_linked", True)
         self._split_guard  = False
 
-        self._btn_split_link = QtWidgets.QPushButton()
+        def _make_chain_icon(linked: bool, color: QColor, size: int = 40) -> QIcon:
+            pm = QPixmap(size, size)
+            pm.fill(QtCore.Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing)
+            pen = QPen(color, 3.0)
+            pen.setCapStyle(QtCore.Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(QtCore.Qt.NoBrush)
+            if linked:
+                # Two wide interlocked capsules (MS Paint style)
+                p.drawRoundedRect(QtCore.QRectF(4, 14, 21, 12), 6, 6)
+                p.drawRoundedRect(QtCore.QRectF(15, 14, 21, 12), 6, 6)
+            else:
+                # Broken chain: two open half-links facing apart
+                path = QPainterPath()
+                path.moveTo(15, 14)
+                path.lineTo(10, 14)
+                path.arcTo(QtCore.QRectF(4, 14, 12, 12), 90, 180)
+                path.lineTo(15, 26)
+                path.moveTo(25, 14)
+                path.lineTo(30, 14)
+                path.arcTo(QtCore.QRectF(24, 14, 12, 12), 90, -180)
+                path.lineTo(25, 26)
+                p.drawPath(path)
+            p.end()
+            pm.setDevicePixelRatio(2.0)  # 40px canvas -> crisp 20px icon
+            return QIcon(pm)
+
+        # Steel blue when linked (matches the app accent), muted gray when
+        # broken — state is readable by color as well as shape.
+        self._icon_linked   = _make_chain_icon(True,  QColor("#4682B4"))
+        self._icon_unlinked = _make_chain_icon(False, QColor("#909090"))
+
+        self._btn_split_link = QtWidgets.QToolButton()
         self._btn_split_link.setCheckable(True)
         self._btn_split_link.setChecked(self._split_linked)
-        self._btn_split_link.setFixedSize(28, 28)
-        self._btn_split_link.setToolTip("Linked: changing one value sets the other to its complement (100 - n).\nClick to unlink.")
-        # Load icons from resource module; fall back to text if unavailable
-        if _get_chain_icon:
-            self._icon_linked   = QIcon(_get_chain_icon("linked"))
-            self._icon_unlinked = QIcon(_get_chain_icon("unlinked"))
-            self._btn_split_link.setIcon(self._icon_linked if self._split_linked else self._icon_unlinked)
-            self._btn_split_link.setIconSize(QtCore.QSize(20, 20))
-        else:
-            self._btn_split_link.setText("🔗" if self._split_linked else "⛓")
+        self._btn_split_link.setAutoRaise(True)
+        self._btn_split_link.setFixedSize(26, 26)
+        self._btn_split_link.setIconSize(QtCore.QSize(20, 20))
+        self._btn_split_link.setIcon(self._icon_linked if self._split_linked else self._icon_unlinked)
+        self._btn_split_link.setToolTip(
+            "Linked: changing one value sets the other to its complement (100 - n).\n"
+            "Click to unlink.")
         self._btn_split_link.setStyleSheet("""
-QPushButton {
-    font-size: 14px;
-    border: 1px solid #aaa;
-    border-radius: 6px;
-    background: transparent;
-}
-QPushButton:checked {
-    border: 2px solid steelblue;
-    background: rgba(70,130,180,0.15);
-}
-QPushButton:hover { background: rgba(128,128,128,0.15); }
+QToolButton { border: none; border-radius: 4px; background: transparent; }
+QToolButton:hover { background: rgba(128,128,128,0.18); }
+QToolButton:checked { background: rgba(128,128,128,0.10); }
 """)
         self._btn_split_link.toggled.connect(self._on_split_link_toggled)
         try:
-            self.horizontalLayout_splitRow.addWidget(self._btn_split_link)
+            # Place the link between the two spinboxes, MS-Paint style,
+            # in the slot occupied by the old separator line.
+            lay = self.horizontalLayout_splitRow
+            sep = getattr(self, "line_splitSeparator", None)
+            inserted = False
+            if sep is not None:
+                for i in range(lay.count()):
+                    if lay.itemAt(i) and lay.itemAt(i).widget() is sep:
+                        sep.hide()
+                        lay.insertWidget(i, self._btn_split_link)
+                        inserted = True
+                        break
+            if not inserted:
+                lay.addWidget(self._btn_split_link)
         except Exception:
             pass
 
@@ -517,7 +629,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             if idx >= 0:
                 lbl = QtWidgets.QLabel(base_text, tree.parent())
                 lbl.setAlignment(QtCore.Qt.AlignCenter)
-                lbl.setStyleSheet('font: bold 10pt "Arial";')
+                lbl.setStyleSheet("font: bold 10pt;")
                 layout.insertWidget(idx, lbl)
                 layout.setStretch(idx,     0)
                 layout.setStretch(idx + 1, 1)
@@ -618,6 +730,13 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         # Default selection
         self.selected_training_model = self.get_selected_model()
 
+        # Apply the model-dependent gating NOW, based on the initial radio state.
+        # Without this, LoRA/augmentation controls stay in their startup-disabled
+        # state until the user toggles a radio (which is what fired the gating
+        # before). This makes the initial UI match the initially-selected model.
+        self._update_lora_ui_for_model()
+        self._update_augmentation_ui_for_model()
+
         #self.buttonBox_close.rejected.connect(self.reject)
 
     # ------------------------------------------------------------------------
@@ -661,31 +780,22 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         lr_str = ", ".join(str(x) for x in learningRates)
         self.lineEdit_learningRates.setText(lr_str)
 
-        optimizer = self.site_config.get("Optimizer", "")
-        idx = self.comboBox_optimizer.findText(optimizer)
-        if idx >= 0:
-            self.comboBox_optimizer.setCurrentIndex(idx)
-
         self.doubleSpinBox_weightDecay.setValue(self.site_config.get("weight_decay", 0.0))
         self.spinBox_epochs.setValue(self.site_config.get("number_of_epochs", 0))
         self.spinBox_batchSize.setValue(self.site_config.get("batch_size", 0))
         self.spinBox_maxBestCheckpoints.setValue(
             int(self.site_config.get("max_best_checkpoints",
                                      ModelConfigManager.get_default("max_best_checkpoints"))))
-        self.checkBox_earlyStopping.setChecked(self.site_config.get("early_stopping", False))
-        self.spinBox_patience.setValue(self.site_config.get("patience", 0))
         self._set_overlay_mode_ui(self.site_config.get("validation_overlay_mode", "last"))
         self.spinBox_validationOverlayInterval.setValue(
-            int(self.site_config.get("validation_overlay_interval", 5) or 5))
+            int(self.site_config.get("validation_overlay_interval",
+                                     ModelConfigManager.get_default("validation_overlay_interval"))))
         self.spinBox_validationOverlaySamples.setValue(
             int(self.site_config.get("validation_overlay_samples",
                                      ModelConfigManager.get_default("validation_overlay_samples"))))
         self._load_lr_scheduler_ui(self.site_config)
-
-        device = self.site_config.get("device", "")
-        idx = self.comboBox_device.findText(device)
-        if idx >= 0:
-            self.comboBox_device.setCurrentIndex(idx)
+        self.checkBox_earlyStopping.setChecked(self.site_config.get("early_stopping", False))
+        self.spinBox_patience.setValue(self.site_config.get("patience", 0))
 
         self.current_path = self.site_config.get("Path", None)
 
@@ -792,6 +902,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             self.selected_training_model = model_name
             print(f"Selected training model: {self.selected_training_model}")
             self._update_lora_ui_for_model()
+            self._update_augmentation_ui_for_model()
             self._update_context_sensitive_ui()
 
     # ------------------------------------------------------------------------
@@ -799,6 +910,13 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
     def _set_lora_enabled(self, enabled: bool):
         """Enable/disable all LoRA-specific controls in one place."""
         for w in getattr(self, "_lora_widgets", []):
+            if w is not None:
+                w.setEnabled(enabled)
+
+    # ------------------------------------------------------------------------
+    def _set_lora_params_enabled(self, enabled: bool):
+        """Gray out LoRA hyperparameters when 'Use LoRA' is off (full fine-tune)."""
+        for w in getattr(self, "_lora_param_widgets", []):
             if w is not None:
                 w.setEnabled(enabled)
 
@@ -811,6 +929,19 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         """
         is_lora = (getattr(self, "selected_training_model", "") == "segformer")
         self._set_lora_enabled(is_lora)
+
+    # ------------------------------------------------------------------------
+    def _set_augmentation_enabled(self, enabled: bool):
+        """Enable/disable all augmentation controls in one place."""
+        for w in getattr(self, "_augmentation_widgets", []):
+            if w is not None:
+                w.setEnabled(enabled)
+
+    # ------------------------------------------------------------------------
+    def _update_augmentation_ui_for_model(self):
+        """Augmentation is wired for SegFormer only; gray it out for SAM2/YOLO."""
+        is_seg = (getattr(self, "selected_training_model", "") == "segformer")
+        self._set_augmentation_enabled(is_seg)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -1144,23 +1275,22 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         # Training parameters
         self.lineEdit_siteName.setText(cfg.get("siteName", ""))
         self.lineEdit_learningRates.setText(",".join(str(x) for x in cfg.get("learningRates", [0.0001])))
-        self.comboBox_optimizer.setCurrentText(cfg.get("optimizer", "Adam"))
         self.doubleSpinBox_weightDecay.setValue(float(cfg.get("weight_decay", 0.01) or 0.01))
         self.spinBox_epochs.setValue(int(cfg.get("number_of_epochs", 20) or 20))
         self.spinBox_batchSize.setValue(int(cfg.get("batch_size", 32) or 32))
         self.spinBox_maxBestCheckpoints.setValue(
             int(cfg.get("max_best_checkpoints",
                         ModelConfigManager.get_default("max_best_checkpoints"))))
-        self.checkBox_earlyStopping.setChecked(bool(cfg.get("early_stopping", False)))
-        self.spinBox_patience.setValue(int(cfg.get("patience", 3) or 3))
         self._set_overlay_mode_ui(cfg.get("validation_overlay_mode", "last"))
         self.spinBox_validationOverlayInterval.setValue(
-            int(cfg.get("validation_overlay_interval", 5) or 5))
+            int(cfg.get("validation_overlay_interval",
+                        ModelConfigManager.get_default("validation_overlay_interval"))))
         self.spinBox_validationOverlaySamples.setValue(
             int(cfg.get("validation_overlay_samples",
                         ModelConfigManager.get_default("validation_overlay_samples"))))
         self._load_lr_scheduler_ui(cfg)
-        self.comboBox_device.setCurrentText(cfg.get("device", "cpu"))
+        self.checkBox_earlyStopping.setChecked(bool(cfg.get("early_stopping", False)))
+        self.spinBox_patience.setValue(int(cfg.get("patience", 3) or 3))
 
         # Blob filter radius — stored as fraction, displayed as pixels
         blob_fraction = float(cfg.get("blob_filter_radius", 0.0))
@@ -1255,13 +1385,11 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         values: Dict[str, Any] = {
             "siteName": self.lineEdit_siteName.text().strip(),
             "learningRates": learning_rates or [0.0001],
-            "optimizer": self.comboBox_optimizer.currentText(),
+            "optimizer": "AdamW",  # AdamW is the only supported optimizer (kept in config for trainers/logging)
             "weight_decay": float(self.doubleSpinBox_weightDecay.value()),
             "number_of_epochs": int(self.spinBox_epochs.value()),
             "batch_size": int(self.spinBox_batchSize.value()),
             "max_best_checkpoints": int(self.spinBox_maxBestCheckpoints.value()),
-            "early_stopping": bool(self.checkBox_earlyStopping.isChecked()),
-            "patience": int(self.spinBox_patience.value()),
             "validation_overlay_mode": self._overlay_mode_from_ui(),
             "validation_overlay_interval": int(self.spinBox_validationOverlayInterval.value()),
             "validation_overlay_samples": int(self.spinBox_validationOverlaySamples.value()),
@@ -1269,7 +1397,8 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             "lr_scheduler_factor": float(self.doubleSpinBox_lrSchedulerFactor.value()),
             "lr_scheduler_patience": int(self.spinBox_lrSchedulerPatience.value()),
             "lr_scheduler_min_lr": self._lr_min_from_ui(),
-            "device": self.comboBox_device.currentText(),
+            "early_stopping": bool(self.checkBox_earlyStopping.isChecked()),
+            "patience": int(self.spinBox_patience.value()),
             "blob_filter_radius": self._blob_pixels_to_fraction(),
             "val_split":   round(self.spinBox_valSplit.value()   / 100.0, 2),
             "train_split": round(self.spinBox_trainSplit.value() / 100.0, 2),
@@ -2086,10 +2215,6 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         if not lr_text:
             missing.append("Learning rate(s)")
 
-        # Optimizer
-        if not self.comboBox_optimizer.currentText().strip():
-            missing.append("Optimizer")
-
         # Loss function
         # Weight decay
         if self.doubleSpinBox_weightDecay.value() == 0.0:
@@ -2107,6 +2232,11 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         if self.spinBox_maxBestCheckpoints.value() <= 0:
             missing.append("Best checkpoints to keep")
 
+        # Overlay interval (only matters in "Every N epochs" mode)
+        if (self._overlay_mode_from_ui() == "interval"
+                and self.spinBox_validationOverlayInterval.value() <= 0):
+            missing.append("Validation overlay interval")
+
         # LR scheduler patience must fire before early stopping, or the run
         # halts before the learning rate is ever reduced.
         if (self.checkBox_lrScheduler.isChecked()
@@ -2117,18 +2247,9 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         if self._lr_min_from_ui() <= 0.0:
             missing.append("Minimum LR (must be greater than 0)")
 
-        # Overlay interval (only matters in "Every N epochs" mode)
-        if (self._overlay_mode_from_ui() == "interval"
-                and self.spinBox_validationOverlayInterval.value() <= 0):
-            missing.append("Validation overlay interval")
-
         # Patience (only matters if early stopping is checked)
         if self.checkBox_earlyStopping.isChecked() and self.spinBox_patience.value() <= 0:
             missing.append("Early stopping patience")
-
-        # Device
-        if not self.comboBox_device.currentText().strip():
-            missing.append("Device")
 
         # YOLO base weights — required when YOLO is selected
         if self.radioButton_train_model_YOLO.isChecked():
@@ -2206,39 +2327,9 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    # Validation overlay helpers
+    # Validation overlay / LR scheduler helpers
     # ------------------------------------------------------------------------
-    # Combo index <-> config value. Stored values are stable strings so the
-    # config stays readable and CLI --validation-overlay-mode matches the GUI.
     _OVERLAY_MODES = ("last", "every", "interval")
-
-    def _load_lr_scheduler_ui(self, cfg) -> None:
-        """Populate the LR scheduler widgets, defaulting through the schema."""
-        _D = ModelConfigManager.get_default
-        self.checkBox_lrScheduler.setChecked(
-            bool(cfg.get("lr_scheduler_enabled", _D("lr_scheduler_enabled"))))
-        self.doubleSpinBox_lrSchedulerFactor.setValue(
-            float(cfg.get("lr_scheduler_factor", _D("lr_scheduler_factor"))))
-        self.spinBox_lrSchedulerPatience.setValue(
-            int(cfg.get("lr_scheduler_patience", _D("lr_scheduler_patience"))))
-        self.lineEdit_lrSchedulerMinLR.setText(
-            f'{float(cfg.get("lr_scheduler_min_lr", _D("lr_scheduler_min_lr"))):g}')
-        self._update_lr_scheduler_enabled()
-
-    def _lr_min_from_ui(self) -> float:
-        """Parse the minimum-LR field; fall back to the schema default if unparseable."""
-        try:
-            return float(self.lineEdit_lrSchedulerMinLR.text().strip())
-        except (TypeError, ValueError):
-            return float(ModelConfigManager.get_default("lr_scheduler_min_lr"))
-
-    def _update_lr_scheduler_enabled(self, *_args) -> None:
-        """Scheduler parameters only apply when the scheduler is enabled."""
-        on = self.checkBox_lrScheduler.isChecked()
-        for w in (self.doubleSpinBox_lrSchedulerFactor, self.label_lrSchedulerFactor,
-                  self.spinBox_lrSchedulerPatience, self.label_lrSchedulerPatience,
-                  self.lineEdit_lrSchedulerMinLR, self.label_lrSchedulerMinLR):
-            w.setEnabled(on)
 
     def _overlay_mode_from_ui(self) -> str:
         """Return the stored config value for the current combo selection."""
@@ -2262,6 +2353,34 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         is_interval = self._overlay_mode_from_ui() == "interval"
         self.spinBox_validationOverlayInterval.setEnabled(is_interval)
         self.label_validationOverlayInterval.setEnabled(is_interval)
+
+    def _load_lr_scheduler_ui(self, cfg) -> None:
+        """Populate the LR scheduler widgets, defaulting through the schema."""
+        _D = ModelConfigManager.get_default
+        self.checkBox_lrScheduler.setChecked(
+            bool(cfg.get("lr_scheduler_enabled", _D("lr_scheduler_enabled"))))
+        self.doubleSpinBox_lrSchedulerFactor.setValue(
+            float(cfg.get("lr_scheduler_factor", _D("lr_scheduler_factor"))))
+        self.spinBox_lrSchedulerPatience.setValue(
+            int(cfg.get("lr_scheduler_patience", _D("lr_scheduler_patience"))))
+        self.lineEdit_lrSchedulerMinLR.setText(
+            f'{float(cfg.get("lr_scheduler_min_lr", _D("lr_scheduler_min_lr"))):g}')
+        self._update_lr_scheduler_enabled()
+
+    def _lr_min_from_ui(self) -> float:
+        """Parse the minimum-LR field; fall back to the schema default."""
+        try:
+            return float(self.lineEdit_lrSchedulerMinLR.text().strip())
+        except (TypeError, ValueError):
+            return float(ModelConfigManager.get_default("lr_scheduler_min_lr"))
+
+    def _update_lr_scheduler_enabled(self, *_args) -> None:
+        """Scheduler parameters only apply when the scheduler is enabled."""
+        on = self.checkBox_lrScheduler.isChecked()
+        for w in (self.doubleSpinBox_lrSchedulerFactor, self.label_lrSchedulerFactor,
+                  self.spinBox_lrSchedulerPatience, self.label_lrSchedulerPatience,
+                  self.lineEdit_lrSchedulerMinLR, self.label_lrSchedulerMinLR):
+            w.setEnabled(on)
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -2296,13 +2415,8 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
     def _on_split_link_toggled(self, linked: bool) -> None:
         """Toggle chain link — when linked spinboxes are complementary; when unlinked, independent."""
         self._split_linked = linked
-        if _get_chain_icon:
-            self._btn_split_link.setIcon(
-                getattr(self, '_icon_linked', QIcon()) if linked
-                else getattr(self, '_icon_unlinked', QIcon())
-            )
-        else:
-            self._btn_split_link.setText("🔗" if linked else "⛓")
+        self._btn_split_link.setIcon(
+            self._icon_linked if linked else self._icon_unlinked)
         self._btn_split_link.setToolTip(
             "Linked: changing one value sets the other to its complement (100 - n).\nClick to unlink."
             if linked else
@@ -2551,3 +2665,4 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             print("[Blob Filter] Manual radius saved automatically: "
                   "{} px ({:.2f}% of diagonal).".format(
                       self.spinBox_blobFilterRadius.value(), manual_fraction * 100.0))
+

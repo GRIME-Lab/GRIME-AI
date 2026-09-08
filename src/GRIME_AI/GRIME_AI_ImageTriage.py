@@ -8,6 +8,7 @@
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
 import os
+import json
 import shutil
 
 import cv2
@@ -72,8 +73,12 @@ class GRIME_AI_ImageTriage:
             color_imbalance_threshold    = color_imbalance_threshold,
         )
 
+        reportRows = []   # accumulated for the xlsx report
+
         if bCreateReport:
-            csvFilename      = 'ImageTriage_' + datetime.now().strftime("%Y%m%d_%H%M%S") + '.csv'
+            runTimestamp     = datetime.now()
+            reportStem       = 'ImageTriage_' + runTimestamp.strftime("%Y%m%d_%H%M%S")
+            csvFilename      = reportStem + '.csv'
             imageQualityFile = os.path.join(folder, csvFilename)
             csvFile          = open(imageQualityFile, 'a', newline='')
             csvFile.write('Focus Value, Focus Attrib, Laplacian Value, Intensity Value, Intensity Attrib., '
@@ -196,6 +201,17 @@ class GRIME_AI_ImageTriage:
                 )
                 csvFile.write(strOutputString)
 
+                reportRows.append((
+                    round(blur_fft, 2), strFocusMetric,
+                    round(blur_laplacian, 2),
+                    round(brightness, 2), strIntensity,
+                    round(color_imbalance, 3), strColorImbalance,
+                    strQuality,
+                    round(rotationAngle, 2), round(horizontal_shift, 2), round(vertical_shift, 2),
+                    filename,
+                    'Y' if bActuallyMoved else 'N'
+                ))
+
         if badImageCount == 0:
             strMessage = 'No bad images found.'
             print(strMessage)
@@ -206,9 +222,127 @@ class GRIME_AI_ImageTriage:
         if bCreateReport:
             csvFile.close()
 
+            settings = self._build_settings_dict(
+                runTimestamp, folder, bFetchRecursive,
+                blurThreshhold, shiftSize, laplacian_threshold, blur_logic,
+                brightnessMin, brightnessMAX,
+                focus_roi, use_color_imbalance, color_imbalance_threshold,
+                bMoveImages, bCorrectAlignment, bSavePolylines,
+                strReferenceImageFilename, rotationThreshold,
+                images_processed=len(reportRows), images_flagged=badImageCount)
+
+            # JSON sidecar: same stem as the CSV, '_settings.json' suffix
+            try:
+                sidecarPath = os.path.join(folder, reportStem + '_settings.json')
+                with open(sidecarPath, 'w') as jsonFile:
+                    json.dump(settings, jsonFile, indent=4)
+            except Exception as e:
+                print(f"[{self.className}] Could not write settings sidecar: {e}")
+
+            # Excel workbook: results and settings on separate worksheets
+            try:
+                xlsxPath = os.path.join(folder, reportStem + '.xlsx')
+                self._write_xlsx_report(xlsxPath, reportRows, settings)
+            except Exception as e:
+                print(f"[{self.className}] Could not write xlsx report: {e}")
+
         if self.show_gui:
             progressBar.close()
             del progressBar
+
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
+    def _build_settings_dict(self, runTimestamp, folder, bFetchRecursive,
+                             blurThreshhold, shiftSize, laplacian_threshold, blur_logic,
+                             brightnessMin, brightnessMAX,
+                             focus_roi, use_color_imbalance, color_imbalance_threshold,
+                             bMoveImages, bCorrectAlignment, bSavePolylines,
+                             strReferenceImageFilename, rotationThreshold,
+                             images_processed=0, images_flagged=0):
+        """Assemble the complete run configuration for the settings sidecar
+        and the xlsx Triage Settings worksheet."""
+        try:
+            from GRIME_AI.version import SW_VERSION
+        except Exception:
+            SW_VERSION = "unknown"
+
+        return {
+            "software":                  "GRIME AI Image Triage",
+            "software_version":          SW_VERSION,
+            "run_timestamp":             runTimestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "image_folder":              folder,
+            "fetch_recursive":           bool(bFetchRecursive),
+            "fft_blur_threshold":        blurThreshhold,
+            "fft_shift_radius":          shiftSize,
+            "laplacian_threshold":       laplacian_threshold,
+            "blur_logic":                blur_logic,
+            "brightness_min":            brightnessMin,
+            "brightness_max":            brightnessMAX,
+            "focus_roi":                 focus_roi,
+            "use_color_imbalance":       bool(use_color_imbalance),
+            "color_imbalance_threshold": color_imbalance_threshold,
+            "resize_percent":            50.0,
+            "move_images":               bool(bMoveImages),
+            "correct_alignment":         bool(bCorrectAlignment),
+            "save_polylines":            bool(bSavePolylines),
+            "reference_image":           strReferenceImageFilename,
+            "rotation_threshold":        rotationThreshold,
+            "images_processed":          images_processed,
+            "images_flagged":            images_flagged,
+        }
+
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
+    def _write_xlsx_report(self, xlsxPath, reportRows, settings):
+        """Write the triage results and run settings to an Excel workbook,
+        one worksheet each ('Triage Results', 'Triage Settings')."""
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+
+        wb = Workbook()
+
+        # --- Sheet 1: Triage Results ---
+        ws = wb.active
+        ws.title = "Triage Results"
+        headers = ['Focus Value', 'Focus Attrib', 'Laplacian Value',
+                   'Intensity Value', 'Intensity Attrib.',
+                   'Color Imbalance', 'Color Imbalance Attrib.',
+                   'Quality', 'Rotation', 'H. Shift', 'V. Shift',
+                   'Filename', 'Moved']
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+
+        for row in reportRows:
+            ws.append(list(row))
+            # Render the filename as a clickable hyperlink (basename shown)
+            filenameCell           = ws.cell(row=ws.max_row, column=12)
+            fullPath               = row[11]
+            filenameCell.value     = os.path.basename(fullPath)
+            filenameCell.hyperlink = fullPath
+            filenameCell.style     = "Hyperlink"
+
+        ws.freeze_panes = "A2"
+
+        # --- Sheet 2: Triage Settings ---
+        wsSettings = wb.create_sheet("Triage Settings")
+        wsSettings.append(["Setting", "Value"])
+        for cell in wsSettings[1]:
+            cell.font = Font(bold=True)
+        for key, value in settings.items():
+            if isinstance(value, (list, tuple, dict)):
+                value = json.dumps(value)
+            wsSettings.append([key, value])
+
+        # Reasonable column widths
+        for sheet, widths in ((ws, {12: 45}), (wsSettings, {1: 28, 2: 60})):
+            for colIdx, width in widths.items():
+                colLetter = sheet.cell(row=1, column=colIdx).column_letter
+                sheet.column_dimensions[colLetter].width = width
+
+        wb.save(xlsxPath)
 
     # ==================================================================================================================
     #

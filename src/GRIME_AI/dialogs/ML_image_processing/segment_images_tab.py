@@ -26,7 +26,7 @@ from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from GRIME_AI.utils.resource_utils import ui_path
 from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
-from PyQt5.QtGui import QPalette, QColor
+from PyQt5.QtGui import QPalette, QColor, QFont
 from PyQt5.QtCore import Qt
 
 # import torch if using torch metadata extraction
@@ -261,6 +261,8 @@ class SegmentImagesTab(QWidget):
         self._set_segment_seasons(segment_seasons)
 
         # Set the appropriate radio button based on MODEL
+        if hasattr(self, "checkBox_use_tta"):
+            self.checkBox_use_tta.setEnabled(model_type == "segformer")
         if model_type == "sam2":
             self.radioButton_segment_model_sam2.setChecked(True)
         elif model_type == "segformer":
@@ -327,6 +329,10 @@ class SegmentImagesTab(QWidget):
         site_config["copy_original_model_image"] = self.checkBox_copyOriginalModelImage.isChecked()
         site_config["save_probability_maps"] = self.checkBox_save_probability_maps.isChecked()
         site_config["save_diagnostic_panels"] = self.checkBox_save_diagnostic_panels.isChecked()
+        # TTA only meaningful for SegFormer; store the checkbox state (dispatcher
+        # ignores it for SAM2/YOLO regardless).
+        site_config["use_tta"] = (self.checkBox_use_tta.isChecked()
+                                  if hasattr(self, "checkBox_use_tta") else False)
 
         site_config.setdefault("load_model", {})
 
@@ -488,8 +494,7 @@ QPushButton {
     border: none;
     border-radius: 6px;
     padding: 8px 14px;
-    font-family: "Arial";
-    font-size: 11pt;
+    font-size: 12pt;
     font-weight: bold;
 }
 QPushButton:hover { background-color: #5a93c2; }
@@ -519,6 +524,9 @@ QGroupBox::title {{
     padding: 0 6px;
     background-color: palette(window);
     color: palette(windowtext);
+}}
+QGroupBox QCheckBox, QGroupBox QRadioButton, QGroupBox QLineEdit, QGroupBox QLabel {{
+    font-weight: normal;
 }}
 """
         LISTWIDGET_LIGHT = """
@@ -551,6 +559,18 @@ QLineEdit:focus {
             tw.setStyleSheet(TABLEWIDGET_LIGHT)
         self.lineEdit_segmentation_model_file.setStyleSheet(LINEEDIT_LIGHT)
         self.lineEdit_output_folder.setStyleSheet(LINEEDIT_LIGHT)
+
+        # Force non-bold weight on checkboxes, radios, and line edits. Applying a
+        # QGroupBox stylesheet re-resolves child fonts and can render these bold
+        # regardless of the .ui font weight; setting the font explicitly here
+        # (after stylesheets) wins over that cascade.
+        for _w in (self.findChildren(QtWidgets.QCheckBox)
+                   + self.findChildren(QtWidgets.QRadioButton)
+                   + self.findChildren(QtWidgets.QLineEdit)):
+            _f = _w.font()
+            _f.setBold(False)
+            _f.setWeight(QFont.Normal)
+            _w.setFont(_f)
 
         # ── Right margin on left panel so it doesn't butt against metadata ────
         try:
@@ -730,6 +750,9 @@ QLineEdit:focus {
 
             self.selected_segment_model = model_name
             print(f"Selected segment model: {self.selected_segment_model}")
+            # TTA is a SegFormer-only inference option; gray it out otherwise.
+            if hasattr(self, "checkBox_use_tta"):
+                self.checkBox_use_tta.setEnabled(model_name == "segformer")
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

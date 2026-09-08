@@ -50,6 +50,24 @@ class USGS_HIVIS:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def set_show_hidden(self, show):
+        """Include or exclude hidden cameras in the camera list."""
+        self._client.set_show_hidden(show)
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def toggle_show_hidden(self):
+        """Flip hidden-camera visibility. Returns the new state (True = shown)."""
+        return self._client.toggle_show_hidden()
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def is_hidden(self, cam_id):
+        """True if the camera is flagged hidden by USGS."""
+        return self._client.is_hidden(cam_id)
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
     def get_camera_info(self, camera_id):
         lines = self._client.get_camera_info_lines(camera_id)
         # Track legacy attributes

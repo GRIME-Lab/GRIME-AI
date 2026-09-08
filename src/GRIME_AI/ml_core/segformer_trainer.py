@@ -138,7 +138,10 @@ class SegFormerConfig:
         default_factory=lambda: ModelConfigManager.get_default("validation_overlay_interval"))
 
     # Inference threshold (should match inference engine)
-    inference_threshold: float = 0.2  # Probability threshold for positive prediction
+    # Decision rule is argmax over classes (multi-class standard) everywhere:
+    # training accuracy, validation metrics, overlays, and the inference
+    # engine. No probability threshold -- any threshold here would diverge
+    # from what the deployed engine does.
     
     # Multi-class support
     target_class_id: int = 1  # Which class to evaluate/visualize (for multi-class datasets)
@@ -295,7 +298,7 @@ class SegFormerTrainer:
             n_batches += 1
 
             # Threshold-based predictions
-            preds = (probs[:, self.cfg.target_class_id] > self.cfg.inference_threshold).long()
+            preds = (torch.argmax(probs, dim=1) == self.cfg.target_class_id).long()
 
             for b in range(preds.size(0)):
                 pb = preds[b].cpu()
@@ -594,14 +597,44 @@ class SegFormerTrainer:
             early_stopped=getattr(self, "early_stopped", False),
             early_stop_epoch=getattr(self, "early_stop_epoch", None),
             training_time_seconds=getattr(self, "training_time_seconds", None),
+            lr_scheduler_enabled=bool(self.cfg.lr_scheduler_enabled),
+            lr_reductions=sum(1 for i in range(1, len(getattr(self, "lr_values", [])))
+                              if self.lr_values[i] < self.lr_values[i - 1]),
+            # Config snapshot in site_config key names so recommendations are
+            # actionable in the GUI (same keys as SAM2).
+            config={
+                "learningRates": [lr],
+                "number_of_epochs": int(self.cfg.num_epochs),
+                "weight_decay": float(self.cfg.weight_decay),
+                "early_stopping": bool(self.cfg.early_stopping),
+                "patience": int(self.cfg.patience),
+                "lr_scheduler_enabled": bool(self.cfg.lr_scheduler_enabled),
+                "lr_scheduler_patience": int(self.cfg.lr_scheduler_patience),
+                "val_split": getattr(self.cfg, "val_split", None),
+            },
+            val_best_threshold=self._f1_optimal_threshold(),
         )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _f1_optimal_threshold(self):
+        """Probability threshold maximising pixel F1 on the sampled val pixels."""
+        if not self.val_true_list or not self.val_score_list:
+            return None
+        t = np.asarray(self.val_true_list, dtype=np.int8)
+        p = np.asarray(self.val_score_list, dtype=np.float32)
+        order = np.argsort(-p)
+        t, p = t[order], p[order]
+        tp = np.cumsum(t); fp = np.cumsum(1 - t); fn = t.sum() - tp
+        f1 = 2 * tp / np.maximum(2 * tp + fp + fn, 1)
+        return float(p[int(np.argmax(f1))])
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def save_checkpoint(self, model, optimizer, scaler, categories, site_name,
                         learnrate, epochs, output_dir,
                         suffix=None, val_loss=None, val_accuracy=None, miou=None, target_category_name=None,
-                        val_iou=None, epoch_num=None):
+                        val_iou=None, epoch_num=None, val_best_threshold=None):
         """Save checkpoint with top-N management based on validation loss (lower is better)."""
         timestamp = str(np.datetime64('now', 's')).replace('-', '').replace(':', '').replace('T', '_')
 
@@ -619,7 +652,9 @@ class SegFormerTrainer:
             "val_accuracy": val_accuracy,
             "miou": miou,
             "target_category_name": target_category_name,
-            "base_model": "segformer"
+            "base_model": "segformer",
+            "lora_config": getattr(self, "lora_config_dict", None),
+            "val_best_threshold": val_best_threshold,
         }
 
         # If this is a final save or no val_iou provided, use simple naming
@@ -866,8 +901,7 @@ class SegFormerTrainer:
 
                     # Train pixel accuracy
                     with torch.no_grad():
-                        preds = (torch.softmax(logits.detach(), dim=1)[:, self.cfg.target_class_id]
-                                 > self.cfg.inference_threshold).long()
+                        preds = (torch.argmax(logits.detach(), dim=1) == self.cfg.target_class_id).long()
                         mb = (masks == self.cfg.target_class_id).long()
                         train_correct += (preds == mb).sum().item()
                         train_total += mb.numel()
@@ -923,7 +957,7 @@ class SegFormerTrainer:
                                 mode="bilinear", align_corners=False
                             )
                             sample_probs = torch.softmax(sample_logits, dim=1)
-                            sample_preds = (sample_probs[:, self.cfg.target_class_id] > self.cfg.inference_threshold).long()
+                            sample_preds = (torch.argmax(sample_probs, dim=1) == self.cfg.target_class_id).long()
                             sample_masks_binary = (sample_masks == self.cfg.target_class_id).long()
 
                         self.save_validation_overlay(
@@ -961,7 +995,8 @@ class SegFormerTrainer:
                             target_category_name=self.cfg.target_category_name,
                             val_iou=current_val_iou,
                             val_loss=avg_val_loss,
-                            epoch_num=epoch
+                            epoch_num=epoch,
+                            val_best_threshold=self._f1_optimal_threshold()
                         )
                     else:
                         self.patience_counter += 1
@@ -997,8 +1032,7 @@ class SegFormerTrainer:
                             _out.logits, size=sample_masks.shape[-2:],
                             mode="bilinear", align_corners=False)
                         _probs = torch.softmax(_logits, dim=1)
-                        _preds = (_probs[:, self.cfg.target_class_id]
-                                  > self.cfg.inference_threshold).long()
+                        _preds = (torch.argmax(_probs, dim=1) == self.cfg.target_class_id).long()
                         _true = (sample_masks == self.cfg.target_class_id).long()
                     self.save_validation_overlay(
                         last_completed_epoch, sample_imgs, _preds, _true, self.cfg.output_dir)

@@ -11,8 +11,59 @@ from pathlib import Path
 
 # ------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------------------------------------------
+# Default cap on positive prompts drawn from the pooled centroid population.
+# Training, validation and inference MUST all use the same protocol; this
+# constant is the single source of truth for that protocol.
+DEFAULT_MAX_POSITIVES = 8
+DEFAULT_NEGATIVE_BALANCE = 3
+
+
+def _centroids_to_px(entries, image_w, image_h):
+    out = []
+    for entry in entries:
+        cx_norm, cy_norm = entry["centroid_norm"] if isinstance(entry, dict) else entry
+        out.append([int(round(cx_norm * (image_w - 1))), int(round(cy_norm * (image_h - 1)))])
+    return out
+
+
+def sample_pooled_prompts(category_id, category_centroids, image_w, image_h,
+                          max_positives=DEFAULT_MAX_POSITIVES,
+                          negative_balance=DEFAULT_NEGATIVE_BALANCE,
+                          rng=None):
+    """
+    Deployment prompt protocol, shared by training, validation and inference.
+
+    Positives : up to max_positives centroids sampled from the target category's
+                pooled population (all of them if fewer exist).
+    Negatives : up to negative_balance * n_pos centroids sampled from every other
+                category's pooled population.
+
+    Returns (coords list[[x, y]], labels list[int]) in pixel space, or (None, None).
+    rng: random.Random instance. Pass a seeded one for deterministic inference;
+         pass an unseeded one during training so each epoch sees a different draw.
+    """
+    rng = rng or random.Random()
+    positives = _centroids_to_px(category_centroids.get(int(category_id), []), image_w, image_h)
+    if not positives:
+        return None, None
+    if max_positives and len(positives) > max_positives:
+        positives = rng.sample(positives, max_positives)
+
+    negatives = []
+    for cat_id, centroids in category_centroids.items():
+        if int(cat_id) == int(category_id):
+            continue
+        negatives.extend(_centroids_to_px(centroids, image_w, image_h))
+    max_neg = len(positives) * negative_balance
+    if len(negatives) > max_neg:
+        negatives = rng.sample(negatives, max_neg)
+
+    return positives + negatives, [1] * len(positives) + [0] * len(negatives)
+
+
 def build_centroid_point_prompts(category_id, category_centroids, image_w, image_h, device,
-                                 negative_balance=3, random_seed=42):
+                                 negative_balance=DEFAULT_NEGATIVE_BALANCE, random_seed=42,
+                                 max_positives=DEFAULT_MAX_POSITIVES):
     """
     Build SAM2-ready point prompt tensors from stored centroid metadata.
 
@@ -34,48 +85,15 @@ def build_centroid_point_prompts(category_id, category_centroids, image_w, image
     """
     import torch
 
-    # ---- Positive prompts (target category) --------------------------------
-    positive_centroids = category_centroids.get(int(category_id), [])
-    if not positive_centroids:
+    coords, labels = sample_pooled_prompts(
+        category_id, category_centroids, image_w, image_h,
+        max_positives=max_positives, negative_balance=negative_balance,
+        rng=random.Random(random_seed),
+    )
+    if coords is None:
         return None, None
-
-    positive_coords = []
-    for entry in positive_centroids:
-        if isinstance(entry, dict):
-            cx_norm, cy_norm = entry["centroid_norm"]
-        else:
-            cx_norm, cy_norm = entry
-        cx_px = int(round(cx_norm * (image_w - 1)))
-        cy_px = int(round(cy_norm * (image_h - 1)))
-        positive_coords.append([cx_px, cy_px])
-
-    # ---- Negative prompts (all other categories) ---------------------------
-    negative_coords = []
-    for cat_id, centroids in category_centroids.items():
-        if int(cat_id) == int(category_id):
-            continue
-        for entry in centroids:
-            if isinstance(entry, dict):
-                cx_norm, cy_norm = entry["centroid_norm"]
-            else:
-                cx_norm, cy_norm = entry
-            cx_px = int(round(cx_norm * (image_w - 1)))
-            cy_px = int(round(cy_norm * (image_h - 1)))
-            negative_coords.append([cx_px, cy_px])
-
-    # Balance negatives with fixed seed for reproducibility
-    max_negatives = len(positive_coords) * negative_balance
-    if len(negative_coords) > max_negatives:
-        rng = random.Random(random_seed)
-        negative_coords = rng.sample(negative_coords, max_negatives)
-
-    # ---- Combine and build tensors -----------------------------------------
-    all_coords = positive_coords + negative_coords
-    all_labels = [1] * len(positive_coords) + [0] * len(negative_coords)
-
-    point_coords = torch.tensor(all_coords, device=device, dtype=torch.float32)
-    point_labels = torch.tensor(all_labels, device=device, dtype=torch.int64)
-
+    point_coords = torch.tensor(coords, device=device, dtype=torch.float32)
+    point_labels = torch.tensor(labels, device=device, dtype=torch.int64)
     return point_coords, point_labels
 
 # ------------------------------------------------------------------------------------------------------------------
