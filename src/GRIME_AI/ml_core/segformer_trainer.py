@@ -634,7 +634,7 @@ class SegFormerTrainer:
     def save_checkpoint(self, model, optimizer, scaler, categories, site_name,
                         learnrate, epochs, output_dir,
                         suffix=None, val_loss=None, val_accuracy=None, miou=None, target_category_name=None,
-                        val_iou=None, epoch_num=None):
+                        val_iou=None, epoch_num=None, val_best_threshold=None):
         """Save checkpoint with top-N management based on validation loss (lower is better)."""
         timestamp = str(np.datetime64('now', 's')).replace('-', '').replace(':', '').replace('T', '_')
 
@@ -652,7 +652,9 @@ class SegFormerTrainer:
             "val_accuracy": val_accuracy,
             "miou": miou,
             "target_category_name": target_category_name,
-            "base_model": "segformer"
+            "base_model": "segformer",
+            "lora_config": getattr(self, "lora_config_dict", None),
+            "val_best_threshold": val_best_threshold,
         }
 
         # If this is a final save or no val_iou provided, use simple naming
@@ -993,7 +995,8 @@ class SegFormerTrainer:
                             target_category_name=self.cfg.target_category_name,
                             val_iou=current_val_iou,
                             val_loss=avg_val_loss,
-                            epoch_num=epoch
+                            epoch_num=epoch,
+                            val_best_threshold=self._f1_optimal_threshold()
                         )
                     else:
                         self.patience_counter += 1
