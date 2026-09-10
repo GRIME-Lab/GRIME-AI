@@ -58,7 +58,8 @@ class ML_ImageProcessingDlg(QDialog):
         default_height = default_size.height()
 
         new_width = int(default_width * 1.5)  # 50% wider
-        new_height = default_height           # keep full height
+        # new_height = default_height           # keep full height
+        new_height = 1050
 
         self.resize(new_width, new_height)
         self.setMinimumSize(int(new_width * 0.7), int(new_height * 0.7))
