@@ -37,6 +37,7 @@
         <item>
          <widget class="QTreeWidget" name="listWidget_availableFolders">
           <property name="sizePolicy"><sizepolicy hsizetype="Expanding" vsizetype="Expanding"><horstretch>1</horstretch><verstretch>1</verstretch></sizepolicy></property>
+          <property name="maximumSize"><size><width>16777215</width><height>260</height></size></property>
           <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
           <property name="selectionMode"><enum>QAbstractItemView::ExtendedSelection</enum></property>
           <property name="headerHidden"><bool>false</bool></property>
@@ -98,6 +99,7 @@
         <item>
          <widget class="QTreeWidget" name="listWidget_selectedFolders">
           <property name="sizePolicy"><sizepolicy hsizetype="Expanding" vsizetype="Expanding"><horstretch>1</horstretch><verstretch>1</verstretch></sizepolicy></property>
+          <property name="maximumSize"><size><width>16777215</width><height>260</height></size></property>
           <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
           <property name="headerHidden"><bool>false</bool></property>
           <column><property name="text"><string>Selected Image Folders ▶</string></property></column>
