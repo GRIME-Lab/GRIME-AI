@@ -569,39 +569,6 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    '''
-    def setup_ui_properties(self):
-        """Set size policies and layout stretch factors."""
-        self.tabWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.listWidget_availableFolders.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.listWidget_selectedFolders.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.listWidget_availableFolders.setMinimumHeight(200)
-        self.listWidget_selectedFolders.setMinimumHeight(200)
-        self.adjustSize()
-        self.setMinimumSize(self.size())
-        self.verticalTabParametersLayout.setStretch(0, 1)
-        self.verticalTabParametersLayout.setStretch(1, 0)
-        self.horizontalMainLayout.setStretch(0, 1)
-        self.horizontalMainLayout.setStretch(1, 3)
-        self.horizontalListLayout.setStretch(0, 1)
-        self.horizontalListLayout.setStretch(1, 0)
-        self.horizontalListLayout.setStretch(2, 1)
-
-        # Set stylesheet for the tabs to change color when a tab is selected.
-        self.tabWidget.setStyleSheet("""
-            QTabBar::tab {
-                background-color: white;
-                color: black;
-            }
-            QTabBar::tab:selected {
-                background-color: steelblue;
-                color: white;
-            }
-        """)
-    '''
-
-    # ------------------------------------------------------------------------
-    # ------------------------------------------------------------------------
     def _install_clickable_labels(self) -> None:
         """
         Insert a plain bold QLabel above each folder tree as a title,
