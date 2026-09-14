@@ -1,6 +1,7 @@
 import os
 import requests
 import pandas as pd
+from GRIME_AI.GRIME_AI_HTTP import TimeoutSession
 from datetime import datetime
 
 class GRIME_AI_Phenocam_API:
@@ -12,9 +13,11 @@ class GRIME_AI_Phenocam_API:
     BASE_URL = "https://phenocam.nau.edu/api/"
 
     def __init__(self):
-        # Persistent session — reuses the HTTPS connection across all API calls
-        # instead of opening a new connection per request
-        self.session = requests.Session()
+        # Persistent session that ALWAYS applies a timeout + bounded retries.
+        # A plain requests.Session() has no timeout: a silent server blocks
+        # every call here forever ("read timeout=None"). TimeoutSession makes
+        # each self.session.get() fail fast instead.
+        self.session = TimeoutSession()
 
         # Define available endpoints
         self.endpoints = {

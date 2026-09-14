@@ -15,6 +15,7 @@ import urllib.request
 
 # --- Third-party imports ---
 import requests
+from GRIME_AI.GRIME_AI_HTTP import get as http_get, DEFAULT_TIMEOUT
 from bs4 import BeautifulSoup
 
 # --- Local application imports ---
@@ -69,7 +70,7 @@ class GRIME_AI_PhenoCam:
         # that page we would harvest unrelated thumbnail images, so treat any
         # redirect away from the requested day URL as "no images for this date".
         # ----------
-        response = requests.get(dailyURLvisible)
+        response = http_get(dailyURLvisible)  # timeout + bounded retries
 
         redirected_away = bool(
             response.history
@@ -132,7 +133,7 @@ class GRIME_AI_PhenoCam:
 
         # opening the url for reading
         ssl._create_default_https_context = ssl._create_unverified_context
-        html = urllib.request.urlopen(url)
+        html = urllib.request.urlopen(url, timeout=DEFAULT_TIMEOUT[1])
 
         # parsing the html file
         htmlParse = BeautifulSoup(html, 'html5lib')
@@ -167,7 +168,7 @@ class GRIME_AI_PhenoCam:
         try:
             # opening the url for reading
             ssl._create_default_https_context = ssl._create_unverified_context
-            html = urllib.request.urlopen(url)
+            html = urllib.request.urlopen(url, timeout=DEFAULT_TIMEOUT[1])
 
             # parsing the html file
             htmlParse = BeautifulSoup(html, 'html5lib')
@@ -204,7 +205,7 @@ class GRIME_AI_PhenoCam:
         try:
             # opening the url for reading
             ssl._create_default_https_context = ssl._create_unverified_context
-            html = urllib.request.urlopen(url)
+            html = urllib.request.urlopen(url, timeout=DEFAULT_TIMEOUT[1])
 
             # parsing the html file
             htmlParse = BeautifulSoup(html, 'html5lib')

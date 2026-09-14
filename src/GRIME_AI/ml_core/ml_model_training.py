@@ -90,10 +90,8 @@ class MLModelTraining:
 
         self.site_name = self.site_config['siteName']
         self.learning_rates = self.site_config['learningRates']
-        # Stale config keys: optimizer/loss selection was removed from the UI.
-        # Each trainer hardcodes its own (SAM2 -> AdamW, BCE + Dice + Score).
-        self.optimizer_type = "AdamW"
-        self.loss_function = self.site_config.get('loss_function', 'BCE + Dice + Score')
+        self.optimizer_type = self.site_config['optimizer']
+        self.loss_function = self.site_config['loss_function']
         self.weight_decay = self.site_config['weight_decay']
         self.num_epochs = self.site_config['number_of_epochs']
         self.max_best_checkpoints = self.site_config.get(
@@ -117,6 +115,17 @@ class MLModelTraining:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
+    def _sam3_checkpoint_path(self):
+        """Local SAM3 base checkpoint (Documents/GRIME-AI/sam3.pt). Returns the
+        path if it exists so training loads from disk (no HF download/auth);
+        None otherwise, letting the trainer fall back to HuggingFace."""
+        try:
+            from GRIME_AI import PROJECT_ROOT
+            p = os.path.join(str(PROJECT_ROOT), "sam3.pt")
+            return p if os.path.exists(p) else None
+        except Exception:
+            return None
+
     def Model_Training_Dispatcher(self, cfg=None, mode="sam2"):
         """
         Unified training entry point.
@@ -174,9 +183,51 @@ class MLModelTraining:
         #      SAM3   ---   SAM3   ---   SAM3   ---   SAM3   ---   SAM3
         # --------------------------------------------------------------------
         elif mode.lower() == "sam3":
-            from GRIME_AI.ml_core.sam3_trainer import SAM3Trainer
-            mySAM3_pipeline = SAM3Trainer(self.cfg)
-            mySAM3_pipeline.run_training_pipeline()
+            # SAM3 LoRA fine-tuning via the Sompote/SAM3_LoRA trainer, driven as a
+            # subprocess (SAM3LoRATrainer). Uses the same COCO training data and
+            # LoRA/hyperparameter fields the tab already collects.
+            from GRIME_AI.ml_core.sam3_lora_trainer import SAM3LoRATrainer
+
+            # Resolve the COCO data root. SAM3_LoRA expects
+            # <data_dir>/train/_annotations.coco.json (and optional valid/). GRIME
+            # provides a list of training folders; use the first as the root.
+            paths = self.site_config.get('Path', [])
+            data_dir = None
+            for path in paths:
+                folders = path.get('directoryPaths', {}).get('folders', [])
+                if folders:
+                    data_dir = folders[0]
+                    break
+            if not data_dir:
+                print("[SAM3] No training folder found; aborting SAM3 training.")
+                return None
+
+            lr = (self.learning_rates[0] if self.learning_rates
+                  else ModelConfigManager.get_default('learningRates')[0])
+
+            mySAM3_pipeline = SAM3LoRATrainer(
+                data_dir=data_dir,
+                output_dir=self.model_output_folder,
+                num_epochs=self.num_epochs,
+                batch_size=self.site_config.get(
+                    'batch_size', ModelConfigManager.get_default('batch_size')),
+                learning_rate=lr,
+                weight_decay=self.weight_decay,
+                rank=self.site_config.get('lora_rank',
+                                          ModelConfigManager.get_default('lora_rank')),
+                alpha=self.site_config.get('lora_alpha',
+                                           ModelConfigManager.get_default('lora_alpha')),
+                dropout=self.site_config.get('lora_dropout',
+                                             ModelConfigManager.get_default('lora_dropout')),
+                num_negatives=self.site_config.get('sam3_num_negatives', 3),
+                checkpoint_path=self._sam3_checkpoint_path(),
+            )
+            print("Begin SAM3 LoRA Training...")
+            rc = mySAM3_pipeline.run(on_output=lambda line: print(line))
+            print(f"Completed SAM3 LoRA Training (exit code {rc}).")
+            if rc == 0:
+                print(f"SAM3 LoRA weights: {mySAM3_pipeline.best_weights_path}")
+            return mySAM3_pipeline
 
         # --------------------------------------------------------------------
         #     SegFormer  ---  SegFormer  ---  SegFormer  ---  SegFormer
@@ -338,12 +389,6 @@ class MLModelTraining:
                 task_type="FEATURE_EXTRACTION"
             )
             model = lora.apply(base_model, device=cfg.device)
-            # Persist the exact LoRA config with the checkpoint so inference
-            # rebuilds the identical LoraConfig (same target_modules -> same
-            # adapter key names) instead of hardcoding. Without this the load
-            # side guesses target_modules and strict=False silently drops the
-            # adapters, yielding an untrained model.
-            trainer.lora_config_dict = lora.to_dict()
             optimizer = lora.configure_optimizer(lr=cfg.lr, weight_decay=cfg.weight_decay)
             trained = trainer.train(
                 image_dirs, ann_paths,
