@@ -21,14 +21,448 @@ from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
 from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
 from GRIME_AI.GRIME_AI_TimeStamp_Utils import GRIME_AI_TimeStamp_Utils
 from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
-from GRIME_AI.GRIME_AI_Vegetation_Indices import GRIME_AI_Vegetation_Indices
-from GRIME_AI.GRIME_AI_roiData import GRIME_AI_roiData
+from GRIME_AI.vegetation_indices import GRIME_AI_Vegetation_Indices
+from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import GRIME_AI_roiData, roi_patch_and_mask
 
 from GRIME_AI.GRIME_AI_Texture import GLCMTexture, LBPTexture, GaborTexture, WaveletTexture, FourierTexture
 
 # ======================================================================================================================
-#
+# Plain-data ROI description. Qt objects stay in the main process; workers get
+# only name, cluster count, rectangle and polygon as Python primitives.
 # ======================================================================================================================
+def _roi_specs(roiList):
+    specs = []
+    for roiObj in roiList:
+        r = roiObj.getImageROI()
+        shape = roiObj.getROIShape()
+        is_rect = getattr(shape, 'value', shape) == 0
+        poly = [] if is_rect else (roiObj.getImagePolygon() or [])
+        specs.append({
+            'name': roiObj.getROIName(),
+            'nClusters': roiObj.getNumColorClusters(),
+            'rect': (int(r.x()), int(r.y()), int(r.width()), int(r.height())),
+            'shape': getattr(shape, 'value', shape),
+            'polygon': [(int(p.x()), int(p.y())) for p in poly],
+        })
+    return specs
+
+
+def _crop_roi(img, spec):
+    """(patch, mask): the ROI bounding box and a boolean mask of the pixels inside the ROI.
+    (None, None) if the ROI does not overlap the image."""
+    return roi_patch_and_mask(img, spec['rect'], spec['polygon'])
+
+
+# ======================================================================================================================
+# Masked texture. Every value is computed only from pixels inside the ROI mask:
+#   GLCM            - only pixel pairs with both pixels inside
+#   Gabor, LBP      - only responses whose whole filter footprint is inside
+#   Wavelet (Haar)  - only coefficients whose whole support block is inside
+#   Fourier         - largest axis-aligned rectangle fully inside (the transform is global)
+# A method that has too few valid samples returns None (written as -999).
+# ======================================================================================================================
+_MIN_TEXTURE_SAMPLES = 16
+_MIN_FOURIER_SIDE = 8
+
+
+def _erode(mask, kh, kw):
+    import cv2 as _cv2
+    import numpy as _np
+    k = _np.ones((kh, kw), _np.uint8)
+    return _cv2.erode(mask.astype(_np.uint8), k, borderType=_cv2.BORDER_CONSTANT, borderValue=0).astype(bool)
+
+
+def _masked_glcm_contrast(g, m):
+    import numpy as _np
+    from GRIME_AI.GRIME_AI_Texture import GLCMTexture
+    t = GLCMTexture()
+    H, W = g.shape
+    vals = []
+    for d in t.distances:
+        for a in t.angles:
+            dr = int(round(_np.sin(a) * d))
+            dc = int(round(_np.cos(a) * d))
+            r0, r1 = max(0, -dr), min(H, H - dr)
+            c0, c1 = max(0, -dc), min(W, W - dc)
+            if r1 <= r0 or c1 <= c0:
+                continue
+            A = g[r0:r1, c0:c1]
+            B = g[r0 + dr:r1 + dr, c0 + dc:c1 + dc]
+            v = m[r0:r1, c0:c1] & m[r0 + dr:r1 + dr, c0 + dc:c1 + dc]
+            if v.sum() < _MIN_TEXTURE_SAMPLES:
+                return None
+            diff = A[v].astype(_np.float64) - B[v].astype(_np.float64)
+            vals.append(float(_np.mean(diff * diff)))
+    return float(_np.mean(vals)) if vals else None
+
+
+def _masked_gabor_rms(g, m):
+    """RMS of the Gabor response magnitude, sqrt(mean(real^2 + imag^2)), over valid pixels,
+    for each frequency/orientation; returns the mean of those RMS values."""
+    import numpy as _np
+    from skimage.filters import gabor, gabor_kernel
+    from GRIME_AI.GRIME_AI_Texture import GaborTexture
+    t = GaborTexture()
+    gf = g.astype(_np.float64)   # integer input would make skimage return a truncated integer response
+    rms = []
+    for f in t.frequencies:
+        for th in t.thetas:
+            kh, kw = gabor_kernel(f, theta=th).shape
+            valid = _erode(m, kh, kw)
+            if valid.sum() < _MIN_TEXTURE_SAMPLES:
+                return None
+            real, imag = gabor(gf, frequency=f, theta=th)
+            rms.append(float(_np.sqrt(_np.mean(real[valid] ** 2 + imag[valid] ** 2))))
+    return float(_np.mean(rms)) if rms else None
+
+
+def _masked_lbp_entropy(g, m):
+    import numpy as _np
+    from skimage.feature import local_binary_pattern
+    from GRIME_AI.GRIME_AI_Texture import LBPTexture
+    t = LBPTexture()
+    lbp = local_binary_pattern(g, t.P, t.R, method=t.method)
+    k = 2 * int(_np.ceil(t.R)) + 1
+    codes = lbp[_erode(m, k, k)]
+    if codes.size < _MIN_TEXTURE_SAMPLES:
+        return None
+    p = _np.bincount(codes.astype(_np.int64)) / float(codes.size)
+    p = p[p > 0]
+    return float(-_np.sum(p * _np.log2(p))) + 0.0   # + 0.0 turns -0.0 into 0.0
+
+
+def _block_all(m, block):
+    """True where every pixel of a block x block cell is inside (cells past the edge count as outside)."""
+    import numpy as _np
+    H, W = m.shape
+    Hb, Wb = -(-H // block), -(-W // block)
+    pad = _np.zeros((Hb * block, Wb * block), dtype=bool)
+    pad[:H, :W] = m
+    return pad.reshape(Hb, block, Wb, block).all(axis=(1, 3))
+
+
+def _masked_wavelet_detail_var(g, m):
+    import numpy as _np
+    import pywt
+    from GRIME_AI.GRIME_AI_Texture import WaveletTexture
+    t = WaveletTexture()
+    if pywt.Wavelet(t.wavelet).dec_len != 2:
+        print(f'[texture] masked wavelet supports Haar-length wavelets only (got {t.wavelet}).')
+        return None
+    coeffs = pywt.wavedec2(g.astype(_np.float32), wavelet=t.wavelet, level=t.level)
+    vars_ = []
+    # coeffs[1] is the coarsest detail level (t.level), coeffs[-1] the finest (1)
+    for k, (cH, cV, cD) in enumerate(coeffs[1:]):
+        lvl = t.level - k
+        valid = _block_all(m, 2 ** lvl)
+        h = min(valid.shape[0], cH.shape[0])
+        w = min(valid.shape[1], cH.shape[1])
+        v = valid[:h, :w]
+        if v.sum() < _MIN_TEXTURE_SAMPLES:
+            return None
+        for c in (cH, cV, cD):
+            vars_.append(float(_np.var(c[:h, :w][v])))
+    return float(_np.mean(vars_)) if vars_ else None
+
+
+def _largest_inside_rect(m):
+    """(r0, r1, c0, c1) of the largest axis-aligned rectangle of True pixels."""
+    import numpy as _np
+    H, W = m.shape
+    if m.all():
+        return 0, H, 0, W
+    heights = _np.zeros(W, dtype=_np.int64)
+    best = (0, 0, 0, 0, 0)   # area, r0, r1, c0, c1
+    for r in range(H):
+        heights = _np.where(m[r], heights + 1, 0)
+        stack = []
+        for c in range(W + 1):
+            h = heights[c] if c < W else 0
+            start = c
+            while stack and stack[-1][1] >= h:
+                sc, sh = stack.pop()
+                area = sh * (c - sc)
+                if area > best[0]:
+                    best = (area, r - sh + 1, r + 1, sc, c)
+                start = sc
+            stack.append((start, h))
+    return best[1], best[2], best[3], best[4]
+
+
+def _masked_fourier_mean(g, m):
+    import numpy as _np
+    from GRIME_AI.GRIME_AI_Texture import FourierTexture
+    r0, r1, c0, c1 = _largest_inside_rect(m)
+    if (r1 - r0) < _MIN_FOURIER_SIDE or (c1 - c0) < _MIN_FOURIER_SIDE:
+        return None
+    prof = _np.asarray(FourierTexture().compute_features(g[r0:r1, c0:c1]), dtype=float)
+    return float(_np.mean(prof)) if prof.size else None
+
+
+# ======================================================================================================================
+# Column layout. One layout drives the CSV header, every CSV row and every XLSX sheet, so they
+# always line up. A layout item is (group, sheet, column, key):
+#   group  - region the column belongs to ('whole' or 'roi<i>'); a blank column separates groups
+#   sheet  - XLSX sheet
+#   column - column title
+#   key    - lookup key in that region's computed values
+# ======================================================================================================================
+_TEXTURE_METHODS = (('glcm', 'GLCM_contrast'), ('gabor', 'Gabor_RMS'), ('lbp', 'LBP_entropy'),
+                    ('wavelet', 'Wavelet_detail_var'), ('fourier', 'Fourier_radial_mean'))
+SHEET_WHOLE = 'Whole Image'
+SHEET_FEATURES = 'ROI Features'
+SHEET_TEXTURE = 'ROI Texture'
+SHEET_GREENNESS = 'ROI Greenness'
+SHEET_COLORS = 'ROI Colors'
+XLSX_SHEETS = (SHEET_WHOLE, SHEET_FEATURES, SHEET_TEXTURE, SHEET_GREENNESS, SHEET_COLORS)
+WHOLE_LABEL = 'Whole Image'
+# Fill for the blank separator columns in the XLSX (light gray). CSV has no colors.
+SEPARATOR_FILL = 'E7E6E6'
+_PLACEHOLDER = -999
+
+
+def _flags_from_params(p):
+    return {
+        'wholeImage': bool(p.wholeImage),
+        'ROI': bool(p.ROI),
+        'Intensity': bool(p.Intensity),
+        'ShannonEntropy': bool(p.ShannonEntropy),
+        'Texture': bool(p.Texture),
+        'HSV': bool(p.HSV),
+    }
+
+
+def _texture_labels(flags, texture_options):
+    if not flags.get('Texture'):
+        return []
+    opts = texture_options or {}
+    return [label for key, label in _TEXTURE_METHODS if opts.get(key)]
+
+
+def _region_layout(group, label, is_whole, nClusters, flags, greenness_names, texture_options):
+    """Columns for one region in CSV order: Intensity, Entropy, texture, greenness, colors.
+    Whole image: everything on the Whole Image sheet with plain names.
+    ROI: ROI Features / ROI Texture / ROI Greenness / ROI Colors sheets, prefixed with the ROI name.
+    Colors are grouped per cluster (H, S, V, Coverage)."""
+    p = '' if is_whole else f'{label}: '
+    s_feat = SHEET_WHOLE if is_whole else SHEET_FEATURES
+    s_tex = SHEET_WHOLE if is_whole else SHEET_TEXTURE
+    s_grn = SHEET_WHOLE if is_whole else SHEET_GREENNESS
+    s_col = SHEET_WHOLE if is_whole else SHEET_COLORS
+    items = []
+    if flags.get('Intensity'):
+        items.append((group, s_feat, p + 'Intensity', 'Intensity'))
+    if flags.get('ShannonEntropy'):
+        items.append((group, s_feat, p + 'Entropy', 'Entropy'))
+    for t in _texture_labels(flags, texture_options):
+        items.append((group, s_tex, p + t, 'tex:' + t))
+    for g in greenness_names:
+        items.append((group, s_grn, p + g, 'g:' + g))
+    if flags.get('HSV'):
+        for i in range(nClusters):
+            for k in ('H', 'S', 'V', 'Coverage'):
+                items.append((group, s_col, f'{p}{k}_{i}', f'{k}_{i}'))
+    return items
+
+
+def _layout(nClusters, flags, greenness_names, texture_options, roi_specs):
+    items = []
+    if flags.get('wholeImage'):
+        items += _region_layout('whole', WHOLE_LABEL, True, nClusters, flags, greenness_names, texture_options)
+    if flags.get('ROI'):
+        for i, spec in enumerate(roi_specs):
+            items += _region_layout(f'roi{i}', spec['name'], False, spec['nClusters'], flags,
+                                    greenness_names, texture_options)
+    return items
+
+
+def _fmt(key, value):
+    if isinstance(value, int) and value == _PLACEHOLDER:
+        return '%d' % value
+    if key[:2] in ('H_', 'S_', 'V_'):
+        return '%3.2f' % value
+    return '%3.4f' % value
+
+
+def _csv_line(first, fields):
+    """first: leading text (hyperlink,date,time or header titles). fields: [(group, text)].
+    A blank column is inserted wherever the group changes."""
+    parts = [first]
+    prev = None
+    for group, text in fields:
+        if prev is not None and group != prev:
+            parts.append(',')
+        parts.append(', ' + text)
+        prev = group
+    return ''.join(parts) + '\n'
+
+
+def _region_values(helper, color, rgb, gray, gray_tex, mask, nClusters, flags, greenness_list, texture_options):
+    """Feature values for one region, keyed like _region_layout.
+    rgb/gray: the region's pixels (whole image, or an (N, 1, C) strip of inside pixels).
+    gray_tex/mask: 2-D grayscale for texture and its inside-mask (None = whole patch)."""
+    import cv2 as _cv2
+    from GRIME_AI.vegetation_indices import GRIME_AI_Vegetation_Indices
+    vals = {}
+    if flags.get('Intensity'):
+        # The range for a pixel's value in grayscale is (0-255), 127 lies midway
+        vals['Intensity'] = float(_cv2.mean(gray)[0])
+    if flags.get('ShannonEntropy'):
+        vals['Entropy'] = helper.calcEntropy(gray)
+    if flags.get('Texture'):
+        for n, v in helper.compute_texture_scalars(gray_tex, texture_options, mask):
+            vals['tex:' + n] = float(v)
+    for g in greenness_list:
+        vals['g:' + g.get_name()] = float(GRIME_AI_Vegetation_Indices().get_greenness(g, rgb).get_value())
+    if flags.get('HSV'):
+        # Dominant colors, largest coverage first. Coverage = fraction of the region's pixels (0..1).
+        hist, centers = color.extractDominant_HSV(rgb, nClusters)
+        centers = np.asarray(centers, dtype=np.float32).reshape(-1, 3).copy()
+        # OpenCV stores hue as 0..180 to fit a byte; report the true 0..360 color-space value.
+        centers[:, 0] *= 2.0
+        hist = [] if hist is None else list(np.asarray(hist, dtype=float).ravel())
+        for i in range(nClusters):
+            if i < len(centers) and i < len(hist):
+                vals[f'H_{i}'], vals[f'S_{i}'], vals[f'V_{i}'] = (float(x) for x in centers[i][:3])
+                vals[f'Coverage_{i}'] = float(hist[i])
+            else:
+                # k-means returned fewer distinct clusters than requested (e.g. a uniform region)
+                vals[f'H_{i}'] = vals[f'S_{i}'] = vals[f'V_{i}'] = _PLACEHOLDER
+                vals[f'Coverage_{i}'] = 0.0
+    return vals
+
+
+# ======================================================================================================================
+# Build one image's record.
+# ======================================================================================================================
+def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, texture_options, roi_specs):
+    """Returns (csv_row, record). record = {'path', 'date', 'time', 'cells': [(group, sheet, column, value)]}."""
+    import cv2 as _cv2
+    from GRIME_AI.GRIME_AI_TimeStamp_Utils import GRIME_AI_TimeStamp_Utils
+
+    link = helper.create_hyperlink(path)
+    ts = GRIME_AI_TimeStamp_Utils(); ts.detectDateTime(path)
+    d, t = ts.extractDateTime(path)
+
+    img = color.loadColorImage(path)   # RGB
+    values = {}
+
+    if flags.get('wholeImage'):
+        gray = _cv2.cvtColor(img, _cv2.COLOR_RGB2GRAY)
+        values['whole'] = _region_values(helper, color, img, gray, gray, None, nClusters, flags,
+                                         greenness_list, texture_options)
+
+    if flags.get('ROI') and roi_specs:
+        values.update(helper.calculate_ROI_scalars(img, roi_specs, flags, greenness_list, texture_options))
+
+    layout = _layout(nClusters, flags, [g.get_name() for g in greenness_list], texture_options, roi_specs)
+    cells = []
+    fields = []
+    for group, sheet, col, key in layout:
+        v = values.get(group, {}).get(key, _PLACEHOLDER)
+        cells.append((group, sheet, col, v))
+        fields.append((group, _fmt(key, v)))
+
+    row = _csv_line('%s,%s,%s' % (link, d, t), fields)
+    record = {'path': path, 'date': d, 'time': t, 'cells': cells}
+    return row, record
+
+
+# ======================================================================================================================
+# Module-level worker. Must be top-level (picklable) so ProcessPoolExecutor can
+# dispatch it. Returns (index, csv_row, record) so rows are written in original order.
+# Also used by the serial fallback so both paths produce identical rows.
+# ======================================================================================================================
+def _compute_image_row(args):
+    (index, path, nClusters, flags, greenness_list, texture_options, roi_specs) = args
+    import os as _os
+    from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
+    from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+    if not _os.path.isfile(path):
+        return (index, None, None)
+    try:
+        row, record = _build_feature_row(ColorSegFeatureExport(), GRIME_AI_Color(), path, nClusters,
+                                         flags, greenness_list, texture_options, roi_specs)
+        return (index, row, record)
+    except Exception as e:
+        print(f'[feature-export worker] {path}: {e}')
+        return (index, None, None)
+
+
+# ======================================================================================================================
+# XLSX: Whole Image, ROI Features, ROI Texture, ROI Greenness and ROI Colors sheets (sheets with no columns are
+# omitted). Every sheet starts with Image (hyperlinked), Date and Time; one row per image.
+# A blank column separates regions (whole image, each ROI).
+# ======================================================================================================================
+def _write_feature_xlsx(xlsx_path, records):
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    records = [r for r in records if r]
+    if not records:
+        return None
+
+    # Column plan per sheet from the (identical) layout of every record: names, with None = blank separator.
+    plan = {sh: [] for sh in XLSX_SHEETS}
+    last_group = {sh: None for sh in XLSX_SHEETS}
+    for group, sheet, col, _ in records[0]['cells']:
+        if last_group[sheet] is not None and group != last_group[sheet]:
+            plan[sheet].append(None)
+        plan[sheet].append(col)
+        last_group[sheet] = group
+
+    wb = Workbook(write_only=True)
+    bold = Font(bold=True)
+    link_font = Font(color='0563C1', underline='single')
+    sep_fill = PatternFill(fill_type='solid', start_color=SEPARATOR_FILL, end_color=SEPARATOR_FILL)
+    for sheet in XLSX_SHEETS:
+        cols = plan[sheet]
+        if not cols:
+            continue
+        ws = wb.create_sheet(sheet)
+        ws.freeze_panes = 'D2'
+        ws.column_dimensions['A'].width = 45
+        ws.column_dimensions['B'].width = 12
+        ws.column_dimensions['C'].width = 10
+        for j, name in enumerate(cols, start=4):
+            ws.column_dimensions[get_column_letter(j)].width = 3 if name is None else max(12, min(40, len(name) + 2))
+
+        def sep_cell():
+            c = WriteOnlyCell(ws, value=None)
+            c.fill = sep_fill
+            return c
+
+        header = []
+        for name in ['Image', 'Date (ISO)', 'Time (ISO)'] + cols:
+            if name is None:
+                header.append(sep_cell())
+                continue
+            c = WriteOnlyCell(ws, value=name)
+            c.font = bold
+            header.append(c)
+        ws.append(header)
+
+        for r in records:
+            img_cell = WriteOnlyCell(ws, value=os.path.basename(r['path']))
+            img_cell.hyperlink = r['path']
+            img_cell.font = link_font
+            row = [img_cell, r['date'], r['time']]
+            prev = None
+            for group, sh, _, v in r['cells']:
+                if sh != sheet:
+                    continue
+                if prev is not None and group != prev:
+                    row.append(sep_cell())
+                row.append(v)
+                prev = group
+            ws.append(row)
+
+    wb.save(xlsx_path)
+    return xlsx_path
+
+
 class ColorSegFeatureExport:
     def __init__(self):
         csvFilename = ''
@@ -38,12 +472,12 @@ class ColorSegFeatureExport:
     #
     # ==================================================================================================================
     def create_training_data_filename(self, imageFileFolder):
-        csvFilename = 'TrainingData_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + '.csv'
-        imageQualityFile = os.path.join(imageFileFolder, csvFilename)
+        base = 'TrainingData_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        imageQualityFile = os.path.join(imageFileFolder, base + '.csv')
         csvFilename = open(imageQualityFile, 'a', newline='')
 
-        xlsxFilename = 'TextureData_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + '.xlsx'
-        xlsxFilename = os.path.join(imageFileFolder, xlsxFilename)
+        # Same base name as the CSV so the pair is easy to find.
+        xlsxFilename = os.path.join(imageFileFolder, base + '.xlsx')
 
         return csvFilename, xlsxFilename
 
@@ -51,6 +485,14 @@ class ColorSegFeatureExport:
     #
     # ==================================================================================================================
     def ExtractFeatures(self, imagesList, imageFileFolder, roiList, colorSegmentationParams, greenness_index_list, texture_options=None):
+
+        # Region Select: Whole Image and/or ROI. Nothing to extract if neither applies.
+        do_whole = bool(colorSegmentationParams.wholeImage)
+        do_roi = bool(colorSegmentationParams.ROI) and len(roiList) > 0
+        if not (do_whole or do_roi):
+            print('[feature-export] Nothing to extract: select Whole Image, '
+                  'or select ROI and add at least one ROI.')
+            return
 
         # ----------------------------------------------------------------------------------------------------------
         # CREATE PROGRESS WHEEL
@@ -61,7 +503,7 @@ class ColorSegFeatureExport:
         videoFileList = imagesList
         nFrameCount = len(videoFileList)
 
-        progressBar = QProgressWheel(0, (len(roiList) * len(videoFileList)) + 1)
+        progressBar = QProgressWheel(0, len(videoFileList) + 1)
         progressBar.show()
         progressBarIndex = 1
 
@@ -161,18 +603,11 @@ class ColorSegFeatureExport:
     #
     # ==================================================================================================================
     def build_scalar_header(self, nClusters, roiList, colorSegmentationParams, greenness_index_list, texture_options=None):
-        texture_options = texture_options or {}
-        # CREATE HEADER FOR THE ATTIRBUTE OF THE ENTIRE IMAGE
-        header = 'Image, Date (ISO), Time (ISO)'
-
-        ###JES if colorSegmentationParams.wholeImage:
-        if 1:
-            header = self.build_image_scalar_header(header, roiList, colorSegmentationParams, texture_options)
-
-        if colorSegmentationParams.ROI:
-            header = self.build_ROI_scalar_header(header, roiList, colorSegmentationParams, greenness_index_list, texture_options)
-
-        return header
+        """CSV header, built from the same layout as the data rows."""
+        flags = _flags_from_params(colorSegmentationParams)
+        specs = _roi_specs(roiList) if flags['ROI'] else []
+        layout = _layout(nClusters, flags, [g.get_name() for g in greenness_index_list], texture_options, specs)
+        return _csv_line('Image, Date (ISO), Time (ISO)', [(grp, col) for grp, _, col, _ in layout])
 
 
     # ==================================================================================================================
@@ -197,80 +632,58 @@ class ColorSegFeatureExport:
         # WRITE THE HEADER TO THE CSV
         csvFile.write(header)
 
+        flags = _flags_from_params(colorSegmentationParams)
+        roi_specs = _roi_specs(roiList) if flags['ROI'] else []
+        greenness_list = list(greenness_index_list)
+        tasks = [(i, fname.fullPathAndFilename, nClusters, flags, greenness_list, texture_options, roi_specs)
+                 for i, fname in enumerate(videoFileList)]
+
+        # ------------------------------------------------------------------
+        # PARALLEL: every image's row is independent and CPU-bound, so compute
+        # across a process pool (whole image, ROIs, or both). Rows are written
+        # in original order.
+        # ------------------------------------------------------------------
+        from concurrent.futures import ProcessPoolExecutor
+        import os as _os
+        results = [None] * len(tasks)
+        workers = max(1, (_os.cpu_count() or 2) - 1)
+        chunk = max(1, len(tasks) // (workers * 4))
+        print(f'[feature-export] PARALLEL: {workers} workers, {len(tasks)} images, '
+              f'whole image {"on" if flags["wholeImage"] else "off"}, {len(roi_specs)} ROIs')
+        done = 0
+        parallel_ok = False
         try:
-            for fname in videoFileList:
+            with ProcessPoolExecutor(max_workers=workers) as ex:
+                for index, row, record in ex.map(_compute_image_row, tasks, chunksize=chunk):
+                    results[index] = (row, record)
+                    done += 1
+                    progressBar.setValue(progressBarIndex + done)
+            parallel_ok = True
+        except Exception as _e:
+            print(f'[feature-export] parallel path failed ({_e}); falling back to serial.')
 
-                if os.path.isfile(fname.fullPathAndFilename):
+        if not parallel_ok:
+            # ------------------------------------------------------------------
+            # SERIAL FALLBACK: same row builder, in-process.
+            # ------------------------------------------------------------------
+            print(f'[feature-export] SERIAL: {len(tasks)} images')
+            results = [None] * len(tasks)
+            for task in tasks:
+                index, row, record = _compute_image_row(task)
+                results[index] = (row, record)
+                progressBarIndex += 1
+                progressBar.setValue(progressBarIndex)
 
-                    # CREATE A STRING THAT IS A HYPERLINK TO THE FILE
-                    strHyperlink = self.create_hyperlink(fname.fullPathAndFilename)
+        for row, _ in results:
+            if row:
+                csvFile.write(row)
 
-                    # EXTRACT DATE/TIME STAMP FROM IMAGE
-                    myGRIME_AI_TimeStamp_Utils = GRIME_AI_TimeStamp_Utils()
-                    myGRIME_AI_TimeStamp_Utils.detectDateTime(fname.fullPathAndFilename)
-                    strDate, strTime = myGRIME_AI_TimeStamp_Utils.extractDateTime(fname.fullPathAndFilename)
-
-                    # WRITE THE HYPERLINK, DATE, AND TIME STAMP TO THE OUTPUT FILE
-                    strOutputString = '%s,%s,%s' % (strHyperlink, strDate, strTime)
-
-                    # LOAD THE IMAGE FILE TO START THE PROCESS OF EXTRACTING FEATURE DATA
-                    img = myGRIMe_Color.loadColorImage(fname.fullPathAndFilename)
-
-                    # if colorSegmentationParams.wholeImage:
-                    if 1:
-                        # BLUR THE IMAGE
-                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-                        # EXTRACT 'n' DOMINANT HSV COLORS
-                        hist, clusterCenters = myGRIMe_Color.extractDominant_HSV(img, nClusters)
-
-                        if colorSegmentationParams.Intensity:
-                            # IMAGE INTENSITY CALCULATIONS
-                            # The range for a pixel's value in grayscale is (0-255), 127 lies midway
-                            strOutputString = strOutputString + ', %3.4f' % cv2.mean(gray)[0]
-
-                        if colorSegmentationParams.ShannonEntropy:
-                            # COMPUTE ENTROPY FOR ENTIRE IMAGE
-                            strOutputString = strOutputString + ', %3.4f' % self.calcEntropy(gray)
-
-                        if colorSegmentationParams.Texture:
-                            for _tname, _tval in self.compute_texture_scalars(gray, texture_options):
-                                strOutputString = strOutputString + ', %3.4f' % _tval
-
-                        try:
-                            for greenness in greenness_index_list:
-                                greenness_updated = GRIME_AI_Vegetation_Indices().get_greenness(greenness, img)
-                                strOutputString = strOutputString + ',' + '%3.4f' % greenness_updated.get_value()
-                        except ValueError:
-                            pass
-
-                        if colorSegmentationParams.HSV:
-                            # HSV per cluster (H,S,V), then per-cluster COVERAGE (fraction of pixels).
-                            strOutputString += ''.join(
-                                f", {float(center[0]):3.2f}, {float(center[1]):3.2f}, {float(center[2]):3.2f}"
-                                for center in clusterCenters[:nClusters]
-                            )
-                            _cov = list(hist[:nClusters]) if hist is not None else []
-                            _cov += [0.0] * (nClusters - len(_cov))
-                            strOutputString += ''.join(f", {float(c):3.4f}" for c in _cov)
-
-                    # --------------------------------------------------------------------------------------------------
-                    #
-                    # --------------------------------------------------------------------------------------------------
-                    progressBar.setValue(progressBarIndex)
-                    progressBarIndex = progressBarIndex + 1
-
-                    if colorSegmentationParams.ROI:
-                        strROI = self.calculate_ROI_scalars(img, roiList, colorSegmentationParams, greenness_index_list,
-                                                            xlsFile, texture_options=texture_options)
-
-                        strOutputString = strOutputString + strROI
-
-                    # WRITE STRING TO CSV FILE
-                    strOutputString = strOutputString + '\n'
-                    csvFile.write(strOutputString)
-        except ValueError:
-            exceptValue = 0
+        try:
+            out = _write_feature_xlsx(xlsFile, [rec for _, rec in results])
+            if out:
+                print(f'[feature-export] XLSX written: {out}')
+        except Exception as _e:
+            print(f'[feature-export] XLSX not written ({_e}).')
 
 
 
@@ -278,253 +691,76 @@ class ColorSegFeatureExport:
     #
     # ==================================================================================================================
     # ==================================================================================================================
-    def compute_texture_scalars(self, gray, texture_options):
+    def compute_texture_scalars(self, gray, texture_options, mask=None):
         """Compute one representative scalar per SELECTED texture method on a
         grayscale image. Returns an ordered list of (name, value) so the CSV
         header and the data row always match. Only methods whose checkbox is
-        on are included."""
-        from GRIME_AI.GRIME_AI_Texture import (GLCMTexture, GaborTexture,
-                                               LBPTexture, WaveletTexture, FourierTexture)
+        on are included. If mask is given, only pixels where mask is True are
+        used (see the masked helpers above); -999 if a method has too few
+        valid samples."""
         import numpy as _np
+        import cv2 as _cv2b
         opts = texture_options or {}
+        g = gray
+        m = _np.ones(g.shape[:2], dtype=bool) if mask is None else mask.astype(bool)
+
+        # Texture scalars are aggregate stats; full resolution is wasteful.
+        # Downsample the longest side to <=512 px. A downsampled pixel stays
+        # in the mask only if every source pixel it averages was inside.
+        h, w = g.shape[:2]
+        mx = max(h, w)
+        if mx > 512:
+            sc = 512.0 / mx
+            size = (max(1, int(w * sc)), max(1, int(h * sc)))
+            g = _cv2b.resize(g, size, interpolation=_cv2b.INTER_AREA)
+            m = _cv2b.resize(m.astype(_np.float32), size, interpolation=_cv2b.INTER_AREA) >= 0.999
+
+        funcs = {'glcm': _masked_glcm_contrast, 'gabor': _masked_gabor_rms, 'lbp': _masked_lbp_entropy,
+                 'wavelet': _masked_wavelet_detail_var, 'fourier': _masked_fourier_mean}
         out = []
-        try:
-            if opts.get('glcm'):
-                f = GLCMTexture().compute_features(gray)
-                out.append(('GLCM_contrast', float(f.get('contrast', -999))))
-            if opts.get('gabor'):
-                f = GaborTexture().compute_features(gray)
-                means = [v for k, v in f.items() if k.endswith('_mean')]
-                out.append(('Gabor_mean_energy', float(_np.mean(means)) if means else -999))
-            if opts.get('lbp'):
-                h = LBPTexture().compute_features(gray)
-                h = _np.asarray(h, dtype=float); h = h[h > 0]
-                ent = float(-_np.sum(h * _np.log2(h))) if h.size else -999
-                out.append(('LBP_entropy', ent))
-            if opts.get('wavelet'):
-                f = WaveletTexture().compute_features(gray)
-                vars_ = [v for k, v in f.items() if k.endswith('_var')]
-                out.append(('Wavelet_detail_var', float(_np.mean(vars_)) if vars_ else -999))
-            if opts.get('fourier'):
-                prof = FourierTexture().compute_features(gray)
-                prof = _np.asarray(prof, dtype=float)
-                out.append(('Fourier_radial_mean', float(_np.mean(prof)) if prof.size else -999))
-        except Exception as _e:
-            print(f'[texture] compute error: {_e}')
+        for key, name in _TEXTURE_METHODS:
+            fn = funcs[key]
+            if not opts.get(key):
+                continue
+            try:
+                v = fn(g, m)
+            except Exception as _e:
+                print(f'[texture] {name} error: {_e}')
+                v = None
+            out.append((name, -999.0 if v is None else v))
         return out
 
     # ==================================================================================================================
-    def build_image_scalar_header(self, header, roiList, colorSegmentationParams, texture_options=None):
-        nClusters = GRIME_AI_Utils().getMaxNumColorClusters(roiList)
-
-        if colorSegmentationParams.Intensity:
-            header = header + ", Intensity"
-
-        if colorSegmentationParams.ShannonEntropy:
-            header = header + ", Entropy"
-
-        if colorSegmentationParams.Texture:
-            _opts = texture_options or {}
-            for _key, _label in (("glcm", "GLCM_contrast"), ("gabor", "Gabor_mean_energy"),
-                                 ("lbp", "LBP_entropy"), ("wavelet", "Wavelet_detail_var"),
-                                 ("fourier", "Fourier_radial_mean")):
-                if _opts.get(_key):
-                    header = header + ", " + _label
-
-        if colorSegmentationParams.GCC:
-            header = header + ", GCC"
-
-        if colorSegmentationParams.GLI:
-            header = header + ", GLI"
-
-        if colorSegmentationParams.NDVI:
-            header = header + ", NDVI"
-
-        if colorSegmentationParams.ExG:
-            header = header + ", ExG"
-
-        if colorSegmentationParams.RGI:
-            header = header + ", RGI"
-
-        if colorSegmentationParams.HSV:
-            template = ', Image_#'
-
-            if nClusters == 1:
-                header += template.replace('#', 'H') + template.replace('#', 'S') + template.replace('#', 'V')
-            else:
-                header += ''.join(
-                    f"{template.replace('#', channel)}: {idx}" for idx in range(nClusters) for channel in
-                    ['H', 'S', 'V']
-                )
-            # Per-cluster coverage columns (fraction of pixels), matching the data.
-            header += ''.join(f", Image_Coverage: {idx}" for idx in range(nClusters))
-
-        return header
-
-
+    # CALCULATE THE FEATURE VALUES FOR EACH ROI
     # ==================================================================================================================
-    #
-    # ==================================================================================================================
-    def build_ROI_scalar_header(self, header, roiList, colorSegmentationParams, greenness_index_list, texture_options=None):
-
+    def calculate_ROI_scalars(self, img, roi_specs, flags, greenness_index_list, texture_options=None):
+        """roi_specs: list of dicts from _roi_specs(). flags: dict of feature switches.
+        Returns {'roi<i>': values} keyed like _region_layout. An ROI with too few pixels in this
+        image gets no entry, so all its columns are written as -999."""
+        out = {}
         texture_options = texture_options or {}
-        newHeader = header
+        color = GRIME_AI_Color()
 
-        # ADD HEADER TO CSV FILE FOR EACH ROI ASSUMING ROIs HAVE BEEN CREATED
-        for roiObj in roiList:
-            template = ', ' + (roiObj.getROIName() + ': ') + '#'
+        for i, spec in enumerate(roi_specs):
+            nClusters = spec['nClusters']
 
-            if colorSegmentationParams.Intensity:
-                newHeader = (newHeader + template).replace('#', 'Intensity')
+            patch, mask = _crop_roi(img, spec)
+            n_inside = 0 if mask is None else int(mask.sum())
+            # color clustering subsamples every 4th pixel of an irregular region
+            needed = 4 * max(1, nClusters) if flags.get('HSV') else 1
+            if n_inside < needed:
+                print(f"[feature-export] ROI '{spec['name']}' has {n_inside} pixels in this image; writing -999.")
+                continue
 
-            if colorSegmentationParams.ShannonEntropy:
-                newHeader = (newHeader + template).replace('#', 'Entropy')
+            # Only pixels inside the ROI, as an (N, 1, 3) strip, for all non-texture features.
+            rgb = patch[mask].reshape(-1, 1, 3)
+            gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+            # Texture needs the 2-D patch; the mask excludes everything outside the ROI.
+            gray_patch = cv2.cvtColor(patch, cv2.COLOR_RGB2GRAY) if flags.get('Texture') else None
 
-            if colorSegmentationParams.Texture:
-                roi_name = roiObj.getROIName()
-                import numpy as np
-                if texture_options.get('glcm', True):
-                    newHeader += f', {roi_name}: GLCM_Contrast, {roi_name}: GLCM_Homogeneity, {roi_name}: GLCM_Correlation'
-                if texture_options.get('gabor', True):
-                    for freq in [0.1, 0.3]:
-                        for theta in [0, np.pi/4, np.pi/2, 3*np.pi/4]:
-                            newHeader += f', {roi_name}: Gabor_f{freq}_t{theta:.2f}_mean, {roi_name}: Gabor_f{freq}_t{theta:.2f}_var'
-                if texture_options.get('lbp', False):
-                    newHeader += f', {roi_name}: LBP_hist'
-                if texture_options.get('wavelet', False):
-                    for lvl in [1, 2]:
-                        for sub in ['cH_mean', 'cH_var', 'cV_mean', 'cV_var', 'cD_mean', 'cD_var']:
-                            newHeader += f', {roi_name}: Wavelet_L{lvl}_{sub}'
-                if texture_options.get('fourier', False):
-                    for i in range(32):
-                        newHeader += f', {roi_name}: Fourier_bin{i}'
-
-            if colorSegmentationParams.GCC:
-                newHeader = (newHeader + template).replace('#', 'GCC')
-
-            if colorSegmentationParams.GLI:
-                newHeader = (newHeader + template).replace('#', 'GLI')
-
-            if colorSegmentationParams.NDVI:
-                newHeader = (newHeader + template).replace('#', 'NDVI')
-
-            if colorSegmentationParams.ExG:
-                newHeader = (newHeader + template).replace('#', 'ExG')
-
-            if colorSegmentationParams.RGI:
-                newHeader = (newHeader + template).replace('#', 'RGI')
-
-            # IF THERE IS MORE THAN ONE (1) ROI, APPEND AN INDEX ONTO THE HEADER LABEL
-
-            nClusters = roiObj.getNumColorClusters()
-
-            if colorSegmentationParams.HSV:
-                template = f", {roiObj.getROIName()}: "
-
-                if nClusters == 1:
-                    channels = ['H', 'S', 'V']
-                    for channel in channels:
-                        newHeader += f"{template}{channel}"
-                else:
-                    channels = ['H', 'S', 'V']
-                    for idx in range(nClusters):
-                        for channel in channels:
-                            newHeader += f"{template}{channel}_{idx}"
-
-        newHeader = newHeader + '\n'
-
-        return newHeader
-
-    # ==================================================================================================================
-    # CALCULATE THE FEATURE SCALARS FOR THE VARIOUS ROIs AND SAVE THEM TO THE CSV FILE
-    # ==================================================================================================================
-    def calculate_ROI_scalars(self, img, roiList, colorSegmentationParams, greenness_index_list, xlsFile, texture_options=None):
-
-        strOutputString = ''
-        texture_options = texture_options or {}
-
-        for roiObj in roiList:
-            nClusters = roiObj.getNumColorClusters()
-
-            rgb = GRIME_AI_roiData().extractROI(roiObj.getImageROI(), img)
-
-            # CONVERT THE IMAGE FROM BGR TO RGB AND HSV
-            try:
-                hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
-                gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-            except Exception:
-                tempValue = 0
-
-            # IMAGE INTENSITY CALCULATIONS
-            intensity = cv2.mean(gray)[0]  # The range for a pixel's value in grayscale is (0-255), 127 lies midway
-
-            # COMPUTE ENTROPY FOR ROI
-            entropyValue = self.calcEntropy(gray)
-
-            # EXTRACT 'n' DOMINANT HSV COLORS
-            myGRIMe_Color = GRIME_AI_Color()
-            qhsvImg, hsvClusterCenters, hist = myGRIMe_Color.KMeans(hsv, nClusters)
-
-            # KMeans QUANTIZES THE HUE VALUE TO 0..180 WHEN THE ACTUAL HSV COLOR SPACE HUE VALUE 0..360.
-            # THEREFORE WE MULTIPLY THE KMeans HUE VALUE BY 2 TO STANDARDIZE ON THE ACTUAL COLOR SPACE HUE RANGE.
-            hsvClusterCenters[:, 0] = hsvClusterCenters[:, 0] * 2.0
-
-            if colorSegmentationParams.Intensity:
-                strOutputString = strOutputString + ', %3.4f' % intensity
-            if colorSegmentationParams.ShannonEntropy:
-                strOutputString = strOutputString + ', %3.4f' % entropyValue
-            if colorSegmentationParams.Texture:
-                if texture_options.get('glcm', True):
-                    try:
-                        glcm_features = GLCMTexture().compute_features(rgb)
-                        strOutputString += ', %3.4f, %3.4f, %3.4f' % (
-                            glcm_features.get('contrast', -999),
-                            glcm_features.get('homogeneity', -999),
-                            glcm_features.get('correlation', -999)
-                        )
-                    except Exception:
-                        strOutputString += ', -999, -999, -999'
-                if texture_options.get('gabor', True):
-                    try:
-                        gabor_features = GaborTexture().compute_features(rgb)
-                        strOutputString += ''.join(', %3.4f' % v for v in gabor_features.values())
-                    except Exception:
-                        strOutputString += ', -999'
-                if texture_options.get('lbp', False):
-                    try:
-                        lbp_hist = LBPTexture().compute_features(rgb)
-                        strOutputString += ''.join(', %3.4f' % v for v in lbp_hist)
-                    except Exception:
-                        strOutputString += ', -999'
-                if texture_options.get('wavelet', False):
-                    try:
-                        wav_features = WaveletTexture().compute_features(rgb)
-                        strOutputString += ''.join(', %3.4f' % v for v in wav_features.values())
-                    except Exception:
-                        strOutputString += ', -999'
-                if texture_options.get('fourier', False):
-                    try:
-                        fourier_profile = FourierTexture().compute_features(rgb)
-                        strOutputString += ''.join(', %3.4f' % v for v in fourier_profile)
-                    except Exception:
-                        strOutputString += ', -999'
-
-            try:
-                for greenness in greenness_index_list:
-                    greenness_updated = GRIME_AI_Vegetation_Indices().get_greenness(greenness, rgb)
-                    strOutputString = strOutputString + ',' + '%3.4f' % greenness_updated.get_value()
-            except:
-                pass
-
-            if colorSegmentationParams.HSV:
-                for idx in range(nClusters):
-                    # CONVERT FROM OpenCV's HSV HUE DATA FORMAT 0 to 180 DEGREES TO THE HSV STANDARD FORMAT OF 0 to 360 DEGREES
-                    h = float(hsvClusterCenters[idx][0])
-                    s = float(hsvClusterCenters[idx][1])
-                    v = float(hsvClusterCenters[idx][2])
-                    strOutputString = strOutputString + ', %3.2f, %3.2f, %3.2f' % (h, s, v)
-
-        return strOutputString
+            out[f'roi{i}'] = _region_values(self, color, rgb, gray, gray_patch, mask, nClusters, flags,
+                                            greenness_index_list, texture_options)
+        return out
 
 
     # ==================================================================================================================
@@ -549,7 +785,8 @@ class ColorSegFeatureExport:
         except Exception:
             sum_en = 0.0
 
-        return sum_en
+        # hist items are 1-element arrays; return a plain float (NumPy 2 won't format arrays with %f).
+        return float(np.asarray(sum_en).ravel()[0]) if np.ndim(sum_en) else float(sum_en)
 
     def create_hyperlink(self, file_path: str) -> str:
         """

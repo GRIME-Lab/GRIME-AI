@@ -146,8 +146,8 @@ from pathlib import Path
 # ----------------------------------------------------------------------------
 # ----------------------------------------------------------------------------
 from PyQt5 import QtCore, QtWidgets, QtGui, uic
-from PyQt5.QtCore import QCoreApplication, QTimer
-from PyQt5.QtGui import QImage, QPixmap, QFont, QPainter, QPen, QIcon
+from PyQt5.QtCore import QCoreApplication, QTimer, QPoint
+from PyQt5.QtGui import QImage, QPixmap, QFont, QPainter, QPen, QIcon, QPolygon
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidgetItem, QToolBar, QDateTimeEdit, \
     QMessageBox, QAction, QHeaderView, QDialog, QFileDialog, QSplashScreen
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu
@@ -178,7 +178,7 @@ from GRIME_AI.usgs.usgs_client import USGSClient
 # lazy: from GRIME_AI.dialogs.temporal_averaging.GRIME_AI_TemporalAveragingDlg import GRIME_AI_TemporalAveragingDlg
 from GRIME_AI.dialogs.triage.GRIME_AI_TriageOptionsDlg import GRIME_AI_TriageOptionsDlg
 from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
-from GRIME_AI.GRIME_AI_Vegetation_Indices import GRIME_AI_Vegetation_Indices, GreennessIndex
+from GRIME_AI.vegetation_indices import GRIME_AI_Vegetation_Indices, GreennessIndex
 from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 from GRIME_AI.GRIME_AI_ImageData import imageData
 from GRIME_AI.GRIME_AI_ProductTable import GRIME_AI_ProductTable
@@ -186,7 +186,7 @@ from GRIME_AI.GRIME_AI_QLabel import DrawingMode
 from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
 from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
 from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
-from GRIME_AI.GRIME_AI_roiData import GRIME_AI_roiData, ROIShape
+from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import GRIME_AI_roiData, ROIShape
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
 from GRIME_AI.GRIME_AI_Resize_Controls import GRIME_AI_Resize_Controls
 from GRIME_AI.GRIME_AI_TimeStamp_Utils import GRIME_AI_TimeStamp_Utils
@@ -1934,7 +1934,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     def exportROIMasks(self):
         """Export the current Color Segmentation ROIs to COCO 1.0 as
-        ROI_Masks.json in the image folder. ROI names become categories;
+        ROI_Masks_<YYYYMMDD_HHMMSS>.json in the image folder. ROI names become categories;
         ROI shapes become polygon segmentations; ROIs are applied across
         every image in the folder."""
         global dailyImagesList, imageFileFolder
@@ -2017,9 +2017,11 @@ class MainWindow(QMainWindow):
 
             self.colorSegmentationParams.Intensity      = self.colorSegmentationDlg.checkBox_Intensity.isChecked()
             self.colorSegmentationParams.ShannonEntropy = self.colorSegmentationDlg.checkBox_ShannonEntropy.isChecked()
-            self.colorSegmentationParams.Texture        = self.colorSegmentationDlg.checkBox_Texture.isChecked()
+            self.colorSegmentationParams.Texture        = self.colorSegmentationDlg.get_texture_options()['enabled']
 
             self.colorSegmentationParams.wholeImage     = self.colorSegmentationDlg.checkBoxScalarRegion_WholeImage.isChecked()
+            self.colorSegmentationParams.ROI            = self.colorSegmentationDlg.checkBoxScalarRegion_ROI.isChecked()
+            self.colorSegmentationParams.HSV            = self.colorSegmentationDlg.checkBoxColor_HSV.isChecked()
 
             self.colorSegmentationParams.numColorClusters = self.colorSegmentationDlg.get_num_color_clusters()
 
@@ -2567,7 +2569,22 @@ class MainWindow(QMainWindow):
                 return
 
             # --------------------------------------------------
-            rectROI = self.labelOriginalImage.getROI()
+            try:
+                roiShape = ROIShape(getattr(roiParameters, 'roiShape', 0))
+            except ValueError:
+                roiShape = ROIShape.RECTANGLE
+
+            if roiShape == ROIShape.RECTANGLE:
+                rectROI = self.labelOriginalImage.getROI()
+            else:
+                # Polygon / free-form: use the last closed outline drawn on the canvas.
+                poly = self.labelOriginalImage.getLastColorSegPolygon()
+                if poly and len(poly) >= 3:
+                    qpts = [QPoint(int(x), int(y)) for (x, y) in poly]
+                    roiObj.setDisplayPolygon(qpts)
+                    rectROI = QPolygon(qpts).boundingRect()
+                else:
+                    rectROI = None
 
             if rectROI != None:
                 roiObj.setDisplayROI(rectROI)
@@ -2583,11 +2600,7 @@ class MainWindow(QMainWindow):
                 roiObj.setDisplaySize(scaledCurrentImage.size())
                 roiObj.calcROI()
 
-                roiObj.setROIShape(ROIShape.RECTANGLE)
-                #if self.radioButton_ROIShapeRectangle.isChecked():
-                #roiObj.setROIShape(ROIShape.RECTANGLE)
-                #else:
-                #roiObj.setROIShape(ROIShape.ELLIPSE)
+                roiObj.setROIShape(roiShape)
             except Exception:
                 msgBox = GRIME_AI_QMessageBox('ROI Error',
                                            'An unexpected error occurred calculating the ROI of the full resolution image!', buttons=QMessageBox.Close)
@@ -2606,73 +2619,168 @@ class MainWindow(QMainWindow):
             #JES qImg, clusterCenters, hist = myGRIME_Color.KMeans(rgb, roiObj.getNumColorClusters())
             #JES roiObj.setClusterCenters(clusterCenters, hist)
 
-            # EXTRACT DOMINANT HSV COLORS AND ADD THEM TO THE ROI OBJECT
             img1 = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
-            rgb = extractROI(roiObj.getImageROI(), img1)
-            hist, colorClusters = myGRIME_Color.extractDominant_HSV(rgb, roiObj.getNumColorClusters())
-            roiObj.setHSVClusterCenters(colorClusters, hist)
+            if not self._addTrainedROI(roiObj, img1):
+                msgBox = GRIME_AI_QMessageBox('ROI Error', 'The ROI contains too few pixels. Please draw a larger ROI.', buttons=QMessageBox.Close)
+                response = msgBox.displayMsgBox()
+                return
 
-            roiObj.setTrainingImageName(currentImageFilename)
+            self._refreshROIDisplay()
 
-            self.roiList.append(roiObj)
+    # ==================================================================================================================
+    # Train a fully-positioned ROI on the current image and add it to the ROI list and table.
+    # Returns False (nothing added) if the ROI has too few pixels.
+    # ==================================================================================================================
+    def _addTrainedROI(self, roiObj, img1):
+        myGRIME_Color = GRIME_AI_Color()
 
-            # ----------------------------------------------------------------------------------------------------------
-            # DISPLAY IN FEATURE TABLE
-            # ----------------------------------------------------------------------------------------------------------
-            #if (nRow == 0):
-            #    numToAdd = 3
-            #else:
-            #    numToAdd = 1
+        # EXTRACT DOMINANT HSV COLORS AND ADD THEM TO THE ROI OBJECT
+        # Only pixels inside the ROI (rectangle, polygon or free-form) are used.
+        rgb = roiObj.insidePixels(img1)
+        if rgb is None or rgb.shape[0] < roiObj.getNumColorClusters():
+            return False
+        hist, colorClusters = myGRIME_Color.extractDominant_HSV(rgb, roiObj.getNumColorClusters())
+        roiObj.setHSVClusterCenters(colorClusters, hist)
 
-            #for i in range(numToAdd):
-            #    self.tableWidget_ROIList.insertRow(nRow)
-            #    nRow += 1
+        roiObj.setTrainingImageName(currentImageFilename)
 
-            # CREATE COLOR BAR TO DISPLAY CLUSTER COLORS
-            colorBar = GRIME_AI_Color.create_color_bar(hist, colorClusters)
+        self.roiList.append(roiObj)
 
-            # CONVERT colorBar TO A QImage FOR USE IN DISPLAYING IN QT GUI
-            qImg = QImage(colorBar.data, colorBar.shape[1], colorBar.shape[0], QImage.Format_BGR888)
+        # ----------------------------------------------------------------------------------------------------------
+        # DISPLAY IN FEATURE TABLE
+        # ----------------------------------------------------------------------------------------------------------
+        # CREATE COLOR BAR TO DISPLAY CLUSTER COLORS
+        colorBar = GRIME_AI_Color.create_color_bar(hist, colorClusters)
 
-            # INSERT THE DOMINANT COLORS INTO A QLabel IN ORDER TO ADD IT TO THE FEATURE TABLE
-            nRow = self.tableWidget_ROIList.rowCount()
-            self.tableWidget_ROIList.insertRow(nRow)
+        # CONVERT colorBar TO A QImage FOR USE IN DISPLAYING IN QT GUI
+        qImg = QImage(colorBar.data, colorBar.shape[1], colorBar.shape[0], QImage.Format_BGR888)
 
-            self.label = QtWidgets.QLabel()
-            self.label.setPixmap(QPixmap(qImg.scaled(100, 50)))
-            self.tableWidget_ROIList.setCellWidget(nRow, 1, self.label)
+        # INSERT THE DOMINANT COLORS INTO A QLabel IN ORDER TO ADD IT TO THE FEATURE TABLE
+        nRow = self.tableWidget_ROIList.rowCount()
+        self.tableWidget_ROIList.insertRow(nRow)
 
-            # INSERT ROI NAME INTO TABLE
-            nCol = 0
-            self.tableWidget_ROIList.setItem(nRow, nCol, QTableWidgetItem(roiParameters.strROIName))
+        self.label = QtWidgets.QLabel()
+        self.label.setPixmap(QPixmap(qImg.scaled(100, 50)))
+        self.tableWidget_ROIList.setCellWidget(nRow, 1, self.label)
 
-            self.tableWidget_ROIList.resizeColumnsToContents()
+        # INSERT ROI NAME INTO TABLE
+        nCol = 0
+        self.tableWidget_ROIList.setItem(nRow, nCol, QTableWidgetItem(roiObj.getROIName()))
 
-            #JES pix = QPixmap(QImage(colorBar.data, colorBar.shape[1], colorBar.shape[0], QImage.Format_BGR888))
-            #JES self.labelDominantColors.setPixmap(pix.scaled(self.labelEdgeImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        self.tableWidget_ROIList.resizeColumnsToContents()
+        return True
 
-            # self.tableWidget_ROIList.setCellWidget(nRow, nCol, QCheckBox())
+    # ==================================================================================================================
+    # Redraw ROI overlays and features after ROIs were added.
+    # ==================================================================================================================
+    def _refreshROIDisplay(self):
+        global currentImageIndex
 
-            # ----------------------------------------------------------------------------------------------------------
-            #
-            # ----------------------------------------------------------------------------------------------------------
-            global currentImageIndex
+        self.labelOriginalImage.clearROIs()
+        self.labelOriginalImage.setROIs(self.roiList)
 
-            self.labelOriginalImage.clearROIs()
-            self.labelOriginalImage.setROIs(self.roiList)
+        processLocalImage(self, currentImageIndex)
+        self.refreshImage()
 
-            processLocalImage(self, currentImageIndex)
-            self.refreshImage()
+        # ----------------------------------------------------------------------------------------------------------
+        # ONCE AN ROI IS DEFINED FOR A SPECIFIC NUMBER OF COLOR CLUSTERS, DISABLE THE CONTROL SO THAT THE USER
+        # CANNOT CHANGE THE VALUE FOR SUBSEQUENT TRAINED ROIs.
+        # ----------------------------------------------------------------------------------------------------------
+        if self.colorSegmentationDlg != None:
+            if len(self.roiList) > 0:
+                self.colorSegmentationDlg.disable_spinbox_color_clusters(True)
+            else:
+                self.colorSegmentationDlg.disable_spinbox_color_clusters(False)
 
-            # ----------------------------------------------------------------------------------------------------------
-            # ONCE AN ROI IS DEFINED FOR A SPECIFIC NUMBER OF COLOR CLUSTERS, DISABLE THE CONTROL SO THAT THE USER
-            # CANNOT CHANGE THE VALUE FOR SUBSEQUENT TRAINED ROIs.
-            # ----------------------------------------------------------------------------------------------------------
-            if self.colorSegmentationDlg != None:
-                if len(self.roiList) > 0:
-                    self.colorSegmentationDlg.disable_spinbox_color_clusters(True)
-                else:
-                    self.colorSegmentationDlg.disable_spinbox_color_clusters(False)
+    # ==================================================================================================================
+    # Import ROIs from an ROI_Masks (COCO 1.0) file. The ROIs are placed on the current image and
+    # their color clusters are trained on it, exactly as if they had been drawn.
+    # ==================================================================================================================
+    def importROIMasks(self):
+        global currentImage, imageFileFolder
+        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
+
+        parent = self.colorSegmentationDlg if self.colorSegmentationDlg is not None else self
+
+        if not currentImage:
+            GRIME_AI_QMessageBox('Import ROI Masks', 'Open an image first.', buttons=QMessageBox.Close).displayMsgBox()
+            return
+
+        path, _ = QFileDialog.getOpenFileName(parent, 'Import ROI Masks', imageFileFolder or '',
+                                              'ROI mask files (*.json);;All files (*)')
+        if not path:
+            return
+
+        try:
+            data = load_roi_masks(path, os.path.basename(currentImageFilename or ''))
+        except Exception as e:
+            GRIME_AI_QMessageBox('Import ROI Masks', f'Could not read the file:\n{e}', buttons=QMessageBox.Close).displayMsgBox()
+            return
+
+        # The ROI coordinates only make sense on images of the same size.
+        img_w, img_h = currentImage.width(), currentImage.height()
+        if data['width'] and data['height'] and (data['width'], data['height']) != (img_w, img_h):
+            GRIME_AI_QMessageBox('Import ROI Masks',
+                                 f"The ROI file was made for {data['width']} x {data['height']} images, "
+                                 f"but the current image is {img_w} x {img_h}. Nothing was imported.",
+                                 buttons=QMessageBox.Close).displayMsgBox()
+            return
+
+        # Replace or add to existing ROIs.
+        if self.roiList:
+            box = QMessageBox(parent)
+            box.setWindowTitle('Import ROI Masks')
+            box.setText(f'There are already {len(self.roiList)} ROI(s). Replace them or add the imported ROIs?')
+            replace_btn = box.addButton('Replace', QMessageBox.AcceptRole)
+            add_btn = box.addButton('Add', QMessageBox.AcceptRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec_()
+            if box.clickedButton() == replace_btn:
+                self.deleteAllROI()
+            elif box.clickedButton() != add_btn:
+                return
+
+        nClusters = (self.colorSegmentationDlg.get_num_color_clusters()
+                     if self.colorSegmentationDlg is not None else self.colorSegmentationParams.numColorClusters)
+        scaled = currentImage.scaled(self.labelOriginalImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+        disp_w, disp_h = scaled.width(), scaled.height()
+        sx = disp_w / img_w if img_w else 1.0
+        sy = disp_h / img_h if img_h else 1.0
+        shapes = {'rectangle': ROIShape.RECTANGLE, 'polygon': ROIShape.POLYGON, 'freeform': ROIShape.FREEFORM}
+
+        img1 = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+        added, too_small = 0, []
+        for r in data['rois']:
+            roiObj = GRIME_AI_roiData()
+            roiObj.setROIName(r['name'])
+            roiObj.setROIShape(shapes.get(r['shape'], ROIShape.POLYGON))
+            roiObj.setImageSize(currentImage.size())
+            roiObj.setDisplaySize(scaled.size())
+
+            # Image coordinates come straight from the file; display coordinates are derived for drawing.
+            x, y, w, h = r['bbox']
+            roiObj.setImageROI(QtCore.QRect(x, y, w, h))
+            roiObj.setDisplayROI(QtCore.QRect(int(round(x * sx)), int(round(y * sy)),
+                                              int(round(w * sx)), int(round(h * sy))))
+            if roiObj.getROIShape() != ROIShape.RECTANGLE:
+                roiObj.setImagePolygon([QPoint(px, py) for (px, py) in r['polygon']])
+                roiObj.setDisplayPolygon([QPoint(int(round(px * sx)), int(round(py * sy)))
+                                          for (px, py) in r['polygon']])
+
+            roiObj.setNumColorClusters(nClusters)
+            if self._addTrainedROI(roiObj, img1):
+                added += 1
+            else:
+                too_small.append(r['name'])
+
+        self._refreshROIDisplay()
+
+        msg = f'Imported {added} ROI(s) from:\n{path}'
+        if too_small:
+            msg += f"\n\nSkipped (too few pixels): {', '.join(too_small)}"
+        if data['skipped']:
+            msg += f"\n\nSkipped {data['skipped']} annotation(s) that are not polygons or boxes."
+        GRIME_AI_QMessageBox('Import ROI Masks', msg, buttons=QMessageBox.Close).displayMsgBox()
 
     # ==================================================================================================================
     #
@@ -3800,6 +3908,7 @@ class MainWindow(QMainWindow):
                 self.colorSegmentationDlg.deleteAllROI_Signal.connect(self.deleteAllROI)
                 self.colorSegmentationDlg.buildFeatureFile_Signal.connect(self.buildFeatureFile)
                 self.colorSegmentationDlg.exportROIMasks_Signal.connect(self.exportROIMasks)
+                self.colorSegmentationDlg.importROIMasks_Signal.connect(self.importROIMasks)
                 self.colorSegmentationDlg.universalTestButton_Signal.connect(self.universalTestButton)
                 self.colorSegmentationDlg.refresh_rois_signal.connect(self.displayROIs)
 
@@ -3809,6 +3918,10 @@ class MainWindow(QMainWindow):
                 self.colorSegmentationDlg.accepted.connect(self.closeColorSegmentationDlg)
                 self.colorSegmentationDlg.rejected.connect(self.closeColorSegmentationDlg)
 
+                # ROI shape (rectangle / polygon / free-form) -> canvas drawing tool
+                self.colorSegmentationDlg.roiShapeChanged_signal.connect(self.roiShapeChanged)
+                self.roiShapeChanged(self.colorSegmentationDlg.get_roi_shape())
+
                 self.getColorSegmentationParams()
 
                 self.colorSegmentationDlg.show()
@@ -3817,6 +3930,15 @@ class MainWindow(QMainWindow):
                 msgBox = GRIME_AI_QMessageBox('Tool Conflict', strMessage, QMessageBox.Yes | QMessageBox.No)
                 response = msgBox.displayMsgBox()
 
+
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
+    def roiShapeChanged(self, shape):
+        try:
+            self.labelOriginalImage.setROIShape(ROIShape(shape))
+        except ValueError:
+            self.labelOriginalImage.setROIShape(ROIShape.RECTANGLE)
 
     # ==================================================================================================================
     #
@@ -4068,6 +4190,7 @@ class MainWindow(QMainWindow):
         self._roi_ref_set = set()
 
         # Clear ROI overlays from the image display immediately
+        self.labelOriginalImage.clearColorSegPolygons()
         self.labelOriginalImage.setROIs(self.roiList)
 
         self.colorSegmentationDlg.disable_spinbox_color_clusters(False)
@@ -4416,7 +4539,10 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def compute_roi_features(self, roiObj, img) -> 'MainWindow.ROIFeatures':
-        rgb = extractROI(roiObj.getImageROI(), img)
+        # Only pixels inside the ROI (rectangle, polygon or free-form) are used.
+        rgb = roiObj.insidePixels(img)
+        if rgb is None:
+            raise ValueError('ROI does not overlap the image')
         bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
