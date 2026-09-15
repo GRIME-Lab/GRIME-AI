@@ -19,7 +19,8 @@ from PyQt5.QtCore import QRect, QSize
 # ======================================================================================================================
 class ROIShape(Enum):
     RECTANGLE = 0
-    ELLIPSE = 1
+    POLYGON = 1
+    FREEFORM = 2
 
 # ======================================================================================================================
 #
@@ -30,6 +31,9 @@ class GRIME_AI_roiData:
         self.roiName = ""
         self.displayROI = QRect()
         self.imageROI = QRect()
+        self.shape = ROIShape.RECTANGLE
+        self.displayPolygon = []   # QPoint list in display coords
+        self.imagePolygon = []     # QPoint list in image coords
         self.imageSize = QSize()
         self.displaySize = QSize()
         self.clusterCenters = []
@@ -95,6 +99,21 @@ class GRIME_AI_roiData:
 
         rect = QRect(x, y, roiWidth, roiHeight)
         self.setImageROI(rect)
+
+        if self.displayPolygon:
+            self.imagePolygon = [type(pt)(int(pt.x() * widthMultiplier),
+                                          int(pt.y() * heightMultiplier))
+                                 for pt in self.displayPolygon]
+
+    # --------------------------------------------------------------------------------
+    def setDisplayPolygon(self, pts):
+        self.displayPolygon = list(pts)
+    def getDisplayPolygon(self):
+        return self.displayPolygon
+    def setImagePolygon(self, pts):
+        self.imagePolygon = list(pts)
+    def getImagePolygon(self):
+        return self.imagePolygon
 
     # --------------------------------------------------------------------------------
     def setROIShape(self, shape):
