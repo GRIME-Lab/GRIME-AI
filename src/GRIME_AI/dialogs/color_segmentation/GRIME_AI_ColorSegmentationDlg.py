@@ -20,7 +20,7 @@ from PyQt5.uic import loadUi
 class roiParameters:
     def __init__(self, parent=None):
         self.strROIName       = ''
-        self.roiShape         = 0   # ROIShape value: 0=RECTANGLE, 1=POLYGON
+        self.roiShape         = 0   # ROIShape value: 0=RECTANGLE, 1=POLYGON, 2=FREEFORM
         self.numColorClusters = 4
         self.bDisplayROIs     = True
         self.bDisplayROIColors = True
@@ -38,10 +38,11 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
     close_signal               = pyqtSignal()
     buildFeatureFile_Signal    = pyqtSignal()
     exportROIMasks_Signal      = pyqtSignal()
+    importROIMasks_Signal      = pyqtSignal()
     universalTestButton_Signal = pyqtSignal(int)
     greenness_index_signal     = pyqtSignal()
     refresh_rois_signal        = pyqtSignal(roiParameters)
-    roiShapeChanged_signal     = pyqtSignal(int)   # 0=RECTANGLE, 1=POLYGON
+    roiShapeChanged_signal     = pyqtSignal(int)   # 0=RECTANGLE, 1=POLYGON, 2=FREEFORM
 
     returnROIParameters = roiParameters()
 
@@ -68,13 +69,12 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
         self.buttonBox_Close.clicked.connect(self.closeClicked)
         self.pushButton_Dlg_BuildFeatureFile.clicked.connect(self.buildFeatureFile)
         self.pushButton_ExportROIMasks.clicked.connect(self.exportROIMasks)
+        self.pushButton_ImportROIMasks.clicked.connect(self.importROIMasks)
         self.spinBoxColorClusters.valueChanged[int].connect(self.colorClusterValueChanged)
 
-        # ------------------------------------------------------------------
-        # TEXTURE TOGGLE
-        # ------------------------------------------------------------------
-        self.checkBox_Texture.toggled.connect(self._on_texture_toggled)
-        self.groupBox_Texture.setEnabled(self.checkBox_Texture.isChecked())
+        # Region Select: at least one of Whole Image / ROI must be checked to build.
+        self.checkBoxScalarRegion_WholeImage.toggled.connect(self._update_build_enabled)
+        self.checkBoxScalarRegion_ROI.toggled.connect(self._update_build_enabled)
 
         # ------------------------------------------------------------------
         # GREENNESS INDEX
@@ -99,34 +99,39 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
 
         # Restore persisted control states (everything except ROI name).
         self._load_settings()
+        self._update_build_enabled()
         # Size to the fully-built, settings-loaded content.
         self.adjustSize()
         self.setMinimumSize(self.sizeHint())
 
     # ------------------------------------------------------------------
-    def _on_texture_toggled(self, checked):
-        """Enable/disable texture sub-groupbox when Texture checkbox is toggled."""
-        self.groupBox_Texture.setEnabled(checked)
-
-    # ------------------------------------------------------------------
     def get_texture_options(self) -> dict:
         """
         Returns which texture methods are selected.
+        Texture is enabled when at least one method is checked.
         Call this from buildFeatureFile before passing options to ExtractFeatures.
         """
-        return {
-            'enabled': self.checkBox_Texture.isChecked(),
+        opts = {
             'glcm':    self.checkBox_Texture_GLCM.isChecked(),
             'gabor':   self.checkBox_Texture_Gabor.isChecked(),
             'lbp':     self.checkBox_Texture_LBP.isChecked(),
             'wavelet': self.checkBox_Texture_Wavelet.isChecked(),
             'fourier': self.checkBox_Texture_Fourier.isChecked(),
         }
+        opts['enabled'] = any(opts.values())
+        return opts
 
     # ------------------------------------------------------------------
     def colorClusterValueChanged(self):
         self.returnROIParameters.numColorClusters = self.spinBoxColorClusters.value()
         self.refresh_rois_signal.emit(self.returnROIParameters)
+
+    def _update_build_enabled(self, *_):
+        ok = (self.checkBoxScalarRegion_WholeImage.isChecked()
+              or self.checkBoxScalarRegion_ROI.isChecked())
+        self.pushButton_Dlg_BuildFeatureFile.setEnabled(ok)
+        self.pushButton_Dlg_BuildFeatureFile.setToolTip(
+            "" if ok else "Select Whole Image, ROI, or both under Region Select.")
 
     def buildFeatureFile(self):
         self.buildFeatureFile_Signal.emit()
@@ -143,7 +148,6 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
         "ColorSeg_Shape_Rectangle":    ("radioButton_ROIShapeRectangle", "bool"),
         "ColorSeg_Shape_Polygon":      ("radioButton_ROIShapePolygon", "bool"),
         "ColorSeg_Shape_FreeForm":     ("radioButton_ROIShapeFreeForm", "bool"),
-        "ColorSeg_Texture":            ("checkBox_Texture", "bool"),
         "ColorSeg_Texture_GLCM":       ("checkBox_Texture_GLCM", "bool"),
         "ColorSeg_Texture_Gabor":      ("checkBox_Texture_Gabor", "bool"),
         "ColorSeg_Texture_LBP":        ("checkBox_Texture_LBP", "bool"),
@@ -178,11 +182,6 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
                     w.setChecked(bool(val))
             except Exception:
                 pass
-        # keep texture sub-group enable state in sync after loading
-        try:
-            self.groupBox_Texture.setEnabled(self.checkBox_Texture.isChecked())
-        except Exception:
-            pass
 
     def _save_settings(self):
         """Persist current control states to the GRIME-AI settings JSON."""
@@ -205,6 +204,9 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
     def exportROIMasks(self):
         self.exportROIMasks_Signal.emit()
 
+    def importROIMasks(self):
+        self.importROIMasks_Signal.emit()
+
     def showEvent(self, event):
         super().showEvent(event)
         # Ensure the dialog opens tall enough for all groups.
@@ -226,14 +228,19 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
         self.returnROIParameters.numColorClusters  = self.spinBoxColorClusters.value()
         self.returnROIParameters.bDisplayROIs      = True
         self.returnROIParameters.bDisplayROIColors = True
-        self.returnROIParameters.roiShape = (2 if self.radioButton_ROIShapeFreeForm.isChecked()
-                                             else 1 if self.radioButton_ROIShapePolygon.isChecked() else 0)
+        self.returnROIParameters.roiShape = self.get_roi_shape()
         self.addROI_Signal.emit(self.returnROIParameters)
 
-    def _on_shape_changed(self):
-        shape = (2 if self.radioButton_ROIShapeFreeForm.isChecked()
-                 else 1 if self.radioButton_ROIShapePolygon.isChecked() else 0)
-        self.roiShapeChanged_signal.emit(shape)
+    def get_roi_shape(self):
+        """Currently selected ROI shape: 0=RECTANGLE, 1=POLYGON, 2=FREEFORM."""
+        return (2 if self.radioButton_ROIShapeFreeForm.isChecked()
+                else 1 if self.radioButton_ROIShapePolygon.isChecked() else 0)
+
+    def _on_shape_changed(self, checked=True):
+        # toggled fires for the button being unchecked too; emit once, for the newly checked one.
+        if not checked:
+            return
+        self.roiShapeChanged_signal.emit(self.get_roi_shape())
 
     def deleteAllROI(self):
         self.deleteAllROI_Signal.emit()
