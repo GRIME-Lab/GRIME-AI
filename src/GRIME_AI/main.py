@@ -1932,10 +1932,35 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     #
     # ------------------------------------------------------------------------------------------------------------------
+    def exportROIMasks(self):
+        """Export the current Color Segmentation ROIs to COCO 1.0 as
+        ROI_Masks.json in the image folder. ROI names become categories;
+        ROI shapes become polygon segmentations; ROIs are applied across
+        every image in the folder."""
+        global dailyImagesList, imageFileFolder
+        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import export_roi_masks
+        try:
+            images_list = dailyImagesList.getVisibleList()
+        except Exception:
+            images_list = []
+        if not self.roiList:
+            msgBox = GRIME_AI_QMessageBox('Export ROI Masks', 'Draw and add at least one ROI first.', buttons=QMessageBox.Close)
+            msgBox.displayMsgBox(); return
+        if not images_list:
+            msgBox = GRIME_AI_QMessageBox('Export ROI Masks', 'No images in the current folder.', buttons=QMessageBox.Close)
+            msgBox.displayMsgBox(); return
+        try:
+            out_path = export_roi_masks(self.roiList, images_list, imageFileFolder)
+        except Exception as e:
+            msgBox = GRIME_AI_QMessageBox('Export ROI Masks', f'Export failed: {e}', buttons=QMessageBox.Close)
+            msgBox.displayMsgBox(); return
+        msgBox = GRIME_AI_QMessageBox('Export ROI Masks', f'Saved COCO 1.0 ROI masks to:\n{out_path}', buttons=QMessageBox.Close)
+        msgBox.displayMsgBox()
+
     def buildFeatureFile(self):
         global dailyImagesList
-        from GRIME_AI.GRIME_AI_Feature_Export import GRIME_AI_Feature_Export
-        myFeatureExport = GRIME_AI_Feature_Export()
+        from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+        myFeatureExport = ColorSegFeatureExport()
         imagesList = dailyImagesList.getVisibleList()
 
         if self.colorSegmentationDlg != None:
@@ -3774,6 +3799,7 @@ class MainWindow(QMainWindow):
                 self.colorSegmentationDlg.addROI_Signal.connect(self.trainROI)
                 self.colorSegmentationDlg.deleteAllROI_Signal.connect(self.deleteAllROI)
                 self.colorSegmentationDlg.buildFeatureFile_Signal.connect(self.buildFeatureFile)
+                self.colorSegmentationDlg.exportROIMasks_Signal.connect(self.exportROIMasks)
                 self.colorSegmentationDlg.universalTestButton_Signal.connect(self.universalTestButton)
                 self.colorSegmentationDlg.refresh_rois_signal.connect(self.displayROIs)
 

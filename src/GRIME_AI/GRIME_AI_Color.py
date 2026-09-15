@@ -37,12 +37,18 @@ class GRIME_AI_Color:
         if 0:
             rgb = cv2.blur(rgb, ksize=(5, 5))
 
-        # Resize the image by a scale factor
-        scale_x = 0.5  # Scale along the width
-        scale_y = 0.5  # Scale along the height
-        print("rgb shape:", rgb.shape)
-        print("scale_x:", scale_x, "scale_y:", scale_y)
-        resized_image = cv2.resize(rgb, None, fx=scale_x, fy=scale_y)
+        # Downsample for speed before clustering. A normal 2D image is
+        # halved with cv2.resize. A polygon/freeform ROI arrives as a flat
+        # (N,1,3) list of inside-mask pixels with no spatial layout, which
+        # cv2.resize cannot handle (width 1 -> dsize empty). For that case
+        # subsample every 4th pixel instead (same ~0.25 area reduction).
+        if rgb.ndim == 3 and rgb.shape[0] > 1 and rgb.shape[1] > 1:
+            resized_image = cv2.resize(rgb, None, fx=0.5, fy=0.5)
+        else:
+            flat = rgb.reshape(-1, 3)
+            if flat.shape[0] > 4:
+                flat = flat[::4]
+            resized_image = flat.reshape(-1, 1, 3)
 
         hsv = cv2.cvtColor(resized_image, cv2.COLOR_RGB2HSV)
 

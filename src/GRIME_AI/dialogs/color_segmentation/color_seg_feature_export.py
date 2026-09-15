@@ -29,7 +29,7 @@ from GRIME_AI.GRIME_AI_Texture import GLCMTexture, LBPTexture, GaborTexture, Wav
 # ======================================================================================================================
 #
 # ======================================================================================================================
-class GRIME_AI_Feature_Export:
+class ColorSegFeatureExport:
     def __init__(self):
         csvFilename = ''
         self.instance = 1
@@ -167,7 +167,7 @@ class GRIME_AI_Feature_Export:
 
         ###JES if colorSegmentationParams.wholeImage:
         if 1:
-            header = self.build_image_scalar_header(header, roiList, colorSegmentationParams)
+            header = self.build_image_scalar_header(header, roiList, colorSegmentationParams, texture_options)
 
         if colorSegmentationParams.ROI:
             header = self.build_ROI_scalar_header(header, roiList, colorSegmentationParams, greenness_index_list, texture_options)
@@ -234,8 +234,8 @@ class GRIME_AI_Feature_Export:
                             strOutputString = strOutputString + ', %3.4f' % self.calcEntropy(gray)
 
                         if colorSegmentationParams.Texture:
-                            texture = -999
-                            strOutputString = strOutputString + ', %3.2f' % texture
+                            for _tname, _tval in self.compute_texture_scalars(gray, texture_options):
+                                strOutputString = strOutputString + ', %3.4f' % _tval
 
                         try:
                             for greenness in greenness_index_list:
@@ -245,12 +245,14 @@ class GRIME_AI_Feature_Export:
                             pass
 
                         if colorSegmentationParams.HSV:
-                            # CONVERT FROM OpenCV's HSV HUE DATA FORMAT 0 to 180 DEGREES TO THE HSV STANDARD FORMAT OF 0 to 360 DEGREES
-                            # Concatenate the HSV values for each cluster succinctly
+                            # HSV per cluster (H,S,V), then per-cluster COVERAGE (fraction of pixels).
                             strOutputString += ''.join(
                                 f", {float(center[0]):3.2f}, {float(center[1]):3.2f}, {float(center[2]):3.2f}"
                                 for center in clusterCenters[:nClusters]
                             )
+                            _cov = list(hist[:nClusters]) if hist is not None else []
+                            _cov += [0.0] * (nClusters - len(_cov))
+                            strOutputString += ''.join(f", {float(c):3.4f}" for c in _cov)
 
                     # --------------------------------------------------------------------------------------------------
                     #
@@ -275,7 +277,44 @@ class GRIME_AI_Feature_Export:
     # ==================================================================================================================
     #
     # ==================================================================================================================
-    def build_image_scalar_header(self, header, roiList, colorSegmentationParams):
+    # ==================================================================================================================
+    def compute_texture_scalars(self, gray, texture_options):
+        """Compute one representative scalar per SELECTED texture method on a
+        grayscale image. Returns an ordered list of (name, value) so the CSV
+        header and the data row always match. Only methods whose checkbox is
+        on are included."""
+        from GRIME_AI.GRIME_AI_Texture import (GLCMTexture, GaborTexture,
+                                               LBPTexture, WaveletTexture, FourierTexture)
+        import numpy as _np
+        opts = texture_options or {}
+        out = []
+        try:
+            if opts.get('glcm'):
+                f = GLCMTexture().compute_features(gray)
+                out.append(('GLCM_contrast', float(f.get('contrast', -999))))
+            if opts.get('gabor'):
+                f = GaborTexture().compute_features(gray)
+                means = [v for k, v in f.items() if k.endswith('_mean')]
+                out.append(('Gabor_mean_energy', float(_np.mean(means)) if means else -999))
+            if opts.get('lbp'):
+                h = LBPTexture().compute_features(gray)
+                h = _np.asarray(h, dtype=float); h = h[h > 0]
+                ent = float(-_np.sum(h * _np.log2(h))) if h.size else -999
+                out.append(('LBP_entropy', ent))
+            if opts.get('wavelet'):
+                f = WaveletTexture().compute_features(gray)
+                vars_ = [v for k, v in f.items() if k.endswith('_var')]
+                out.append(('Wavelet_detail_var', float(_np.mean(vars_)) if vars_ else -999))
+            if opts.get('fourier'):
+                prof = FourierTexture().compute_features(gray)
+                prof = _np.asarray(prof, dtype=float)
+                out.append(('Fourier_radial_mean', float(_np.mean(prof)) if prof.size else -999))
+        except Exception as _e:
+            print(f'[texture] compute error: {_e}')
+        return out
+
+    # ==================================================================================================================
+    def build_image_scalar_header(self, header, roiList, colorSegmentationParams, texture_options=None):
         nClusters = GRIME_AI_Utils().getMaxNumColorClusters(roiList)
 
         if colorSegmentationParams.Intensity:
@@ -285,7 +324,12 @@ class GRIME_AI_Feature_Export:
             header = header + ", Entropy"
 
         if colorSegmentationParams.Texture:
-            header = header + ", Texture"
+            _opts = texture_options or {}
+            for _key, _label in (("glcm", "GLCM_contrast"), ("gabor", "Gabor_mean_energy"),
+                                 ("lbp", "LBP_entropy"), ("wavelet", "Wavelet_detail_var"),
+                                 ("fourier", "Fourier_radial_mean")):
+                if _opts.get(_key):
+                    header = header + ", " + _label
 
         if colorSegmentationParams.GCC:
             header = header + ", GCC"
@@ -312,6 +356,8 @@ class GRIME_AI_Feature_Export:
                     f"{template.replace('#', channel)}: {idx}" for idx in range(nClusters) for channel in
                     ['H', 'S', 'V']
                 )
+            # Per-cluster coverage columns (fraction of pixels), matching the data.
+            header += ''.join(f", Image_Coverage: {idx}" for idx in range(nClusters))
 
         return header
 

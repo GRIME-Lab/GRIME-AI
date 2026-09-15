@@ -29,6 +29,8 @@ class GRIME_AI_QLabel(QLabel):
         self.points = QPolygon()
         self.brushColor = Qt.green
         self.polygonList = []
+        self.savedPolygons = []   # closed color-seg polygons (QPolygon list)
+        self.lastPolygon = None
         self.polygonListCount = 0  # initialized
         self.setWindowTitle("Slice Position")
 
@@ -96,6 +98,30 @@ class GRIME_AI_QLabel(QLabel):
                 event.accept()
                 return
         # Fall through to ROI/mask handling only when not in SLICE mode or not hitting slice
+        # COLOR_SEGMENTATION + POLYGON: left-click adds a vertex,
+        # right-click closes the polygon.
+        if (self.drawingMode == DrawingMode.COLOR_SEGMENTATION
+                and self.shape == ROIShape.POLYGON):
+            if event.button() == Qt.RightButton:
+                self._closeColorSegPolygon()
+                super().mousePressEvent(event)
+                return
+            self.flag = True
+            self.points << event.pos()
+            self.update()
+            super().mousePressEvent(event)
+            return
+
+        # COLOR_SEGMENTATION + FREEFORM: press starts a traced path.
+        if (self.drawingMode == DrawingMode.COLOR_SEGMENTATION
+                and self.shape == ROIShape.FREEFORM):
+            self.flag = True
+            self.points = QPolygon()
+            self.points << event.pos()
+            self.update()
+            super().mousePressEvent(event)
+            return
+
         self.flag = True
         self.x0 = event.x()
         self.y0 = event.y()
@@ -109,6 +135,12 @@ class GRIME_AI_QLabel(QLabel):
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def mouseDoubleClickEvent(self, event):
+        # Double-click closes an in-progress color-seg polygon.
+        if (self.drawingMode == DrawingMode.COLOR_SEGMENTATION
+                and self.shape == ROIShape.POLYGON
+                and self.points.count() >= 3):
+            self._closeColorSegPolygon()
+            return
         self.flag = False
 
     # ------------------------------------------------------------------------
@@ -122,6 +154,15 @@ class GRIME_AI_QLabel(QLabel):
             event.accept()
             return
 
+        if (self.drawingMode == DrawingMode.COLOR_SEGMENTATION
+                and self.shape == ROIShape.POLYGON):
+            # vertices are added on press; closed by right-click/double-click
+            return
+        if (self.drawingMode == DrawingMode.COLOR_SEGMENTATION
+                and self.shape == ROIShape.FREEFORM):
+            # mouse-up closes the traced path
+            self._closeColorSegPolygon()
+            return
         if self.flag:
             roi = self.getROI()
             if roi:
@@ -151,6 +192,12 @@ class GRIME_AI_QLabel(QLabel):
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def mouseMoveEvent(self, event):
+        # FREEFORM: while the button is held, trace the path.
+        if (self.drawingMode == DrawingMode.COLOR_SEGMENTATION
+                and self.shape == ROIShape.FREEFORM and self.flag):
+            self.points << event.pos()
+            self.update()
+            return
         # Only update slice when actively dragging
         if self.drawingMode == DrawingMode.SLICE and self._draggingSlice:
             x = event.x()
@@ -209,8 +256,7 @@ class GRIME_AI_QLabel(QLabel):
             for roi in self.savedROIs:
                 if self.getROIShape() == ROIShape.RECTANGLE:
                     painter.drawRect(roi)
-                elif self.getROIShape() == ROIShape.ELLIPSE:
-                    painter.drawEllipse(roi)
+                # polygons are painted in drawColorSegmentationROI
 
         if self.drawingMode == DrawingMode.COLOR_SEGMENTATION:
             self.drawColorSegmentationROI(painter)
@@ -314,20 +360,39 @@ class GRIME_AI_QLabel(QLabel):
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def _closeColorSegPolygon(self):
+        """Finalize the in-progress color-seg polygon/freeform path."""
+        if self.points.count() >= 3:
+            self.savedPolygons.append(QPolygon(self.points))
+            self.lastPolygon = QPolygon(self.points)
+        self.points = QPolygon()
+        self.flag = False
+        self.update()
+
     def drawColorSegmentationROI(self, painter):
+        painter.setPen(QPen(Qt.red, 2, Qt.SolidLine))
+
+        if self.getROIShape() in (ROIShape.POLYGON, ROIShape.FREEFORM):
+            # already-closed polygons
+            for poly in self.savedPolygons:
+                painter.drawPolygon(poly)
+            # in-progress polygon: vertices + connecting lines
+            if self.points.count() > 0:
+                lp = QPoint()
+                for cp in self.points:
+                    painter.drawEllipse(cp, 2, 2)
+                    if not lp.isNull():
+                        painter.drawLine(lp, cp)
+                    lp = cp
+            return
+
+        # RECTANGLE (rubber-band)
         if self.flag:
-            # Always normalize coordinates
             x = min(self.x0, self.x1)
             y = min(self.y0, self.y1)
             w = abs(self.x1 - self.x0)
             h = abs(self.y1 - self.y0)
-            rect = QRect(x, y, w, h)
-
-            painter.setPen(QPen(Qt.red, 2, Qt.SolidLine))
-            if self.getROIShape() == ROIShape.RECTANGLE:
-                painter.drawRect(rect)
-            elif self.getROIShape() == ROIShape.ELLIPSE:
-                painter.drawEllipse(rect)
+            painter.drawRect(QRect(x, y, w, h))
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
@@ -379,6 +444,21 @@ class GRIME_AI_QLabel(QLabel):
     # ------------------------------------------------------------------------
     def getPolygon(self):
         return self.polygonList
+
+    # ------------------------------------------------------------------------
+    def getColorSegPolygons(self):
+        """Closed color-seg polygons as lists of (x,y) tuples (display coords)."""
+        return [[(pt.x(), pt.y()) for pt in poly] for poly in self.savedPolygons]
+
+    def getLastColorSegPolygon(self):
+        if self.lastPolygon is None:
+            return None
+        return [(pt.x(), pt.y()) for pt in self.lastPolygon]
+
+    def clearColorSegPolygons(self):
+        self.savedPolygons = []
+        self.lastPolygon = None
+        self.points = QPolygon()
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
