@@ -3470,6 +3470,7 @@ class MainWindow(QMainWindow):
             from GRIME_AI.recipe_manager import RecipeManagerDialog
             dlg = RecipeManagerDialog(self._get_recipe_store(), self, dark_mode=self._is_dark_mode)
             dlg.recipeActivated.connect(self.apply_recipe)
+            dlg.recipeDeactivated.connect(self.clear_recipe)
             dlg.exec_()
         except Exception as e:
             print(f"[ERROR] Failed to open Recipe Manager: {e}")
@@ -3553,6 +3554,27 @@ class MainWindow(QMainWindow):
     def on_training_images_committed(self, new_path):
         """ML training-images folder was changed by the user (Training tab)."""
         self._reconcile_folder_with_recipe(new_path, "ml_images", "training images")
+
+    # JSON entries that exist only because a recipe wrote them. With no recipe
+    # active they are cleared, so outputs fall back to the default folders.
+    # Image, data, download and ML folders are kept as the user's normal settings.
+    _RECIPE_ONLY_KEYS = ("Composite_Slices_Folder", "Videos_Folder", "GIFs_Folder", "Recipe_Site_Root")
+
+    def clear_recipe(self):
+        """No recipe is active (the recipes themselves are kept): stop applying
+        recipe folders and never prompt about recipes on folder changes."""
+        try:
+            self._last_prompt_paths = {}
+            for key in self._RECIPE_ONLY_KEYS:
+                JsonEditor().update_json_entry(key, "")
+            try:
+                self.statusBar().showMessage("No recipe active. Using the normal folder settings.", 5000)
+            except Exception:
+                pass
+            print("[INFO] Recipe cleared: no recipe active.")
+        except Exception as e:
+            print(f"[ERROR] Failed to clear recipe: {e}")
+            traceback.print_exc()
 
     def apply_recipe(self, recipe):
         """Push an activated recipe's folder paths into the live UI and JSON

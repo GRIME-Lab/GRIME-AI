@@ -15,6 +15,8 @@ folders you would otherwise have to reset by hand every time you switch sites:
 
 Recipes persist as JSON. Activating a recipe emits `recipeActivated(Recipe)`
 so the main GRIME AI window can push these paths into its existing options.
+"Use No Recipe" keeps every recipe but makes none active and emits
+`recipeDeactivated()`; GRIME AI then uses its normal folder settings.
 
 Run standalone to try it:  python grime_ai_recipe_manager.py
 """
@@ -296,9 +298,11 @@ class RecipeStore:
 # Dialog
 # --------------------------------------------------------------------------- #
 class RecipeManagerDialog(QDialog):
-    """CRUD editor for study-site recipes. Emits recipeActivated(Recipe)."""
+    """CRUD editor for study-site recipes. Emits recipeActivated(Recipe), or
+    recipeDeactivated() when no recipe is to be used."""
 
     recipeActivated = pyqtSignal(object)  # emits a Recipe
+    recipeDeactivated = pyqtSignal()      # recipes kept, none active
 
     def __init__(self, store: RecipeStore, parent=None, dark_mode=None):
         super().__init__(parent)
@@ -362,6 +366,11 @@ class RecipeManagerDialog(QDialog):
             "QPushButton:hover { background-color: rgba(192, 57, 43, 0.12); }"
             "QPushButton:pressed { background-color: rgba(192, 57, 43, 0.22); }"
             "QPushButton:disabled { color: #d9a5a0; border-color: #e3c2be; }")
+        btn_none = QPushButton("Use No Recipe")
+        btn_none.setToolTip("Keep all recipes but use none of them.\n"
+                            "GRIME AI uses its normal folder settings until a recipe is set active again.")
+        btn_none.clicked.connect(self._clear_active)
+        btn_none.setStyleSheet(_outline_button_style("#4682B4"))
         btn_act.clicked.connect(self._set_active)
         btn_act.setStyleSheet(
             "QPushButton { background-color: #4682B4; color: white;"
@@ -371,6 +380,11 @@ class RecipeManagerDialog(QDialog):
             "QPushButton:disabled { background-color: #b7c7d4; color: #eef2f5; }")
         self.btn_new, self.btn_add = btn_new, btn_add
         self.btn_dup, self.btn_del, self.btn_act = btn_dup, btn_del, btn_act
+        self.btn_none = btn_none
+
+        # Which recipe is in use (or none), under the list.
+        self.active_label = QLabel()
+        self.active_label.setWordWrap(True)
 
         left = QVBoxLayout()
         left.addWidget(QLabel("Recipes"))
@@ -381,9 +395,11 @@ class RecipeManagerDialog(QDialog):
         row2 = QHBoxLayout()
         row2.addWidget(btn_dup)
         row2.addWidget(btn_del)
+        left.addWidget(self.active_label)
         left.addLayout(row1)
         left.addLayout(row2)
         left.addWidget(btn_act)
+        left.addWidget(btn_none)
         left_w = QWidget()
         left_w.setLayout(left)
         left_w.setFixedWidth(240)
@@ -578,12 +594,21 @@ class RecipeManagerDialog(QDialog):
             item.setData(Qt.UserRole, r.name)
             self.list.addItem(item)
         self.list.blockSignals(False)
+        self._update_active_label()
         if select:
             self._select_by_name(select)
         elif self.list.count():
             self.list.setCurrentRow(0)
         else:
             self._load_recipe(None)
+
+    def _update_active_label(self) -> None:
+        if self.store.active_name:
+            self.active_label.setText(f"Active: {self.store.active_name}")
+        elif self.store.recipes:
+            self.active_label.setText("No recipe active. GRIME AI is using its normal folder settings.")
+        else:
+            self.active_label.setText("")
 
     def _select_by_name(self, name: str) -> None:
         for i in range(self.list.count()):
@@ -804,6 +829,8 @@ class RecipeManagerDialog(QDialog):
             active = self.store.get(new_active)
             if active is not None:
                 self.recipeActivated.emit(active)
+        elif was_active:
+            self.recipeDeactivated.emit()
 
     def _delete_all(self) -> None:
         """Delete every recipe (Ctrl+Alt + Delete). Confirmed; no-op on 'No'."""
@@ -814,15 +841,19 @@ class RecipeManagerDialog(QDialog):
             "Do you want to proceed with deleting all recipes?",
         ) != QMessageBox.Yes:
             return
+        had_active = self.store.active_name is not None
         self.store.recipes = []
         self.store.active_name = None
         self._mark_dirty()
         self._refresh_list()
+        if had_active:
+            self.recipeDeactivated.emit()
+
+    _NO_RECIPE_CHOICE = "(Use no recipe)"
 
     def _choose_active_after_delete(self) -> Optional[str]:
-        """The active recipe was deleted and 2+ remain: ask which becomes active.
-        Falls back to the first remaining if the user cancels, so there is always
-        an active recipe."""
+        """The active recipe was deleted and 2+ remain: ask which becomes active,
+        or none. Falls back to the first remaining if the user cancels."""
         names = self.store.names()
         if not names:
             return None
@@ -830,7 +861,9 @@ class RecipeManagerDialog(QDialog):
         name, ok = QInputDialog.getItem(
             self, "Select Active Recipe",
             "The active recipe was deleted.\nChoose the new active recipe:",
-            names, 0, False)
+            names + [self._NO_RECIPE_CHOICE], 0, False)
+        if ok and name == self._NO_RECIPE_CHOICE:
+            return None
         return name if (ok and name) else names[0]
 
     def _set_active(self) -> None:
@@ -843,6 +876,17 @@ class RecipeManagerDialog(QDialog):
         self._mark_dirty()
         self._refresh_list(select=self._current.name)
         self.recipeActivated.emit(self._current)
+
+    def _clear_active(self) -> None:
+        """Keep every recipe, but make none active."""
+        if self._drafting or self.store.active_name is None:
+            return
+        self.store.active_name = None
+        self._mark_dirty()
+        keep = self._current.name if self._current else None
+        self._refresh_list(select=keep)
+        self._update_buttons()
+        self.recipeDeactivated.emit()
 
     # ---- Draft / button-state helpers ------------------------------------ #
     def _confirm_discard_draft(self) -> bool:
@@ -868,6 +912,7 @@ class RecipeManagerDialog(QDialog):
         self.btn_dup.setEnabled(has_sel)
         self.btn_del.setEnabled(has_sel)
         self.btn_act.setEnabled(has_sel)
+        self.btn_none.setEnabled((not drafting) and self.store.active_name is not None)
 
     def _reset_subfolders(self) -> None:
         if not self._current:
@@ -941,6 +986,8 @@ class RecipeManagerDialog(QDialog):
                     restored = self.store.get(self.store.active_name)
                     if restored is not None:
                         self.recipeActivated.emit(restored)
+                elif not self.store.active_name and prev_active:
+                    self.recipeDeactivated.emit()
         event.accept()
 
 
