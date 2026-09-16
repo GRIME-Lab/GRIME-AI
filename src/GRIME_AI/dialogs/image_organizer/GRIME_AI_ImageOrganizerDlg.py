@@ -4,6 +4,7 @@ import traceback
 
 from datetime import datetime
 from GRIME_AI.utils.resource_utils import ui_path
+from GRIME_AI.utils import theme
 from pathlib import Path
 
 from PyQt5.uic import loadUi
@@ -71,7 +72,7 @@ class GRIME_AI_ImageOrganizerDlg(QDialog):
 
         # Seconds warning label (red) – ensure hidden initially
         if hasattr(self, "sec_warn_lbl"):
-            self.sec_warn_lbl.setStyleSheet("color:#B22222;")  # firebrick
+            theme.bind(self.sec_warn_lbl, "color:#B22222;", "color:#FF6B5E;")  # firebrick / light red
             self.sec_warn_lbl.setVisible(False)
 
         # Signals

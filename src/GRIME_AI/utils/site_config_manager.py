@@ -1090,6 +1090,15 @@ def _get_editor_class():
             "QPushButton:disabled {color: #b0b0b0; border-color: #d0d0d0;}"
         )
 
+    # Light/dark theme (optional when run standalone).
+    try:
+        from GRIME_AI.utils import theme as _theme
+    except Exception:
+        _theme = None
+
+    def _is_dark():
+        return bool(_theme and _theme.is_dark())
+
     # Rounded corners for the panel containers. Deliberately sets only borders,
     # radii, and title placement — no background or text colors — so the dialog
     # still follows the system palette under a dark theme.
@@ -1142,6 +1151,9 @@ def _get_editor_class():
             background: none;
         }
     """
+    _SCROLLBAR_CSS_DARK = (_SCROLLBAR_CSS
+                           .replace("background: #a6a6a6;", "background: #5A6B7A;")
+                           .replace("background: #cccccc;", "background: #2B3945;"))
 
     class SiteConfigEditor(QDialog):
         def __init__(self, path=None, parent=None):
@@ -1154,7 +1166,10 @@ def _get_editor_class():
             self._path = None
             self._widgets = {}
             self._last_scanned_root = None
+            self._status_color_key = "ok"
             self._build_ui()
+            if _theme is not None:
+                _theme.on_change(self._on_theme_changed, owner=self)
 
             start = path
             if start is None:
@@ -1175,7 +1190,10 @@ def _get_editor_class():
             outer = QVBoxLayout(self)
             top = QHBoxLayout()
             self._path_label = QLabel("No file loaded")
-            self._path_label.setStyleSheet("color: #555;")
+            if _theme is not None:
+                _theme.bind(self._path_label, "color: #555;", "color: #AEB6BF;")
+            else:
+                self._path_label.setStyleSheet("color: #555;")
             self._path_label.setWordWrap(True)
             btn_open = QPushButton("Open\u2026")
             btn_open.clicked.connect(self._on_open)
@@ -1213,7 +1231,10 @@ def _get_editor_class():
             scroll.setWidgetResizable(True)
             scroll.setWidget(host)
             scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
-            scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_CSS)
+            if _theme is not None:
+                _theme.bind(scroll.verticalScrollBar(), _SCROLLBAR_CSS, _SCROLLBAR_CSS_DARK)
+            else:
+                scroll.verticalScrollBar().setStyleSheet(_SCROLLBAR_CSS)
             self._params_scroll = scroll
 
             params_box = QGroupBox("Training Parameters")
@@ -1428,6 +1449,29 @@ def _get_editor_class():
             "red":        "red",
             "unreadable": "red",
         }
+        _FOLDER_COLORS_DARK = {
+            "gold":       "#DFE1E2",
+            "ok":         "#DFE1E2",
+            "yellow":     (230, 180, 60),
+            "red":        "#FF6B5E",
+            "unreadable": "#FF6B5E",
+        }
+        # label-status text colors: (light, dark)
+        _STATUS_COLORS = {
+            "ok":    ("gray", "#9DA9B5"),
+            "warn":  ("#b8860b", "#E0B040"),
+            "error": ("#c0392b", "#FF6B5E"),
+        }
+
+        def _set_status_color(self, key):
+            self._status_color_key = key
+            light, dark = self._STATUS_COLORS[key]
+            self._label_status.setStyleSheet(f"color: {dark if _is_dark() else light};")
+
+        def _on_theme_changed(self, _dark):
+            self._set_status_color(self._status_color_key)
+            if getattr(self, "_label_scan", None) is not None:
+                self._apply_folder_colors()
 
         def _apply_folder_colors(self):
             """Color the Selected tree against the canonical (first) dataset.
@@ -1448,10 +1492,15 @@ def _get_editor_class():
             child_font = QFont()
             child_font.setItalic(True)
 
+            dark = _is_dark()
+            folder_colors = self._FOLDER_COLORS_DARK if dark else self._FOLDER_COLORS
+            plain = QColor("#DFE1E2") if dark else QColor("black")
+            bad = QColor("#FF6B5E") if dark else QColor("red")
+
             for item in self._all_top_level(self._sel_tree):
                 name = item.data(0, Qt.UserRole) or item.text(0)
                 status = state.get(name, "ok")
-                spec = self._FOLDER_COLORS.get(status, "black")
+                spec = folder_colors.get(status, folder_colors["ok"])
                 color = QColor(*spec) if isinstance(spec, tuple) else QColor(spec)
 
                 item.setText(0, f"\u2605 {name}" if status == "gold" else name)
@@ -1461,7 +1510,7 @@ def _get_editor_class():
                 for j in range(item.childCount()):
                     child = item.child(j)
                     child.setFont(0, child_font)
-                    child.setForeground(0, QColor("black"))
+                    child.setForeground(0, plain)
                     if status == "gold":
                         continue
                     parsed = self._parse_child_label(child.text(0))
@@ -1470,7 +1519,7 @@ def _get_editor_class():
                     label_name, child_id = parsed
                     gold_id = gold_by_name.get(label_name)
                     if gold_id is not None and child_id != gold_id:
-                        child.setForeground(0, QColor("red"))
+                        child.setForeground(0, bad)
                         item.setExpanded(True)
 
         @staticmethod
@@ -1531,12 +1580,12 @@ def _get_editor_class():
             """Explain coverage gaps and id/name collisions under the combo."""
             if not selected:
                 self._label_status.setText("Select at least one folder to list its labels.")
-                self._label_status.setStyleSheet("color: gray;")
+                self._set_status_color("ok")
                 return
             if not labels:
                 self._label_status.setText(
                     "No categories found in the selected folders' annotation files.")
-                self._label_status.setStyleSheet("color: #c0392b;")
+                self._set_status_color("error")
                 return
 
             msgs, severity = [], "ok"
@@ -1575,9 +1624,8 @@ def _get_editor_class():
                 msgs.append("Conflicts: " + "; ".join(conflicts))
                 severity = "error"
 
-            colors = {"ok": "gray", "warn": "#b8860b", "error": "#c0392b"}
             self._label_status.setText("  ".join(msgs))
-            self._label_status.setStyleSheet(f"color: {colors[severity]};")
+            self._set_status_color(severity)
 
         def _on_label_changed(self, _index):
             # Selection changed within the existing list; no need to re-read disk.

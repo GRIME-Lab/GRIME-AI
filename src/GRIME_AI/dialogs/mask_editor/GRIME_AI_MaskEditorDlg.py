@@ -38,7 +38,7 @@ class GRIME_AI_MaskEditorDlg(QDialog):
 
         self.pushButton_AddMask.setStyleSheet('QPushButton {background-color: steelblue;}')
         self.pushButton_GenerateMask.setStyleSheet('QPushButton {background-color: steelblue;}')
-        self.pushButton_ResetMask.setStyleSheet('QPushButton {background-color: cyan;}')
+        self.pushButton_ResetMask.setStyleSheet('QPushButton {background-color: cyan; color: black;}')
 
         self.pushButton_AddMask.clicked.connect(self.pushButtonAddMaskClicked)
         self.pushButton_GenerateMask.clicked.connect(self.pushButtonGenerateMaskClicked)
