@@ -21,7 +21,7 @@ matplotlib.use("Qt5Agg")      # <<< FORCE Qt5Agg backend for PyQt5
 from GRIME_AI.utils.resource_utils import ui_path
 
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget
+from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget, QApplication
 from PyQt5.uic import loadUi
 
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
@@ -58,10 +58,18 @@ class ML_ImageProcessingDlg(QDialog):
         default_height = default_size.height()
 
         new_width = int(default_width * 1.5)  # 50% wider
-        new_height = default_height           # keep full height
+
+        # Height is derived from the laid-out content, not hardcoded: ask the
+        # dialog how tall it needs to be for everything to fit, then clamp to
+        # the available screen height (excludes the taskbar) so it can never
+        # run off the bottom of the monitor. Scales with DPI/font/added widgets.
+        self.adjustSize()
+        needed_height = self.sizeHint().height()
+        screen = QApplication.primaryScreen().availableGeometry()
+        new_height = max(default_height, min(needed_height, screen.height()))
 
         self.resize(new_width, new_height)
-        self.setMinimumSize(int(new_width * 0.7), int(new_height * 0.7))
+        self.setMinimumSize(int(new_width * 0.7), int(default_height * 0.7))
 
         print(f"Dialog resized: {default_width}x{default_height} → {new_width}x{new_height}")
 

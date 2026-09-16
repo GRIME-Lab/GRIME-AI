@@ -277,9 +277,17 @@ class GRIME_AI_Vegetation_Indices:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def compute_Excess_Green_Excess_Red(self, ExG, red_sum, green_sum):
+    def compute_Excess_Green_Excess_Red(self, red_sum, green_sum, blue_sum):
+        '''
+        ExGR = ExG - ExR, with ExG = 2g - r - b and ExR = 1.4r - g, where r, g, b are
+        chromatic coordinates (channel / (R + G + B)). (Meyer and Neto, 2008)
+        '''
         try:
-            ExGR = ExG - 1.4 * red_sum - green_sum
+            total = red_sum + green_sum + blue_sum
+            r = red_sum / total
+            g = green_sum / total
+            b = blue_sum / total
+            ExGR = ((2.0 * g) - r - b) - ((1.4 * r) - g)
         except ValueError:
             ExGR = -999.0
         return ExGR
@@ -495,17 +503,21 @@ class GRIME_AI_Vegetation_Indices:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def get_greenness(self, greenness, image):
+        # Reset so a failed computation never returns the previous image's value.
+        greenness.set_value(-999.0)
         try:
             myGRIME_AI_Utils = GRIME_AI_Utils()
             red, green, blue = myGRIME_AI_Utils.separateChannels(image)
             red_sum, green_sum, blue_sum = myGRIME_AI_Utils.sumChannels(red, green, blue)
+            # Plain floats: division by zero raises instead of silently producing inf/nan.
+            red_sum, green_sum, blue_sum = float(red_sum), float(green_sum), float(blue_sum)
 
             if greenness.get_name() == self.NDVI:
                 greenness.set_value(self.compute_NDVI(red_sum, green_sum, blue_sum))
                 return greenness
 
             if greenness.get_name() == self.ExG:
-                greenness.set_value(self.compute_Excess_Green(red_sum, green_sum, blue_sum))
+                greenness.set_value(self.compute_Excess_Green(green_sum, red_sum, blue_sum))
                 #greenness.set_value(self.compute_ExG(red_sum, green_sum, blue_sum))
                 return greenness
 
@@ -534,7 +546,7 @@ class GRIME_AI_Vegetation_Indices:
                 return greenness
 
             if greenness.get_name() == self.ExGR:
-                greenness.set_value(self.compute_Excess_Green_Excess_Red(green_sum, red_sum, green_sum))
+                greenness.set_value(self.compute_Excess_Green_Excess_Red(red_sum, green_sum, blue_sum))
                 return greenness
 
             if greenness.get_name() == self.ExR:
@@ -664,8 +676,13 @@ class GRIME_AI_Vegetation_Indices:
             if greenness.get_name() == self.WI:
                 greenness.set_value(self.compute_Woebbecke_Index(green_sum, blue_sum, red_sum))
                 return greenness
-        except ValueError:
+        except (ValueError, TypeError, ArithmeticError):
+            # ArithmeticError covers ZeroDivisionError (e.g. an all-black ROI).
+            greenness.set_value(-999.0)
             return greenness
+
+        # Unknown index name.
+        return greenness
 
 
 

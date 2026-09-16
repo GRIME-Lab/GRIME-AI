@@ -2538,6 +2538,50 @@ class SAM2Trainer:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def _save_metrics_csv(self, out_folder, lr):
+        """Write the per-epoch metric series (the same lists that feed the
+        plots) to a CSV in the graphs folder. Val-only metrics are aligned to
+        the validation epochs in self.epoch_list; train metrics are indexed by
+        their own position. Purely additive — does not touch training state."""
+        import csv as _csv
+
+        def _at(seq, i):
+            return seq[i] if seq is not None and i < len(seq) else ""
+
+        n = max(len(self.epoch_list or []),
+                len(self.loss_values or []),
+                len(self.val_loss_values or []))
+        path = os.path.join(
+            out_folder,
+            f"{self.formatted_time}_{self.site_name}_metrics_lr{lr:.5f}.csv")
+        try:
+            with open(path, "w", newline="") as f:
+                w = _csv.writer(f)
+                w.writerow([
+                    "epoch", "train_loss", "val_loss",
+                    "train_accuracy", "val_accuracy",
+                    "miou", "train_dice", "val_dice",
+                    "train_iou", "val_iou", "lr",
+                ])
+                for i in range(n):
+                    epoch = _at(self.epoch_list, i) or (i + 1)
+                    w.writerow([
+                        epoch,
+                        _at(self.loss_values, i),
+                        _at(self.val_loss_values, i),
+                        _at(self.train_accuracy_values, i),
+                        _at(self.val_accuracy_values, i),
+                        _at(self.miou_values, i),
+                        _at(getattr(self, "train_dice_values", None), i),
+                        _at(getattr(self, "val_dice_values", None), i),
+                        _at(getattr(self, "train_iou_values", None), i),
+                        _at(getattr(self, "val_iou_values", None), i),
+                        _at(getattr(self, "lr_values", None), i),
+                    ])
+            print(f"[metrics] wrote per-epoch CSV: {path}")
+        except Exception as e:
+            print(f"[metrics] could not write CSV: {e}")
+
     def _plot_training_graphs(self, lr: float):
         """
         Generate and save all training/validation plots for a given learning rate.
@@ -2691,6 +2735,11 @@ class SAM2Trainer:
         # ── PDF Diagnostic Report ──────────────────────────────────────────
         acc_png  = os.path.join(viz.graphs_folder, f"{self.formatted_time}_{self.site_name}_AccuracyCurves_lr{lr:.5f}.png")
         loss_png = os.path.join(viz.graphs_folder, f"{self.formatted_time}_{self.site_name}_LossCurves_lr{lr:.5f}.png")
+
+        # ── Numeric metrics CSV ────────────────────────────────────────────
+        # Same series that feed every per-epoch plot, written to disk so the
+        # curves can be reproduced/analyzed outside the app. Additive only.
+        self._save_metrics_csv(viz.graphs_folder, lr)
         graphs = [g for g in [acc_png, loss_png, cm_png, roc_png, pr_png,
                            f1_png, miou_png, dice_png, iou_png] if g and os.path.isfile(g)]
         viz.save_training_report(
