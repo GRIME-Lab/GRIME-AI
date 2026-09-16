@@ -20,6 +20,7 @@ except Exception:
 from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
 from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
+from GRIME_AI.utils import theme
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
 # Optional: if there is a training entry point, import it. Replace with the actual path/class.
@@ -257,6 +258,8 @@ class TrainingTab(QtWidgets.QWidget):
         self.original_folders = []
         self.categories_available = False
         self._folder_validation_state: Dict[str, str] = {}  # folder name -> 'ok' | 'red' | 'yellow'
+        # Re-color the folder list when light/dark mode is toggled.
+        theme.on_change(lambda _dark: self._apply_folder_colors(self._folder_validation_state), owner=self)
 
         # Detect optional labels list widget
         self._init_labels_widget_reference()
@@ -1885,12 +1888,16 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         """
         from PyQt5.QtGui import QColor, QFont
 
+        if theme.is_dark():
+            plain, bad, warn = QColor('#DFE1E2'), QColor('#FF6B5E'), QColor(230, 180, 60)
+        else:
+            plain, bad, warn = QColor('black'), QColor('red'), QColor(180, 120, 0)
         color_map = {
-            'gold':        QColor('black'),
-            'ok':          QColor('black'),
-            'yellow':      QColor(180, 120, 0),
-            'red':         QColor('red'),
-            'unreadable':  QColor('red'),
+            'gold':        plain,
+            'ok':          plain,
+            'yellow':      warn,
+            'red':         bad,
+            'unreadable':  bad,
         }
 
         # Build gold standard label lookup directly from gold parent's child nodes
@@ -1917,7 +1924,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             raw_name = parent_item.text(0)
             base_name = raw_name.lstrip('★ ')
             status = state.get(base_name, 'ok')
-            color = color_map.get(status, QColor('black'))
+            color = color_map.get(status, plain)
 
             # Apply color and ★ to parent node
             if status == 'gold':
@@ -1929,7 +1936,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
             for j in range(parent_item.childCount()):
                 child = parent_item.child(j)
                 child.setFont(0, child_normal_font)
-                child.setForeground(0, QColor('black'))
+                child.setForeground(0, plain)
 
                 if status == 'gold':
                     continue  # gold standard children always normal
@@ -1947,7 +1954,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
 
                 gold_id = gold_by_name.get(label_name)
                 if gold_id is not None and child_id != gold_id:
-                    child.setForeground(0, QColor('red'))
+                    child.setForeground(0, bad)
                     parent_item.setExpanded(True)
 
     # ------------------------------------------------------------------------
