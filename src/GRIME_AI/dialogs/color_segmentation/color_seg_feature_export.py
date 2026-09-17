@@ -47,6 +47,43 @@ def _roi_specs(roiList):
     return specs
 
 
+def load_image_mask(image_path, mask_spec, shape):
+    """Per-image mask: <image stem>_mask.<ext> in mask_spec['folder'].
+
+    mask_spec: {'name': column prefix, 'folder': mask folder, 'value': None or class index}
+      value None -> binary mask: every non-zero pixel is inside the region
+      value N    -> class-index mask: only pixels equal to N are inside
+
+    Returns (mask, reason). mask is a boolean array the same size as the image, or
+    None with a short reason when the mask is missing, the wrong size, or empty.
+    """
+    import os as _os
+    import cv2 as _cv2
+    stem = _os.path.splitext(_os.path.basename(image_path))[0]
+    path = None
+    for ext in ('.png', '.PNG', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp'):
+        candidate = _os.path.join(mask_spec['folder'], stem + '_mask' + ext)
+        if _os.path.isfile(candidate):
+            path = candidate
+            break
+    if path is None:
+        return None, f"no mask file '{stem}_mask.*'"
+
+    m = _cv2.imread(path, _cv2.IMREAD_UNCHANGED)
+    if m is None:
+        return None, f"could not read {_os.path.basename(path)}"
+    if m.ndim == 3:
+        m = _cv2.cvtColor(m[:, :, :3], _cv2.COLOR_BGR2GRAY)
+    if m.shape[:2] != tuple(shape[:2]):
+        return None, (f"mask is {m.shape[1]}x{m.shape[0]}, image is {shape[1]}x{shape[0]}")
+
+    value = mask_spec.get('value')
+    mask = (m == value) if value is not None else (m != 0)
+    if not mask.any():
+        return None, 'mask is empty'
+    return mask, None
+
+
 def _crop_roi(img, spec):
     """(patch, mask): the ROI bounding box and a boolean mask of the pixels inside the ROI.
     (None, None) if the ROI does not overlap the image."""
@@ -239,7 +276,8 @@ def _texture_labels(flags, texture_options):
     return [label for key, label in _TEXTURE_METHODS if opts.get(key)]
 
 
-def _region_layout(group, label, is_whole, nClusters, flags, greenness_names, texture_options):
+def _region_layout(group, label, is_whole, nClusters, flags, greenness_names, texture_options,
+                   is_mask=False):
     """Columns for one region in CSV order: Intensity, Entropy, texture, greenness, colors.
     Whole image: everything on the Whole Image sheet with plain names.
     ROI: ROI Features / ROI Texture / ROI Greenness / ROI Colors sheets, prefixed with the ROI name.
@@ -250,6 +288,10 @@ def _region_layout(group, label, is_whole, nClusters, flags, greenness_names, te
     s_grn = SHEET_WHOLE if is_whole else SHEET_GREENNESS
     s_col = SHEET_WHOLE if is_whole else SHEET_COLORS
     items = []
+    if is_mask:
+        # The masked area changes from image to image, so it is a feature in its own right.
+        items.append((group, s_feat, p + 'Area_px', 'Area_px'))
+        items.append((group, s_feat, p + 'Area_frac', 'Area_frac'))
     if flags.get('Intensity'):
         items.append((group, s_feat, p + 'Intensity', 'Intensity'))
     if flags.get('ShannonEntropy'):
@@ -265,7 +307,7 @@ def _region_layout(group, label, is_whole, nClusters, flags, greenness_names, te
     return items
 
 
-def _layout(nClusters, flags, greenness_names, texture_options, roi_specs):
+def _layout(nClusters, flags, greenness_names, texture_options, roi_specs, mask_spec=None):
     items = []
     if flags.get('wholeImage'):
         items += _region_layout('whole', WHOLE_LABEL, True, nClusters, flags, greenness_names, texture_options)
@@ -273,6 +315,9 @@ def _layout(nClusters, flags, greenness_names, texture_options, roi_specs):
         for i, spec in enumerate(roi_specs):
             items += _region_layout(f'roi{i}', spec['name'], False, spec['nClusters'], flags,
                                     greenness_names, texture_options)
+    if mask_spec:
+        items += _region_layout('mask', mask_spec['name'], False, nClusters, flags,
+                                greenness_names, texture_options, is_mask=True)
     return items
 
 
@@ -335,7 +380,8 @@ def _region_values(helper, color, rgb, gray, gray_tex, mask, nClusters, flags, g
 # ======================================================================================================================
 # Build one image's record.
 # ======================================================================================================================
-def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, texture_options, roi_specs):
+def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, texture_options, roi_specs,
+                       mask_spec=None):
     """Returns (csv_row, record). record = {'path', 'date', 'time', 'cells': [(group, sheet, column, value)]}."""
     import cv2 as _cv2
     from GRIME_AI.GRIME_AI_TimeStamp_Utils import GRIME_AI_TimeStamp_Utils
@@ -355,7 +401,26 @@ def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, te
     if flags.get('ROI') and roi_specs:
         values.update(helper.calculate_ROI_scalars(img, roi_specs, flags, greenness_list, texture_options))
 
-    layout = _layout(nClusters, flags, [g.get_name() for g in greenness_list], texture_options, roi_specs)
+    if mask_spec:
+        # One mask per image: features are measured only inside it.
+        mask, reason = load_image_mask(path, mask_spec, img.shape)
+        if mask is None:
+            print(f"[feature-export] {os.path.basename(path)}: {reason}; writing -999.")
+        else:
+            rgb = img[mask].reshape(-1, 1, 3)
+            gray = _cv2.cvtColor(rgb, _cv2.COLOR_RGB2GRAY)
+            gray_tex = _cv2.cvtColor(img, _cv2.COLOR_RGB2GRAY) if flags.get('Texture') else None
+            n_inside = int(mask.sum())
+            if n_inside < (4 * max(1, nClusters) if flags.get('HSV') else 1):
+                print(f"[feature-export] {os.path.basename(path)}: mask has {n_inside} pixel(s); writing -999.")
+            else:
+                vals = _region_values(helper, color, rgb, gray, gray_tex, mask, nClusters, flags,
+                                      greenness_list, texture_options)
+                vals['Area_px'] = float(n_inside)
+                vals['Area_frac'] = float(n_inside) / float(img.shape[0] * img.shape[1])
+                values['mask'] = vals
+
+    layout = _layout(nClusters, flags, [g.get_name() for g in greenness_list], texture_options, roi_specs, mask_spec)
     cells = []
     fields = []
     for group, sheet, col, key in layout:
@@ -374,7 +439,7 @@ def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, te
 # Also used by the serial fallback so both paths produce identical rows.
 # ======================================================================================================================
 def _compute_image_row(args):
-    (index, path, nClusters, flags, greenness_list, texture_options, roi_specs) = args
+    (index, path, nClusters, flags, greenness_list, texture_options, roi_specs, mask_spec) = args
     import os as _os
     from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
     from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
@@ -382,7 +447,7 @@ def _compute_image_row(args):
         return (index, None, None)
     try:
         row, record = _build_feature_row(ColorSegFeatureExport(), GRIME_AI_Color(), path, nClusters,
-                                         flags, greenness_list, texture_options, roi_specs)
+                                         flags, greenness_list, texture_options, roi_specs, mask_spec)
         return (index, row, record)
     except Exception as e:
         print(f'[feature-export worker] {path}: {e}')
@@ -484,11 +549,12 @@ class ColorSegFeatureExport:
     # ==================================================================================================================
     #
     # ==================================================================================================================
-    def ExtractFeatures(self, imagesList, imageFileFolder, roiList, colorSegmentationParams, greenness_index_list, texture_options=None):
+    def ExtractFeatures(self, imagesList, imageFileFolder, roiList, colorSegmentationParams, greenness_index_list, texture_options=None, mask_spec=None):
 
-        # Region Select: Whole Image and/or ROI. Nothing to extract if neither applies.
+        # Region Select: Whole Image and/or ROI (fixed ROIs or a per-image mask).
+        # Nothing to extract if none applies.
         do_whole = bool(colorSegmentationParams.wholeImage)
-        do_roi = bool(colorSegmentationParams.ROI) and len(roiList) > 0
+        do_roi = bool(colorSegmentationParams.ROI) and (len(roiList) > 0 or bool(mask_spec))
         if not (do_whole or do_roi):
             print('[feature-export] Nothing to extract: select Whole Image, '
                   'or select ROI and add at least one ROI.')
@@ -590,7 +656,7 @@ class ColorSegFeatureExport:
             '''
 
 
-            self.extract_ROI_features(csvFile, xlsFile, videoFileList, roiList, colorSegmentationParams, greenness_index_list, progressBarIndex, progressBar, texture_options=texture_options)
+            self.extract_ROI_features(csvFile, xlsFile, videoFileList, roiList, colorSegmentationParams, greenness_index_list, progressBarIndex, progressBar, texture_options=texture_options, mask_spec=mask_spec)
 
 
             csvFile.close()
@@ -602,18 +668,19 @@ class ColorSegFeatureExport:
     # ==================================================================================================================
     #
     # ==================================================================================================================
-    def build_scalar_header(self, nClusters, roiList, colorSegmentationParams, greenness_index_list, texture_options=None):
+    def build_scalar_header(self, nClusters, roiList, colorSegmentationParams, greenness_index_list, texture_options=None, mask_spec=None):
         """CSV header, built from the same layout as the data rows."""
         flags = _flags_from_params(colorSegmentationParams)
         specs = _roi_specs(roiList) if flags['ROI'] else []
-        layout = _layout(nClusters, flags, [g.get_name() for g in greenness_index_list], texture_options, specs)
+        layout = _layout(nClusters, flags, [g.get_name() for g in greenness_index_list], texture_options, specs,
+                         mask_spec if flags['ROI'] else None)
         return _csv_line('Image, Date (ISO), Time (ISO)', [(grp, col) for grp, _, col, _ in layout])
 
 
     # ==================================================================================================================
     #
     # ==================================================================================================================
-    def extract_ROI_features(self, csvFile, xlsFile, videoFileList, roiList, colorSegmentationParams, greenness_index_list, progressBarIndex, progressBar, texture_options=None):
+    def extract_ROI_features(self, csvFile, xlsFile, videoFileList, roiList, colorSegmentationParams, greenness_index_list, progressBarIndex, progressBar, texture_options=None, mask_spec=None):
 
         myGRIMe_Color = GRIME_AI_Color()
 
@@ -627,15 +694,16 @@ class ColorSegFeatureExport:
         nClusters = colorSegmentationParams.numColorClusters
 
         texture_options = texture_options or {}
-        header = self.build_scalar_header(nClusters, roiList, colorSegmentationParams, greenness_index_list, texture_options)
+        header = self.build_scalar_header(nClusters, roiList, colorSegmentationParams, greenness_index_list, texture_options, mask_spec)
 
         # WRITE THE HEADER TO THE CSV
         csvFile.write(header)
 
         flags = _flags_from_params(colorSegmentationParams)
         roi_specs = _roi_specs(roiList) if flags['ROI'] else []
+        mask_spec = mask_spec if flags['ROI'] else None
         greenness_list = list(greenness_index_list)
-        tasks = [(i, fname.fullPathAndFilename, nClusters, flags, greenness_list, texture_options, roi_specs)
+        tasks = [(i, fname.fullPathAndFilename, nClusters, flags, greenness_list, texture_options, roi_specs, mask_spec)
                  for i, fname in enumerate(videoFileList)]
 
         # ------------------------------------------------------------------
@@ -649,7 +717,8 @@ class ColorSegFeatureExport:
         workers = max(1, (_os.cpu_count() or 2) - 1)
         chunk = max(1, len(tasks) // (workers * 4))
         print(f'[feature-export] PARALLEL: {workers} workers, {len(tasks)} images, '
-              f'whole image {"on" if flags["wholeImage"] else "off"}, {len(roi_specs)} ROIs')
+              f'whole image {"on" if flags["wholeImage"] else "off"}, {len(roi_specs)} ROIs'
+              + (f", per-image mask '{mask_spec['name']}'" if mask_spec else ''))
         done = 0
         parallel_ok = False
         try:

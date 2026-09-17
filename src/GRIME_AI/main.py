@@ -5907,6 +5907,51 @@ def my_main():
         help='(meanshift, manual) Fixed bandwidth value (default: 1.0).'
     )
 
+    # Color Segmentation parser
+    colorseg_parser = subparsers.add_parser(
+        'colorseg',
+        help='Run Color Segmentation feature extraction (headless) and write the CSV/XLSX feature file'
+    )
+    colorseg_parser.add_argument(
+        '--folder', required=True,
+        help='Folder containing the images to analyze.'
+    )
+    colorseg_parser.add_argument(
+        '--recursive', action='store_true',
+        help='Include images in sub-folders.'
+    )
+    colorseg_parser.add_argument(
+        '--rois', required=False, default=None,
+        help='ROI_Masks (COCO 1.0) JSON file holding the ROIs. Required unless --region whole.'
+    )
+    colorseg_parser.add_argument(
+        '--region', required=False, default=None, choices=['whole', 'roi', 'both'],
+        help='Which regions to measure (default: both when --rois is given, otherwise whole).'
+    )
+    colorseg_parser.add_argument(
+        '--features', required=False, default='intensity,entropy,hsv',
+        help="Comma-separated list of intensity, entropy, hsv. 'all' or 'none' also accepted "
+             "(default: intensity,entropy,hsv)."
+    )
+    colorseg_parser.add_argument(
+        '--texture', required=False, default='none',
+        help="Comma-separated list of glcm, gabor, lbp, wavelet, fourier. 'all' or 'none' also "
+             "accepted (default: none)."
+    )
+    colorseg_parser.add_argument(
+        '--greenness', required=False, default='all',
+        help="Comma-separated list of gcc, gli, ndvi, exg, rgi. 'all' or 'none' also accepted "
+             "(default: all)."
+    )
+    colorseg_parser.add_argument(
+        '--clusters', required=False, type=int, default=4,
+        help='Number of dominant HSV color clusters (default: 4).'
+    )
+    colorseg_parser.add_argument(
+        '--output', required=False, default=None,
+        help='Output folder for the CSV/XLSX feature files (default: --folder).'
+    )
+
     # Custom help handling
     if '-h' in sys.argv or '--help' in sys.argv:
         print("Global Help: CLI for GRIME AI")
@@ -5919,6 +5964,8 @@ def my_main():
         segment_parser.print_help()  # Help for segment subparser
         print("\nHelp for 'roi' command:")
         roi_parser.print_help()  # Help for roi subparser
+        print("\nHelp for 'colorseg' command:")
+        colorseg_parser.print_help()  # Help for colorseg subparser
         sys.exit(0)  # Exit after displaying help
 
     # API key arguments (session-only; not written to api_keys.ini)
@@ -6038,6 +6085,124 @@ def run_cli(args):
         compositeSlices.create_composite_image(filenames, args.folder+'\compositeSlices')
 
         print("Composite slice complete!")
+
+    elif args.command == 'colorseg':
+        # Headless Color Segmentation: same feature extraction as the dialog's
+        # "Build Feature File", with ROIs read from an ROI_Masks (COCO) file.
+        import cv2
+        from PyQt5.QtCore import QRect, QPoint
+
+        from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
+        from GRIME_AI.vegetation_indices import GRIME_AI_Vegetation_Indices, GreennessIndex
+        from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
+        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import GRIME_AI_roiData, ROIShape
+
+        def _csv_option(value, valid, label):
+            """Parse a comma-separated option, allowing 'all' and 'none'."""
+            items = [v.strip().lower() for v in (value or '').split(',') if v.strip()]
+            if items == ['all']:
+                return set(valid)
+            if items == ['none'] or not items:
+                return set()
+            bad = [v for v in items if v not in valid]
+            if bad:
+                print(f"[ERROR] Unknown {label}: {', '.join(bad)}. Valid: {', '.join(valid)}", file=sys.stderr)
+                sys.exit(1)
+            return set(items)
+
+        folder = args.folder
+        if not os.path.isdir(folder):
+            print(f"[ERROR] Folder not found: {folder}", file=sys.stderr)
+            sys.exit(1)
+
+        output_folder = args.output if args.output else folder
+        os.makedirs(output_folder, exist_ok=True)
+
+        images = cli_fetchLocalImageList(folder, args.recursive)
+        if not images:
+            print(f"[ERROR] No images found in: {folder}", file=sys.stderr)
+            sys.exit(1)
+
+        region = args.region or ('both' if args.rois else 'whole')
+        if region in ('roi', 'both') and not args.rois:
+            print("[ERROR] --rois is required unless --region whole.", file=sys.stderr)
+            sys.exit(1)
+
+        features = _csv_option(args.features, ('intensity', 'entropy', 'hsv'), 'feature')
+        texture = _csv_option(args.texture, ('glcm', 'gabor', 'lbp', 'wavelet', 'fourier'), 'texture method')
+        greenness = _csv_option(args.greenness, ('gcc', 'gli', 'ndvi', 'exg', 'rgi'), 'greenness index')
+
+        params = colorSegmentationParamsClass()
+        params.Intensity = 'intensity' in features
+        params.ShannonEntropy = 'entropy' in features
+        params.HSV = 'hsv' in features
+        params.Texture = bool(texture)
+        params.numColorClusters = args.clusters
+        params.wholeImage = region in ('whole', 'both')
+        params.ROI = region in ('roi', 'both')
+        params.GCC = 'gcc' in greenness
+        params.GLI = 'gli' in greenness
+        params.NDVI = 'ndvi' in greenness
+        params.ExG = 'exg' in greenness
+        params.RGI = 'rgi' in greenness
+
+        # Order here sets the column order, matching the dialog.
+        greenness_index_list = []
+        for key, index in (('gcc', GRIME_AI_Vegetation_Indices.GCC),
+                           ('gli', GRIME_AI_Vegetation_Indices.GLI),
+                           ('ndvi', GRIME_AI_Vegetation_Indices.NDVI),
+                           ('exg', GRIME_AI_Vegetation_Indices.ExG),
+                           ('rgi', GRIME_AI_Vegetation_Indices.RGI)):
+            if key in greenness:
+                greenness_index_list.append(GreennessIndex(index))
+
+        texture_options = {m: (m in texture) for m in ('glcm', 'gabor', 'lbp', 'wavelet', 'fourier')}
+        texture_options['enabled'] = bool(texture)
+
+        # ------------------------------------------------------------------
+        # ROIs from an ROI_Masks (COCO 1.0) file, as exported by the dialog.
+        # ------------------------------------------------------------------
+        roiList = []
+        if params.ROI:
+            try:
+                roi_data = load_roi_masks(args.rois)
+            except Exception as e:
+                print(f"[ERROR] Could not read ROI file: {e}", file=sys.stderr)
+                sys.exit(1)
+
+            first = cv2.imread(images[0].fullPathAndFilename)
+            if first is not None and roi_data['width'] and roi_data['height']:
+                if (roi_data['width'], roi_data['height']) != (first.shape[1], first.shape[0]):
+                    print(f"[WARN] The ROI file was made for {roi_data['width']} x {roi_data['height']} "
+                          f"images but the first image is {first.shape[1]} x {first.shape[0]}. "
+                          f"ROI coordinates may not line up.")
+
+            shapes = {'rectangle': ROIShape.RECTANGLE, 'polygon': ROIShape.POLYGON, 'freeform': ROIShape.FREEFORM}
+            for r in roi_data['rois']:
+                roiObj = GRIME_AI_roiData()
+                roiObj.setROIName(r['name'])
+                roiObj.setROIShape(shapes.get(r['shape'], ROIShape.POLYGON))
+                roiObj.setNumColorClusters(args.clusters)
+                x, y, w, h = r['bbox']
+                roiObj.setImageROI(QRect(x, y, w, h))
+                if roiObj.getROIShape() != ROIShape.RECTANGLE:
+                    roiObj.setImagePolygon([QPoint(px, py) for (px, py) in r['polygon']])
+                roiList.append(roiObj)
+
+            print(f"[INFO] Loaded {len(roiList)} ROI(s) from {args.rois}: "
+                  f"{', '.join(r['name'] for r in roi_data['rois'])}")
+            if roi_data['skipped']:
+                print(f"[WARN] Skipped {roi_data['skipped']} annotation(s) that are not polygons or boxes.")
+
+        print(f"[INFO] Color Segmentation: {len(images)} image(s), region={region}, "
+              f"clusters={args.clusters}, features={sorted(features) or ['none']}, "
+              f"texture={sorted(texture) or ['none']}, greenness={sorted(greenness) or ['none']}")
+
+        ColorSegFeatureExport().ExtractFeatures(images, output_folder, roiList, params,
+                                                greenness_index_list, texture_options=texture_options)
+
+        print('Color segmentation feature extraction complete!')
 
     elif args.command == "coco":
         # Import your CocoGenerator class from coco_generator.py
