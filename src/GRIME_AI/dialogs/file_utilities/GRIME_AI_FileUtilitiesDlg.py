@@ -106,7 +106,7 @@ class GRIME_AI_FileUtilitiesDlg(QDialog):
         image_folder = JsonEditor().getValue("Local_Image_Folder")
         self.setImageFolderPath(image_folder)
 
-        self.buttonBox.setStyleSheet('QPushButton {background-color: lightblue; color: white;}')
+        self.buttonBox.setStyleSheet('QPushButton {background-color: lightblue; color: black;}')
 
         self.pushButton_create_composite_slice.clicked.connect(self.pushButton_create_composite_slice_clicked)
         self.pushButton_create_composite_slice.setStyleSheet('QPushButton {background-color: steelblue; color: white;}')

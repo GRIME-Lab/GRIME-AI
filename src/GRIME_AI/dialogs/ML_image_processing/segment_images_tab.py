@@ -511,35 +511,35 @@ QPushButton:disabled {
         # in both light and dark mode.
 
         GROUPBOX_LIGHT = """
-QGroupBox {{
+QGroupBox {
     border: 1px solid #aaa;
     border-radius: 6px;
     margin-top: 18px;
     padding-top: 6px;
-}}
-QGroupBox::title {{
+}
+QGroupBox::title {
     subcontrol-origin: margin;
     subcontrol-position: top left;
     left: 10px;
     padding: 0 6px;
     background-color: palette(window);
     color: palette(windowtext);
-}}
-QGroupBox QCheckBox, QGroupBox QRadioButton, QGroupBox QLineEdit, QGroupBox QLabel {{
+}
+QGroupBox QCheckBox, QGroupBox QRadioButton, QGroupBox QLineEdit, QGroupBox QLabel {
     font-weight: normal;
-}}
+}
 """
         LISTWIDGET_LIGHT = """
-QListWidget {{
+QListWidget {
     border: 1px solid #aaa;
     border-radius: 6px;
-}}
+}
 """
         TABLEWIDGET_LIGHT = """
-QTableWidget {{
+QTableWidget {
     border: 1px solid #aaa;
     border-radius: 6px;
-}}
+}
 """
         LINEEDIT_LIGHT = """
 QLineEdit {
@@ -559,6 +559,8 @@ QLineEdit:focus {
             tw.setStyleSheet(TABLEWIDGET_LIGHT)
         self.lineEdit_segmentation_model_file.setStyleSheet(LINEEDIT_LIGHT)
         self.lineEdit_output_folder.setStyleSheet(LINEEDIT_LIGHT)
+        # kept so switching back from dark mode restores exactly these
+        self._theme_light_css = (GROUPBOX_LIGHT, LISTWIDGET_LIGHT, TABLEWIDGET_LIGHT, LINEEDIT_LIGHT)
 
         # Force non-bold weight on checkboxes, radios, and line edits. Applying a
         # QGroupBox stylesheet re-resolves child fonts and can render these bold
@@ -580,6 +582,11 @@ QLineEdit:focus {
 
         # ── Dark mode support ─────────────────────────────────────────────────
         self._apply_dark_mode_if_active()
+        try:
+            from GRIME_AI.utils import theme as _theme
+            _theme.on_change(self._apply_dark_mode_if_active, owner=self)
+        except Exception:
+            pass
 
         # ── Splitter initial sizes (left panel gets most space) ───────────────
         try:
@@ -646,13 +653,20 @@ QLineEdit:focus {
             pass
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _apply_dark_mode_if_active(self):
-        """Apply a dark palette and per-widget dark stylesheet if in dark mode."""
+    def _apply_dark_mode_if_active(self, _dark=None):
+        """Apply a dark palette and per-widget dark stylesheet if in dark mode;
+        otherwise restore the light styles. Re-run on every theme toggle."""
         try:
             app_palette = self.palette()
             window_color = app_palette.color(QPalette.Window)
-            is_dark = window_color.lightness() < 128
+            try:
+                # qdarkstyle does not change the palette; the theme module knows.
+                from GRIME_AI.utils import theme as _theme
+                is_dark = _theme.is_dark()
+            except Exception:
+                is_dark = window_color.lightness() < 128
             if is_dark:
+                self._dark_theme_applied = True
                 dark = QPalette()
                 dark.setColor(QPalette.Window,          QColor(45,  45,  45))
                 dark.setColor(QPalette.WindowText,      QColor(220, 220, 220))
@@ -669,8 +683,9 @@ QLineEdit:focus {
                 self.setPalette(dark)
 
                 # Detect the actual window background from qdarkstyle's palette
-                # so the title background matches exactly.
-                bg = app_palette.color(QPalette.Window).name()
+                # so the title background matches exactly (qdarkstyle's default
+                # when the palette has not been updated).
+                bg = window_color.name() if window_color.lightness() < 128 else "#19232D"
 
                 GROUPBOX_DARK = f"""
 QGroupBox {{
@@ -725,6 +740,28 @@ QLineEdit:focus {
                     tw.setStyleSheet(TABLEWIDGET_DARK)
                 self.lineEdit_segmentation_model_file.setStyleSheet(LINEEDIT_DARK)
                 self.lineEdit_output_folder.setStyleSheet(LINEEDIT_DARK)
+            elif getattr(self, "_dark_theme_applied", False):
+                # switched back to light: undo the dark palette and styles
+                # (the application palette is never changed by qdarkstyle)
+                self._dark_theme_applied = False
+                self.setPalette(QtWidgets.QApplication.palette())
+                gb_css, lw_css, tw_css, le_css = self._theme_light_css
+                for gb in self.findChildren(QtWidgets.QGroupBox):
+                    gb.setStyleSheet(gb_css)
+                for lw in self.findChildren(QtWidgets.QListWidget):
+                    lw.setStyleSheet(lw_css)
+                for tw in self.findChildren(QtWidgets.QTableWidget):
+                    tw.setStyleSheet(tw_css)
+                self.lineEdit_segmentation_model_file.setStyleSheet(le_css)
+                self.lineEdit_output_folder.setStyleSheet(le_css)
+            # Re-applying style sheets can re-resolve fonts to bold; keep these normal.
+            for _w in (self.findChildren(QtWidgets.QCheckBox)
+                       + self.findChildren(QtWidgets.QRadioButton)
+                       + self.findChildren(QtWidgets.QLineEdit)):
+                _f = _w.font()
+                _f.setBold(False)
+                _f.setWeight(QFont.Normal)
+                _w.setFont(_f)
         except Exception:
             pass
 

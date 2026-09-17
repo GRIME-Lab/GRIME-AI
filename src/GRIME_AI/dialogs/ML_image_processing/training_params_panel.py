@@ -23,6 +23,7 @@ weights) intentionally stay Advanced-only to keep the guided path simple.
 
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import Qt
+from GRIME_AI.utils import theme
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QLabel, QLineEdit,
     QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget,
@@ -342,10 +343,10 @@ class GuidedTrainingParamsPanel(QWidget):
             ok, name = False, None
         if ok:
             lbl = QLabel(f"GPU: {name}  \u2713")
-            lbl.setStyleSheet("color: green; font-size: 8pt;")
+            theme.bind(lbl, "color: green; font-size: 8pt;", "color: #6CC070; font-size: 8pt;")
         else:
             lbl = QLabel("GPU: none detected  \u2717  (training requires a GPU)")
-            lbl.setStyleSheet("color: darkred; font-size: 8pt;")
+            theme.bind(lbl, "color: darkred; font-size: 8pt;", "color: #FF7B72; font-size: 8pt;")
         lay.addWidget(lbl)
         lay.addStretch()
         return w
@@ -362,7 +363,7 @@ class GuidedTrainingParamsPanel(QWidget):
 
         blurb = QLabel(SECTION_BLURBS[blurb_key])
         blurb.setWordWrap(True)
-        blurb.setStyleSheet("color: #444; font-size: 8pt;")
+        theme.bind(blurb, "color: #444; font-size: 8pt;", "color: #C9CED4; font-size: 8pt;")
         lay.addWidget(blurb)
 
         grid = QGridLayout()

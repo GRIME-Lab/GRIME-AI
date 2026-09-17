@@ -8,6 +8,7 @@
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
 from GRIME_AI.utils.resource_utils import ui_path
+from GRIME_AI.utils import theme
 from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
 
 from PyQt5.QtCore import pyqtSignal, Qt
@@ -54,6 +55,9 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
         self.setWindowFlags(Qt.WindowStaysOnTopHint)
 
         loadUi(ui_path("color_segmentation/QDialog_ColorSegmentation.ui"), self)
+
+        # Light-mode styles come from the .ui; these are their dark-mode versions.
+        self._bind_theme()
 
 
         # ------------------------------------------------------------------
@@ -103,6 +107,54 @@ class GRIME_AI_ColorSegmentationDlg(QDialog):
         # Size to the fully-built, settings-loaded content.
         self.adjustSize()
         self.setMinimumSize(self.sizeHint())
+
+    # ------------------------------------------------------------------
+    # DARK MODE
+    # ------------------------------------------------------------------
+    _DARK_SHAPE_BUTTON = (
+        "QPushButton { border: 1px solid #6B7680; border-radius: 6px; padding: 3px 8px; } "
+        "QPushButton:checked { border: 2px solid #6FA8DC; color: #8FC1EC; font-weight: 500; "
+        "background-color: #24394D; }")
+    _DARK_GHOST_BUTTON = (
+        "QPushButton { background: transparent; color: #8FC1EC; border: 1px solid #6FA8DC; "
+        "border-radius: 8px; padding: 6px 12px; } "
+        "QPushButton:hover { background: rgba(111,168,220,0.15); } "
+        "QPushButton:pressed { background: rgba(111,168,220,0.25); } "
+        "QPushButton:disabled { color: #5A6B7A; border-color: #455564; }")
+    # (fill, border, title) for each feature group in dark mode
+    _DARK_GROUPS = {
+        "groupBox_15":      ("#0E2A44", "#378ADD", "#9CC7F0"),   # Feature Select
+        "groupBox_14":      ("#221F4D", "#7F77DD", "#C3BEF5"),   # Region Select
+        "groupBox_Texture": ("#3A2708", "#EF9F27", "#F5C27A"),   # Texture Methods
+        "groupBox_16":      ("#1E3310", "#7AAE3E", "#B7DC8C"),   # Greenness
+    }
+
+    def _bind_theme(self):
+        theme.bind_ui(self.label_ShapeHeading, "color: #9DA9B5; font-weight: 500;")
+        for b in (self.radioButton_ROIShapeRectangle, self.radioButton_ROIShapePolygon,
+                  self.radioButton_ROIShapeFreeForm):
+            theme.bind_ui(b, self._DARK_SHAPE_BUTTON)
+        theme.bind_ui(self.pushButtonAddROI,
+                      "QPushButton { background: transparent; border: 1px solid #6FA8DC; color: #8FC1EC; "
+                      "border-radius: 5px; padding: 0px 8px; } "
+                      "QPushButton:hover { background: rgba(111,168,220,0.15); } "
+                      "QPushButton:pressed { background: rgba(111,168,220,0.25); }")
+        theme.bind_ui(self.pushButton_deleteAllROIs,
+                      "QPushButton { background: transparent; border: 1px solid #FF6B5E; color: #FF6B5E; "
+                      "border-radius: 5px; padding: 0px 8px; } "
+                      "QPushButton:hover { background: rgba(255,107,94,0.12); }")
+        theme.bind_ui(self.pushButton_ExportROIMasks, self._DARK_GHOST_BUTTON)
+        theme.bind_ui(self.pushButton_ImportROIMasks, self._DARK_GHOST_BUTTON)
+        for name, (fill, border, title) in self._DARK_GROUPS.items():
+            box = getattr(self, name)
+            theme.bind_ui(box, (
+                f"QGroupBox#{name} {{ background-color: {fill}; border: 1px solid {border}; "
+                f"border-radius: 4px; margin-top: 10px; padding-top: 6px; }} "
+                f"QGroupBox#{name}::title {{ subcontrol-origin: margin; subcontrol-position: top left; "
+                f"left: 8px; padding: 0px 3px; color: {title}; background-color: {fill}; }} "
+                f"QGroupBox#{name}::title:disabled {{ color: gray; }} "
+                # qdarkstyle paints check boxes with the window color; let the group fill show through
+                f"QGroupBox#{name} QCheckBox {{ background-color: transparent; }}"))
 
     # ------------------------------------------------------------------
     def get_texture_options(self) -> dict:

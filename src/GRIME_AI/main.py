@@ -645,17 +645,8 @@ class MainWindow(QMainWindow):
                 print("Warning: NEON_labelLatestImage is not an instance of GRIME_AI_QLabel.")
 
         # Set stylesheet for the tabs to change color when a tab is selected.
-        self.tabWidget.setStyleSheet("""
-            QTabBar::tab {
-                background-color: white;
-                color: black;
-                font-size: 10pt;
-            }
-            QTabBar::tab:selected {
-                background-color: steelblue;
-                color: white;
-            }
-        """)
+        # Theme-aware: re-applied whenever light/dark mode is toggled.
+        self._apply_tab_style()
 
 
         # ------------------------------------------------------------------------------------------------------------------
@@ -1078,19 +1069,71 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     #
     # ------------------------------------------------------------------------------------------------------------------
+    def _apply_tab_style(self):
+        """Main tab bar colors. Light: white tabs, black text. Dark: dark tabs,
+        white text, white border. Selected tab is steelblue in both."""
+        if getattr(self, "_is_dark_mode", False):
+            self.tabWidget.setStyleSheet("""
+                QTabBar::tab {
+                    background-color: #19232D;
+                    color: white;
+                    border: 1px solid white;
+                    padding: 3px 10px;
+                    margin-right: 2px;
+                    font-size: 10pt;
+                }
+                QTabBar::tab:selected {
+                    background-color: steelblue;
+                    color: white;
+                }
+                QTabBar::tab:hover:!selected {
+                    background-color: #32414B;
+                }
+            """)
+        else:
+            self.tabWidget.setStyleSheet("""
+                QTabBar::tab {
+                    background-color: white;
+                    color: black;
+                    font-size: 10pt;
+                }
+                QTabBar::tab:selected {
+                    background-color: steelblue;
+                    color: white;
+                }
+            """)
+
     def _toggle_dark_mode(self):
-        self._is_dark_mode = not self._is_dark_mode
         app = QApplication.instance()
-        if self._is_dark_mode:
+        if not self._is_dark_mode:
+            # Switch to dark only if the dark theme actually loads, so the tab
+            # colors and the rest of the window can never disagree.
             try:
                 import qdarkstyle
-                app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api='pyqt5'))
-            except ImportError:
-                pass
+                sheet = qdarkstyle.load_stylesheet(qt_api='pyqt5')
+            except Exception as e:
+                print(f"[ERROR] Dark mode unavailable: {e} (interpreter: {sys.executable})")
+                QMessageBox.warning(self, "Dark Mode",
+                                    f"Dark mode could not be loaded:\n{e}\n\n"
+                                    f"Python interpreter:\n{sys.executable}")
+                return
+            app.setStyleSheet(sheet)
+            self._is_dark_mode = True
             self._action_toggle_theme.setText("Light Mode")
         else:
             app.setStyleSheet("")
+            self._is_dark_mode = False
             self._action_toggle_theme.setText("Dark Mode")
+        try:
+            self._apply_tab_style()
+        except Exception as e:
+            print(f"[WARN] Tab style not applied: {e}")
+        # Let dialogs and panels switch their own colors.
+        try:
+            from GRIME_AI.utils import theme
+            theme.set_dark(self._is_dark_mode)
+        except Exception as e:
+            print(f"[WARN] Theme change not broadcast: {e}")
 
     def _show_about_dialog(self):
         try:
@@ -3475,6 +3518,7 @@ class MainWindow(QMainWindow):
             from GRIME_AI.recipe_manager import RecipeManagerDialog
             dlg = RecipeManagerDialog(self._get_recipe_store(), self, dark_mode=self._is_dark_mode)
             dlg.recipeActivated.connect(self.apply_recipe)
+            dlg.recipeDeactivated.connect(self.clear_recipe)
             dlg.exec_()
         except Exception as e:
             print(f"[ERROR] Failed to open Recipe Manager: {e}")
@@ -3558,6 +3602,27 @@ class MainWindow(QMainWindow):
     def on_training_images_committed(self, new_path):
         """ML training-images folder was changed by the user (Training tab)."""
         self._reconcile_folder_with_recipe(new_path, "ml_images", "training images")
+
+    # JSON entries that exist only because a recipe wrote them. With no recipe
+    # active they are cleared, so outputs fall back to the default folders.
+    # Image, data, download and ML folders are kept as the user's normal settings.
+    _RECIPE_ONLY_KEYS = ("Composite_Slices_Folder", "Videos_Folder", "GIFs_Folder", "Recipe_Site_Root")
+
+    def clear_recipe(self):
+        """No recipe is active (the recipes themselves are kept): stop applying
+        recipe folders and never prompt about recipes on folder changes."""
+        try:
+            self._last_prompt_paths = {}
+            for key in self._RECIPE_ONLY_KEYS:
+                JsonEditor().update_json_entry(key, "")
+            try:
+                self.statusBar().showMessage("No recipe active. Using the normal folder settings.", 5000)
+            except Exception:
+                pass
+            print("[INFO] Recipe cleared: no recipe active.")
+        except Exception as e:
+            print(f"[ERROR] Failed to clear recipe: {e}")
+            traceback.print_exc()
 
     def apply_recipe(self, recipe):
         """Push an activated recipe's folder paths into the live UI and JSON

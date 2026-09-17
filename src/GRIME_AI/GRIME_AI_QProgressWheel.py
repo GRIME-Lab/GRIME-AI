@@ -108,7 +108,16 @@ class QProgressWheel(QWidget):
 
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_NoSystemBackground, True)
-        self.setStyleSheet("background-color: white;")
+        # qdarkstyle does not change the palette, so pick the colors explicitly.
+        try:
+            from GRIME_AI.utils import theme
+            _dark = theme.is_dark()
+        except Exception:
+            _dark = False
+        if _dark:
+            self.setStyleSheet("background-color: #19232D; color: #DFE1E2;")
+        else:
+            self.setStyleSheet("background-color: white;")
 
         if title:
             self.setWindowTitle(title)
