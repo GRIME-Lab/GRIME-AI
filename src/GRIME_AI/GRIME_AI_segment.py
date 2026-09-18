@@ -159,7 +159,7 @@ def run_sam2(args, device, category, progressBar, image_list=None):
         pil_image = Image.open(image_path).convert("RGB")
         image_array = np.array(pil_image)
 
-        mask, prob_map, score = engine.predict_with_centroids(
+        mask, score, logits = engine.predict_with_centroids(
             predictor, image_array, category_id=args.category_id
         )
 
@@ -169,6 +169,11 @@ def run_sam2(args, device, category, progressBar, image_list=None):
 
         score = float(np.asarray(score).flat[0])
         print(f"[SAM2] Score: {score:.4f}")
+
+        import cv2
+        prob_map = cv2.resize(np.asarray(logits, dtype=np.float32),
+                              (image_array.shape[1], image_array.shape[0]),
+                              interpolation=cv2.INTER_LINEAR)
 
         # Ensure prob_map is a 2D array matching the image dimensions
         if prob_map is None or np.asarray(prob_map).ndim == 0:
