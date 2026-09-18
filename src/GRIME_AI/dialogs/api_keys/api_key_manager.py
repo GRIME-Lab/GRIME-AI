@@ -43,13 +43,13 @@ def _settings_folder() -> Path:
     """Return the GRIME AI settings folder, creating it if necessary.
 
     Resolution order:
-      1. GRIME_AI_Save_Utils().get_settings_folder()  — normal runtime path
+      1. Save_Utils().get_settings_folder()  — normal runtime path
       2. ~/Documents/GRIME-AI/Settings                — mirrors PROJECT_ROOT
          defined in the package __init__.py
     """
     try:
-        from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-        folder = Path(GRIME_AI_Save_Utils().get_settings_folder())
+        from GRIME_AI.Save_Utils import Save_Utils
+        folder = Path(Save_Utils().get_settings_folder())
     except Exception:
         folder = Path.home() / "Documents" / "GRIME-AI" / "Settings"
     folder.mkdir(parents=True, exist_ok=True)

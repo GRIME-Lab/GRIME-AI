@@ -19,7 +19,7 @@ from transformers import SegformerForSemanticSegmentation
 
 from GRIME_AI.ml_core.coco_segmentation_datasets import MultiCocoTargetDataset
 from GRIME_AI.ml_core.lora_segmentation_losses import BinaryDiceLoss, MultiClassDiceLoss
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
+from GRIME_AI.QProgressWheel import QProgressWheel
 from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 import torchvision.transforms.functional as TF

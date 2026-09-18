@@ -243,8 +243,8 @@ def _dest(flag):
 def _default_config_path():
     """Resolve the settings-folder site_config.json. Imported lazily so the
     module stays light unless the default path is actually needed."""
-    from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-    settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+    from GRIME_AI.Save_Utils import Save_Utils
+    settings_folder = Save_Utils().get_settings_folder()
     return os.path.normpath(os.path.join(settings_folder, "site_config.json"))
 
 
@@ -1076,7 +1076,7 @@ def _get_editor_class():
     # matches the Training tab; falls back to equivalents when the module is run
     # standalone with the GRIME_AI package off the path.
     try:
-        from GRIME_AI.GRIME_AI_CSS_Styles import (
+        from GRIME_AI.CSS_Styles import (
             BUTTON_CSS_STEEL_BLUE as _BTN_CSS,
             BUTTON_CSS_RED_OUTLINE as _BTN_CSS_RED_OUTLINE,
         )

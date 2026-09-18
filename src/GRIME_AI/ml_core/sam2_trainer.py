@@ -45,10 +45,10 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+from GRIME_AI.QProgressWheel import QProgressWheel
+from GRIME_AI.Save_Utils import Save_Utils
 from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
-from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
+from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
 from GRIME_AI.utils.datasetutils import DatasetUtils
@@ -218,7 +218,7 @@ class SAM2Trainer:
             # Convert the Hydra DictConfig to a standard dict using OmegaConf.to_container.
             self.site_config = OmegaConf.to_container(cfg.site_config, resolve=True)
         else:
-            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            settings_folder = Save_Utils().get_settings_folder()
             CONFIG_FILENAME = "site_config.json"
             site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
             print(site_configuration_file)
@@ -296,7 +296,7 @@ class SAM2Trainer:
         # create output folder
         try:
             self.model_output_folder = os.path.join(
-                GRIME_AI_Save_Utils().get_models_folder(), 'sam2',
+                Save_Utils().get_models_folder(), 'sam2',
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)
@@ -2825,7 +2825,7 @@ class SAM2Trainer:
     # ------------------------------------------------------------------------
     def _terminate_training(self, progressBar):
         msg = "You have cancelled the model training currently in-progress. A model has not been generated."
-        msgBox = GRIME_AI_QMessageBox('Model Training Terminated', msg, GRIME_AI_QMessageBox.Close)
+        msgBox = App_QMessageBox('Model Training Terminated', msg, App_QMessageBox.Close)
         msgBox.displayMsgBox()
 
         """Clean up progress bar."""
@@ -2841,7 +2841,7 @@ class SAM2Trainer:
     # ------------------------------------------------------------------------
     def _terminate_validation(self, progressBar):
         msg = "You have cancelled the validation currently in-progress."
-        msgBox = GRIME_AI_QMessageBox('Validation Terminated', msg, GRIME_AI_QMessageBox.Close)
+        msgBox = App_QMessageBox('Validation Terminated', msg, App_QMessageBox.Close)
         msgBox.displayMsgBox()
 
         if progressBar and progressBar.isVisible():

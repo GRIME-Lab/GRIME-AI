@@ -17,14 +17,14 @@ import matplotlib.pyplot as plt
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
 
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
-from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
-from GRIME_AI.GRIME_AI_TimeStamp_Utils import GRIME_AI_TimeStamp_Utils
-from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
-from GRIME_AI.vegetation_indices import GRIME_AI_Vegetation_Indices
-from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import GRIME_AI_roiData, roi_patch_and_mask
+from GRIME_AI.QProgressWheel import QProgressWheel
+from GRIME_AI.App_Utils import App_Utils
+from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
+from GRIME_AI.Color import Color
+from GRIME_AI.vegetation_indices import Vegetation_Indices
+from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, roi_patch_and_mask
 
-from GRIME_AI.GRIME_AI_Texture import GLCMTexture, LBPTexture, GaborTexture, WaveletTexture, FourierTexture
+from GRIME_AI.Texture import GLCMTexture, LBPTexture, GaborTexture, WaveletTexture, FourierTexture
 
 # ======================================================================================================================
 # Plain-data ROI description. Qt objects stay in the main process; workers get
@@ -111,7 +111,7 @@ def _erode(mask, kh, kw):
 
 def _masked_glcm_contrast(g, m):
     import numpy as _np
-    from GRIME_AI.GRIME_AI_Texture import GLCMTexture
+    from GRIME_AI.Texture import GLCMTexture
     t = GLCMTexture()
     H, W = g.shape
     vals = []
@@ -138,7 +138,7 @@ def _masked_gabor_rms(g, m):
     for each frequency/orientation; returns the mean of those RMS values."""
     import numpy as _np
     from skimage.filters import gabor, gabor_kernel
-    from GRIME_AI.GRIME_AI_Texture import GaborTexture
+    from GRIME_AI.Texture import GaborTexture
     t = GaborTexture()
     gf = g.astype(_np.float64)   # integer input would make skimage return a truncated integer response
     rms = []
@@ -156,7 +156,7 @@ def _masked_gabor_rms(g, m):
 def _masked_lbp_entropy(g, m):
     import numpy as _np
     from skimage.feature import local_binary_pattern
-    from GRIME_AI.GRIME_AI_Texture import LBPTexture
+    from GRIME_AI.Texture import LBPTexture
     t = LBPTexture()
     lbp = local_binary_pattern(g, t.P, t.R, method=t.method)
     k = 2 * int(_np.ceil(t.R)) + 1
@@ -181,7 +181,7 @@ def _block_all(m, block):
 def _masked_wavelet_detail_var(g, m):
     import numpy as _np
     import pywt
-    from GRIME_AI.GRIME_AI_Texture import WaveletTexture
+    from GRIME_AI.Texture import WaveletTexture
     t = WaveletTexture()
     if pywt.Wavelet(t.wavelet).dec_len != 2:
         print(f'[texture] masked wavelet supports Haar-length wavelets only (got {t.wavelet}).')
@@ -228,7 +228,7 @@ def _largest_inside_rect(m):
 
 def _masked_fourier_mean(g, m):
     import numpy as _np
-    from GRIME_AI.GRIME_AI_Texture import FourierTexture
+    from GRIME_AI.Texture import FourierTexture
     r0, r1, c0, c1 = _largest_inside_rect(m)
     if (r1 - r0) < _MIN_FOURIER_SIDE or (c1 - c0) < _MIN_FOURIER_SIDE:
         return None
@@ -347,7 +347,7 @@ def _region_values(helper, color, rgb, gray, gray_tex, mask, nClusters, flags, g
     rgb/gray: the region's pixels (whole image, or an (N, 1, C) strip of inside pixels).
     gray_tex/mask: 2-D grayscale for texture and its inside-mask (None = whole patch)."""
     import cv2 as _cv2
-    from GRIME_AI.vegetation_indices import GRIME_AI_Vegetation_Indices
+    from GRIME_AI.vegetation_indices import Vegetation_Indices
     vals = {}
     if flags.get('Intensity'):
         # The range for a pixel's value in grayscale is (0-255), 127 lies midway
@@ -358,7 +358,7 @@ def _region_values(helper, color, rgb, gray, gray_tex, mask, nClusters, flags, g
         for n, v in helper.compute_texture_scalars(gray_tex, texture_options, mask):
             vals['tex:' + n] = float(v)
     for g in greenness_list:
-        vals['g:' + g.get_name()] = float(GRIME_AI_Vegetation_Indices().get_greenness(g, rgb).get_value())
+        vals['g:' + g.get_name()] = float(Vegetation_Indices().get_greenness(g, rgb).get_value())
     if flags.get('HSV'):
         # Dominant colors, largest coverage first. Coverage = fraction of the region's pixels (0..1).
         hist, centers = color.extractDominant_HSV(rgb, nClusters)
@@ -384,10 +384,10 @@ def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, te
                        mask_spec=None):
     """Returns (csv_row, record). record = {'path', 'date', 'time', 'cells': [(group, sheet, column, value)]}."""
     import cv2 as _cv2
-    from GRIME_AI.GRIME_AI_TimeStamp_Utils import GRIME_AI_TimeStamp_Utils
+    from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
 
     link = helper.create_hyperlink(path)
-    ts = GRIME_AI_TimeStamp_Utils(); ts.detectDateTime(path)
+    ts = TimeStamp_Utils(); ts.detectDateTime(path)
     d, t = ts.extractDateTime(path)
 
     img = color.loadColorImage(path)   # RGB
@@ -441,12 +441,12 @@ def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, te
 def _compute_image_row(args):
     (index, path, nClusters, flags, greenness_list, texture_options, roi_specs, mask_spec) = args
     import os as _os
-    from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
+    from GRIME_AI.Color import Color
     from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
     if not _os.path.isfile(path):
         return (index, None, None)
     try:
-        row, record = _build_feature_row(ColorSegFeatureExport(), GRIME_AI_Color(), path, nClusters,
+        row, record = _build_feature_row(ColorSegFeatureExport(), Color(), path, nClusters,
                                          flags, greenness_list, texture_options, roi_specs, mask_spec)
         return (index, row, record)
     except Exception as e:
@@ -563,7 +563,7 @@ class ColorSegFeatureExport:
         # ----------------------------------------------------------------------------------------------------------
         # CREATE PROGRESS WHEEL
         # ----------------------------------------------------------------------------------------------------------
-        myGRIMe_Color = GRIME_AI_Color()
+        myGRIMe_Color = Color()
 
         # GENERATE LIST OF IMAGE FILES IN FOLDER
         videoFileList = imagesList
@@ -578,7 +578,7 @@ class ColorSegFeatureExport:
             csvFile, xlsFile = self.create_training_data_filename(imageFileFolder)
 
             # CREATE THE OUTPUT FILE COLUMN HEADER
-            nMaxNumColorClusters = GRIME_AI_Utils().getMaxNumColorClusters(roiList)
+            nMaxNumColorClusters = App_Utils().getMaxNumColorClusters(roiList)
 
             '''
             for roiObj in roiList:
@@ -639,7 +639,7 @@ class ColorSegFeatureExport:
                 # ------------------------------------------------------------------------------------------------------
                 try:
                     for greenness in greenness_index_list:
-                        greenness_updated = GRIME_AI_Vegetation_Indices().get_greenness(greenness, img)
+                        greenness_updated = Vegetation_Indices().get_greenness(greenness, img)
                         strOutputString = strOutputString + ',' + '%3.4f' % greenness_updated.get_value()
                 except:
                     pass
@@ -682,7 +682,7 @@ class ColorSegFeatureExport:
     # ==================================================================================================================
     def extract_ROI_features(self, csvFile, xlsFile, videoFileList, roiList, colorSegmentationParams, greenness_index_list, progressBarIndex, progressBar, texture_options=None, mask_spec=None):
 
-        myGRIMe_Color = GRIME_AI_Color()
+        myGRIMe_Color = Color()
 
         # ----------------------------------------------------------------------------------------------------------
         # PROCESS IMAGES
@@ -808,7 +808,7 @@ class ColorSegFeatureExport:
         image gets no entry, so all its columns are written as -999."""
         out = {}
         texture_options = texture_options or {}
-        color = GRIME_AI_Color()
+        color = Color()
 
         for i, spec in enumerate(roi_specs):
             nClusters = spec['nClusters']

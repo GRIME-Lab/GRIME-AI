@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# GRIME_AI_ROI_COCO_Export.py
+# color_seg_roi_coco_export.py
 #
 # Export Color Segmentation ROIs to COCO 1.0, matching the format the ML /
 # SAGE training path consumes. ROI name -> category; ROI shape (rectangle,

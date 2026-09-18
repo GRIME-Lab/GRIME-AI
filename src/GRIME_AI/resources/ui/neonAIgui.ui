@@ -234,7 +234,7 @@
                  </widget>
                 </item>
                 <item>
-                 <widget class="GRIME_AI_QLabel" name="NEON_labelLatestImage">
+                 <widget class="App_QLabel" name="NEON_labelLatestImage">
                   <property name="sizePolicy">
                    <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
                     <horstretch>0</horstretch>
@@ -337,7 +337,7 @@
                  </layout>
                 </item>
                 <item>
-                 <widget class="GRIME_AI_QTableWidget" name="NEON_selected_products">
+                 <widget class="App_QTableWidget" name="NEON_selected_products">
                   <property name="sizePolicy">
                    <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
                     <horstretch>0</horstretch>
@@ -425,7 +425,7 @@
        <attribute name="title">
         <string>NEON Download Manager</string>
        </attribute>
-       <widget class="GRIME_AI_QTableWidget" name="NEON_tableProducts">
+       <widget class="App_QTableWidget" name="NEON_tableProducts">
         <property name="geometry">
          <rect>
           <x>20</x>
@@ -668,7 +668,7 @@
                 </property>
                </column>
               </widget>
-              <widget class="GRIME_AI_QLabel" name="USGS_labelLatestImage">
+              <widget class="App_QLabel" name="USGS_labelLatestImage">
                <property name="sizePolicy">
                 <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
                  <horstretch>1</horstretch>
@@ -701,7 +701,7 @@
           <widget class="QWidget" name="widget_USGS_Bottom">
            <layout class="QVBoxLayout" name="layout_USGS_Bottom">
             <item>
-             <widget class="GRIME_AI_QTableWidget" name="table_USGS_Sites">
+             <widget class="App_QTableWidget" name="table_USGS_Sites">
               <property name="sizePolicy">
                <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
                 <horstretch>0</horstretch>
@@ -965,7 +965,7 @@
          <string>*Double click to enlarge</string>
         </property>
        </widget>
-       <widget class="GRIME_AI_QLabel" name="labelColorSegmentation">
+       <widget class="App_QLabel" name="labelColorSegmentation">
         <property name="enabled">
          <bool>true</bool>
         </property>
@@ -1008,7 +1008,7 @@
          <bool>false</bool>
         </property>
        </widget>
-       <widget class="GRIME_AI_QLabel" name="labelOriginalImage">
+       <widget class="App_QLabel" name="labelOriginalImage">
         <property name="enabled">
          <bool>true</bool>
         </property>
@@ -1054,7 +1054,7 @@
          <bool>false</bool>
         </property>
        </widget>
-       <widget class="GRIME_AI_QLabel" name="labelEdgeImage">
+       <widget class="App_QLabel" name="labelEdgeImage">
         <property name="enabled">
          <bool>true</bool>
         </property>
@@ -1351,14 +1351,14 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>GRIME_AI_QLabel</class>
+   <class>App_QLabel</class>
    <extends>QLabel</extends>
-   <header location="global">GRIME_AI.GRIME_AI_QLabel</header>
+   <header location="global">GRIME_AI.App_QLabel</header>
   </customwidget>
   <customwidget>
-   <class>GRIME_AI_QTableWidget</class>
+   <class>App_QTableWidget</class>
    <extends>QTableWidget</extends>
-   <header location="global">GRIME_AI.GRIME_AI_QTableWidget</header>
+   <header location="global">GRIME_AI.App_QTableWidget</header>
   </customwidget>
  </customwidgets>
  <tabstops>

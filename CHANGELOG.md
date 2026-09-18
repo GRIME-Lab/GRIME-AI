@@ -23,7 +23,7 @@ All notable changes to GRIME AI will be documented in this file.
 
 ### Added
 - Radio buttons for selecting between 3 ML models when training: SAM2, LoRA, or Mask R-CNN (note: currently only SAM2 is active)
-- New GRIME_AI_Phenocam_API class for interacting with Phenocam website using Phenocam API
+- New Phenocam_API class for interacting with Phenocam website using Phenocam API
 - New Phenocam tab on main GRIME AI canvas
 - Additional map colors for enhanced visualization
 - HYDRA_FULL_ERROR environment variable (os.environ["HYDRA_FULL_ERROR"] = "1") for complete stack traces
@@ -85,7 +85,7 @@ All notable changes to GRIME AI will be documented in this file.
 - Force mask to correct dimension if dimension issue detected
 - Crash caused by progress bar once NEON images download is complete
 - Path issue when performing "create JSON" during model training
-- Width and position of slice selection (previously stopped working due to GRIME_AI_QLabel correction for ROI disappearance)
+- Width and position of slice selection (previously stopped working due to App_QLabel correction for ROI disappearance)
 - GitHub sync issue
 - Missing import getpass
 
