@@ -241,8 +241,8 @@ class RecipeStore:
         # Keep recipes alongside the rest of GRIME AI's config, in the visible
         # Documents/GRIME-AI/Settings folder (NOT a hidden AppData location).
         try:
-            from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-            settings = GRIME_AI_Save_Utils().get_settings_folder()
+            from GRIME_AI.Save_Utils import Save_Utils
+            settings = Save_Utils().get_settings_folder()
         except Exception:
             settings = os.path.join(os.path.expanduser("~"),
                                     "Documents", "GRIME-AI", "Settings")

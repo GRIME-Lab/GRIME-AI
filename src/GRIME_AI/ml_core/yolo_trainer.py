@@ -39,9 +39,9 @@ import matplotlib.pyplot as plt
 
 import torch
 
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
+from GRIME_AI.QProgressWheel import QProgressWheel
+from GRIME_AI.Save_Utils import Save_Utils
+from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
 
@@ -392,7 +392,7 @@ class YOLOTrainer:
         self.val_score_list: List[float] = []
 
         # ── Load site_config ─────────────────────────────────────────────────
-        settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+        settings_folder = Save_Utils().get_settings_folder()
         config_file = Path(settings_folder) / "site_config.json"
         mgr = ModelConfigManager(str(config_file))
         self.site_config: Dict[str, Any] = mgr.load_config(return_type="dict")
@@ -417,7 +417,7 @@ class YOLOTrainer:
         # ── Create output folder ─────────────────────────────────────────────
         try:
             self.model_output_folder = os.path.join(
-                GRIME_AI_Save_Utils().get_models_folder(), "yolo",
+                Save_Utils().get_models_folder(), "yolo",
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)

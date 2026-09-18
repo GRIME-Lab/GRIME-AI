@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import re
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Set
@@ -20,7 +19,7 @@ try:
 except Exception:
     piexif = None  # we'll guard writes that need piexif
 
-from GRIME_AI.GRIME_AI_logger import info as _info, debug as _debug, err as _err, warn as _warn
+from GRIME_AI.App_logger import info as _info, debug as _debug, err as _err, warn as _warn
 
 # =========================
 # Constants / EXIF tags

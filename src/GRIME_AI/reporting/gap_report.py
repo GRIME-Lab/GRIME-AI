@@ -1,5 +1,5 @@
 """
-GRIME_AI_gap_report
+gap_report
 ===================
 Generate a self-contained HTML + CSV report of temporal discontinuities in a
 folder of downloaded time-lapse images (USGS HIVIS, PhenoCam, NEON).
@@ -13,12 +13,12 @@ Design:
     written into the download folder itself.
 
 Usage:
-    from GRIME_AI_gap_report import generate_gap_report
+    from gap_report import generate_gap_report
     generate_gap_report(download_folder)                     # after a fetch
     generate_gap_report(download_folder, tz="America/Chicago")
 
 CLI:
-    python GRIME_AI_gap_report.py <folder-or-listing.txt> [--tz ZONE]
+    python gap_report.py <folder-or-listing.txt> [--tz ZONE]
 """
 
 from __future__ import annotations
@@ -503,7 +503,7 @@ if __name__ == "__main__":
         tz = args[i + 1]
         del args[i:i + 2]
     if not args:
-        sys.exit("usage: GRIME_AI_gap_report.py <folder|listing.txt> [--tz ZONE]")
+        sys.exit("usage: gap_report.py <folder|listing.txt> [--tz ZONE]")
     h, c = generate_gap_report(args[0], tz=tz,
                                out_dir=os.getcwd()
                                if not Path(args[0]).is_dir() else None)

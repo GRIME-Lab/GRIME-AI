@@ -1,7 +1,7 @@
 # usgs/usgs_hivis.py
 import datetime
 from PyQt5.QtWidgets import QMessageBox
-from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
+from GRIME_AI.App_QMessageBox import App_QMessageBox
 from .usgs_client import USGSClient
 
 class USGS_HIVIS:
@@ -24,7 +24,7 @@ class USGS_HIVIS:
         try:
             self._client.initialize()
         except Exception:
-            msg = GRIME_AI_QMessageBox('USGS NIMS Error',
+            msg = App_QMessageBox('USGS NIMS Error',
                                        'Unable to access USGS NIMS Database!')
             msg.displayMsgBox()
 
@@ -245,7 +245,7 @@ class USGS_HIVIS:
                     continue
                 else:
                     # All retries exhausted
-                    msg = GRIME_AI_QMessageBox(
+                    msg = App_QMessageBox(
                         'Network Error',
                         'Cannot connect to USGS HIVIS API. Please check:\n\n'
                         '1. Internet connection is active\n'
@@ -267,7 +267,7 @@ class USGS_HIVIS:
                     time.sleep(retry_delay)
                     continue
                 else:
-                    msg = GRIME_AI_QMessageBox(
+                    msg = App_QMessageBox(
                         'Network Error',
                         f'Could not connect to USGS HIVIS API after {max_retries} attempts.\n\n'
                         f'Error: {e.reason}',
@@ -280,7 +280,7 @@ class USGS_HIVIS:
             except HTTPError as e:
                 # HTTP error from server (don't retry these)
                 print(f"HTTP error: {e.code} {e.reason}")
-                msg = GRIME_AI_QMessageBox(
+                msg = App_QMessageBox(
                     'API Error',
                     f'Server returned error {e.code}: {e.reason}',
                     QMessageBox.Close
@@ -292,7 +292,7 @@ class USGS_HIVIS:
             except json.JSONDecodeError as e:
                 # Invalid JSON response (don't retry)
                 print(f"JSON decode error: {e}")
-                msg = GRIME_AI_QMessageBox(
+                msg = App_QMessageBox(
                     'API Error',
                     'Received invalid response from USGS HIVIS API',
                     QMessageBox.Close
@@ -314,7 +314,7 @@ class USGS_HIVIS:
 
             if len(filenames) == 0:
                 # No images in date range
-                msg = GRIME_AI_QMessageBox(
+                msg = App_QMessageBox(
                     'Images unavailable',
                     'No images available for the site or for the time/date range specified.',
                     QMessageBox.Close
@@ -404,7 +404,7 @@ class USGS_HIVIS:
         except Exception as e:
             # Catch-all for unexpected errors in filtering logic
             print(f"Unexpected error processing results: {e}")
-            msg = GRIME_AI_QMessageBox(
+            msg = App_QMessageBox(
                 'Error',
                 f'Failed to process image list: {str(e)}',
                 QMessageBox.Close
@@ -434,9 +434,9 @@ class USGS_HIVIS:
             )
             return downloaded, missing
         except Exception:
-            msg = GRIME_AI_QMessageBox('Images unavailable',
+            msg = App_QMessageBox('Images unavailable',
                                        'One or more images reported as available by NIMS are not available.',
-                                       QMessageBox.Close)
+                                  QMessageBox.Close)
             msg.displayMsgBox()
             return 0, 0
 
@@ -448,9 +448,9 @@ class USGS_HIVIS:
                 nwisID, siteName, startDate, endDate, startTime, endTime, saveFolder
             )
         except Exception:
-            msg = GRIME_AI_QMessageBox('USGS - Retrieval Error',
+            msg = App_QMessageBox('USGS - Retrieval Error',
                                        'Unable to retrieve data from the USGS site.',
-                                       QMessageBox.Close)
+                                  QMessageBox.Close)
             msg.displayMsgBox()
             return None, None
 

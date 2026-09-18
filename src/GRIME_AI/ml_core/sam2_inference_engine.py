@@ -246,10 +246,10 @@ class SAM2InferenceEngine:
 
         # Tier 2: site_config.json
         try:
-            from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-            from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+            from GRIME_AI.Save_Utils import Save_Utils
+            from GRIME_AI.JSON_Editor import JsonEditor
             import os
-            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            settings_folder = Save_Utils().get_settings_folder()
             config_file = os.path.join(settings_folder, "site_config.json")
             cfg = JsonEditor().load_json_file(config_file)
             cfg_value = cfg.get("blob_filter_radius")
@@ -280,10 +280,10 @@ class SAM2InferenceEngine:
             print(f"  blob_filter_mode: loaded from checkpoint ({m})")
             return m
         try:
-            from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-            from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+            from GRIME_AI.Save_Utils import Save_Utils
+            from GRIME_AI.JSON_Editor import JsonEditor
             import os
-            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            settings_folder = Save_Utils().get_settings_folder()
             cfg = JsonEditor().load_json_file(os.path.join(settings_folder, "site_config.json"))
             m = _norm((cfg.get("load_model") or {}).get("blob_filter_mode")) or _norm(cfg.get("blob_filter_mode"))
             if m:

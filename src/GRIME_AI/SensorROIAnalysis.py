@@ -23,9 +23,13 @@ The narrative is heuristic. It states what the statistics are consistent
 with; it does not claim to establish physical causation.
 """
 
+import os
 import re
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 PARAM_COL_RE = re.compile(r"\[(\d+)_(\d{5})\]$")
 
@@ -62,7 +66,8 @@ class SensorROIAnalysis:
     #
     # ==================================================================================================================
     def write_report(self, df: pd.DataFrame, xlsx_path: str,
-                     roi_col: str = "ROI Area Percentage") -> str:
+                     roi_col: str = "ROI Area Percentage",
+                     png_dir: str = None) -> str:
         """Write the sensor-vs-ROI analysis workbook. Returns xlsx_path."""
         if roi_col not in df.columns:
             candidates = [c for c in df.columns if "Area Percentage" in str(c)]
@@ -99,7 +104,99 @@ class SensorROIAnalysis:
                                         f"at this site.")
 
         self._write_workbook(xlsx_path, work, roi_col, param_cols, all_stats)
+
+        if png_dir:
+            try:
+                self._write_pngs(png_dir, work, roi_col, param_cols, all_stats)
+            except Exception as e:
+                print(f"[{self.className}] Could not write PNG figures: {e}")
+
         return xlsx_path
+
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
+    def _write_pngs(self, png_dir, work, roi_col, param_cols, all_stats):
+        """Publication-grade matplotlib figures, one set per parameter, matching
+        the project's existing plot style. Titles are bold and above each plot;
+        axis labels carry units and never overlap tick values."""
+        os.makedirs(png_dir, exist_ok=True)
+        idx = np.arange(1, len(work) + 1)
+        area = pd.to_numeric(work["_roi"], errors="coerce")
+        stat_by_col = {st["column"]: st for st in all_stats}
+
+        def _safe(name):
+            return re.sub(r"[^0-9A-Za-z._-]+", "_", str(name)).strip("_")
+
+        def _finish(fig, ax_list, title, path):
+            for ax in ax_list:
+                ax.grid(True, linewidth=0.4, alpha=0.5)
+            fig.suptitle(title, fontsize=15, fontweight="bold", y=0.99)
+            fig.tight_layout(rect=[0, 0, 1, 0.96])
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+
+        for col in param_cols:
+            m = PARAM_COL_RE.search(str(col))
+            code = m.group(2) if m else ""
+            values = pd.to_numeric(work[col], errors="coerce")
+            stem = os.path.join(png_dir, _safe(col))
+
+            if code == "00065":
+                # Raw overlay (shared axis) + raw scatter with fit
+                fig, ax = plt.subplots(figsize=(13, 6))
+                ax.plot(idx, area, color="#2e6da4", lw=1.1, label=f"{roi_col} (%)")
+                ax.plot(idx, values, color="#b23b3b", lw=1.1, label=f"{col}")
+                ax.set_xlabel("Image index"); ax.set_ylabel("ROI area (%)  /  gage height (ft)")
+                ax.set_ylim(bottom=0); ax.legend()
+                _finish(fig, [ax], f"{roi_col} and {col} over time", stem + "_overlay.png")
+
+                fig, ax = plt.subplots(figsize=(9, 7))
+                ax.scatter(area, values, s=12, color="#7ba05b", alpha=0.6, edgecolors="none")
+                st = stat_by_col.get(col, {})
+                mask = area.notna() & values.notna()
+                if mask.sum() >= 3 and not np.isnan(st.get("linear_slope", np.nan)):
+                    xs = np.linspace(area[mask].min(), area[mask].max(), 50)
+                    ax.plot(xs, st["linear_slope"] * 0 + np.polyval(np.polyfit(area[mask], values[mask], 1), xs),
+                            color="#333333", lw=1.5, label="Linear fit")
+                    ax.legend()
+                ax.set_xlabel(f"{roi_col} (%)"); ax.set_ylabel(f"{col}")
+                _finish(fig, [ax], f"{col} vs {roi_col}", stem + "_scatter.png")
+
+            elif code == "00060":
+                a_pct, v_pct = area.rank(pct=True) * 100, values.rank(pct=True) * 100
+                # (1) percentile time series
+                fig, ax = plt.subplots(figsize=(13, 6))
+                ax.plot(idx, a_pct, color="#2e6da4", lw=1.0, label="ROI area (percentile)")
+                ax.plot(idx, v_pct, color="#b23b3b", lw=1.0, label=f"discharge (percentile)")
+                ax.set_xlabel("Image index"); ax.set_ylabel("Percentile of each series' own range")
+                ax.set_ylim(0, 100); ax.legend()
+                _finish(fig, [ax], f"{roi_col} and {col} over time (ranked)", stem + "_percentile_time.png")
+                # (2) percentile scatter
+                fig, ax = plt.subplots(figsize=(8, 8))
+                ax.scatter(a_pct, v_pct, s=12, color="#7ba05b", alpha=0.6, edgecolors="none")
+                ax.set_xlabel("ROI area (percentile)"); ax.set_ylabel("discharge (percentile)")
+                ax.set_xlim(0, 100); ax.set_ylim(0, 100)
+                _finish(fig, [ax], f"{col} vs {roi_col} (ranked)", stem + "_percentile_scatter.png")
+                # (3) raw area + log10 discharge
+                fig, ax = plt.subplots(figsize=(13, 6))
+                ax.plot(idx, area, color="#2e6da4", lw=1.0, label=f"{roi_col} (%)")
+                ax.plot(idx, np.log10(values.clip(lower=0.1)), color="#b23b3b", lw=1.0,
+                        label="log10(discharge)")
+                ax.set_xlabel("Image index"); ax.set_ylabel("ROI area (%)  /  log10(discharge, cfs)")
+                ax.set_ylim(bottom=0); ax.legend()
+                _finish(fig, [ax], f"{roi_col} (raw) and log10({col}) over time", stem + "_log_overlay.png")
+
+            else:
+                def _n(x):
+                    lo, hi = x.min(), x.max(); r = hi - lo
+                    return (x - lo) / r if r and not pd.isna(r) else x * 0.0
+                fig, ax = plt.subplots(figsize=(13, 6))
+                ax.plot(idx, _n(area), color="#2e6da4", lw=1.0, label=f"{roi_col} (normalized)")
+                ax.plot(idx, _n(values), color="#b23b3b", lw=1.0, label=f"{col} (normalized)")
+                ax.set_xlabel("Image index"); ax.set_ylabel("Normalized value (0-1)")
+                ax.set_ylim(0, 1); ax.legend()
+                _finish(fig, [ax], f"{roi_col} and {col} over time (normalized)", stem + "_normalized.png")
 
     # ==================================================================================================================
     #
@@ -270,6 +367,18 @@ class SensorROIAnalysis:
         elif code == "00060":
             parts.append("Raw Pearson understates this relationship by construction; rank "
                          "statistics (Spearman) are authoritative for discharge.")
+            parts.append(
+                "This tab presents three complementary figures. The ranked scatter plots "
+                "each image's discharge rank against its water-area rank; points falling "
+                "along the rising diagonal indicate that images with more water also carry "
+                "higher discharge, that is, the two quantities keep the same order. The "
+                "ranked time series shows those same ranks across the season; when the two "
+                "lines rise and fall together, water area and discharge move in step as "
+                "conditions change through the record. The third figure plots raw water "
+                "area together with discharge on a logarithmic scale; because discharge "
+                "spans a far wider range than water area, compressing it in this way brings "
+                "the two onto a comparable footing and reveals whether their timing "
+                "agrees once that difference in range is set aside.")
             parts.append("Discharge at most gages is computed from stage via a nonlinear, "
                          "periodically shifted rating curve (and may exhibit loop-rating "
                          "hysteresis on mobile beds), so pixel area typically tracks stage far "

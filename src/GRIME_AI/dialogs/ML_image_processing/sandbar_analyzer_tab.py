@@ -25,7 +25,7 @@ from PyQt5.QtWidgets import (QWidget, QFileDialog, QListWidgetItem, QMessageBox,
 from PyQt5.QtGui import QPixmap, QIcon, QImage
 
 from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+from GRIME_AI.JSON_Editor import JsonEditor
 
 
 class SandbarAnalyzerTab(QWidget):
@@ -59,7 +59,7 @@ class SandbarAnalyzerTab(QWidget):
         self._loadToken = 0
 
         self._current_idx = None        # selected filmstrip row
-        self._analyzer = None           # last GRIME_AI_Sandbar_Analyzer
+        self._analyzer = None           # last Sandbar_Analyzer
         self._raw_left = None           # QPixmap for left panel (unscaled)
         self._raw_right = None          # QPixmap for right panel (unscaled)
 
@@ -149,8 +149,8 @@ class SandbarAnalyzerTab(QWidget):
             return
         JsonEditor().update_json_entry("Sandbar_Analyzer_Images_Folder", folder)
 
-        from GRIME_AI.GRIME_AI_Sandbar_Analyzer import GRIME_AI_Sandbar_Analyzer
-        self._pairs = GRIME_AI_Sandbar_Analyzer.generate_file_pairs(folder)
+        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
+        self._pairs = Sandbar_Analyzer.generate_file_pairs(folder)
         if not self._pairs:
             QMessageBox.warning(self, "Sandbar Analyzer", "No image/mask pairs found.")
             return
@@ -220,9 +220,9 @@ class SandbarAnalyzerTab(QWidget):
             return
         orig_path, mask_path = self._pairs[self._current_idx]
 
-        from GRIME_AI.GRIME_AI_Sandbar_Analyzer import GRIME_AI_Sandbar_Analyzer
+        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
         try:
-            analyzer = GRIME_AI_Sandbar_Analyzer(orig_path, mask_path)
+            analyzer = Sandbar_Analyzer(orig_path, mask_path)
             analyzer.run(**self._edge_kwargs())
         except Exception as err:
             QMessageBox.warning(self, "Sandbar Analyzer", f"Analysis failed:\n{err}")
@@ -398,7 +398,7 @@ class SandbarAnalyzerTab(QWidget):
         if not out_path:
             return
 
-        from GRIME_AI.GRIME_AI_Sandbar_Analyzer import GRIME_AI_Sandbar_Analyzer
+        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
         import csv
         kwargs = self._edge_kwargs()
         with open(out_path, "w", newline="") as fh:
@@ -407,7 +407,7 @@ class SandbarAnalyzerTab(QWidget):
                             [key for _, key, _ in self.STAT_ROWS])
             for orig_path, mask_path in self._pairs:
                 try:
-                    a = GRIME_AI_Sandbar_Analyzer(orig_path, mask_path)
+                    a = Sandbar_Analyzer(orig_path, mask_path)
                     a.run(**kwargs)
                     writer.writerow(
                         [os.path.basename(orig_path), os.path.basename(mask_path),

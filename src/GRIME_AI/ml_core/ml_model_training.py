@@ -17,8 +17,8 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 from datetime import datetime
 
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+from GRIME_AI.Save_Utils import Save_Utils
+from GRIME_AI.JSON_Editor import JsonEditor
 from GRIME_AI.ml_core.segformer_trainer import SegFormerConfig, SegFormerTrainer
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from GRIME_AI.ml_core.lora_wrapper import GeneralLoRAWrapper
@@ -82,7 +82,7 @@ class MLModelTraining:
         if site_config is not None:
             self.site_config = site_config
         else:
-            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            settings_folder = Save_Utils().get_settings_folder()
             CONFIG_FILENAME = "site_config.json"
             site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
             print(site_configuration_file)
@@ -142,7 +142,7 @@ class MLModelTraining:
         # -------------------------------
         try:
             self.model_output_folder = os.path.join(
-                GRIME_AI_Save_Utils().get_models_folder(), mode,
+                Save_Utils().get_models_folder(), mode,
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)

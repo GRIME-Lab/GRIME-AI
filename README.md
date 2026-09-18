@@ -40,7 +40,7 @@ GRIME AI is developed at the University of Nebraska-Lincoln and is supported by 
 - **Model training and tuning** workflows supporting fine-tuning of deep learning architectures on user-provided annotated datasets
 - **Inference engine** for applying trained or pre-trained segmentation models to single images or entire image collections
 - **SAGE annotation tool** for creating, managing, and exporting ground-truth training annotations with edge trace mode, label management, and CSV import/export
-- **Command-line interface** (`GRIME_AI_segment.py`) supporting `--image` and `--folder` flags for batch segmentation workflows
+- **Command-line interface** (`cli_segment.py`) supporting `--image` and `--folder` flags for batch segmentation workflows
 - **Cross-platform** operation on Windows, Linux, and Linux-derived operating systems including HPC clusters and browser-based environments such as Open OnDemand (OOD)
 - **FAIR-aligned** outputs in standard CSV and image formats compatible with spreadsheet software and downstream analysis pipelines
 
@@ -151,19 +151,19 @@ For batch segmentation workflows:
 
 ```bash
 # Segment a single image
-python GRIME_AI_segment.py --image path/to/image.jpg
+python cli_segment.py --image path/to/image.jpg
 
 # Segment all images in a folder
-python GRIME_AI_segment.py --folder path/to/folder
+python cli_segment.py --folder path/to/folder
 ```
 
 Import the segmentation interface programmatically:
 
 ```python
-from GRIME_AI.GRIME_AI_segment import run_sam2, run_segformer
+from GRIME_AI.cli_segment import run_sam2, run_segformer
 ```
 
-> **Note:** The correct import path is `GRIME_AI.GRIME_AI_segment`, not `grime_ai_segment`.
+> **Note:** The correct import path is `GRIME_AI.cli_segment`, not `grime_ai_segment`.
 
 ### SAGE Annotation Tool
 

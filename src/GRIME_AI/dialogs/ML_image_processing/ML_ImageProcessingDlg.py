@@ -24,7 +24,7 @@ from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget, QApplication
 from PyQt5.uic import loadUi
 
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+from GRIME_AI.Save_Utils import Save_Utils
 # Tab classes are imported lazily in _add_tab_safe() so a missing or broken tab
 # module cannot stop this dialog from loading. ModelConfigManager is not a tab
 # and is imported normally.
@@ -136,7 +136,7 @@ class ML_ImageProcessingDlg(QDialog):
         # --------------------------------------------------------------------------------------------------------------
         # LOAD CONFIGURATION SETTINGS THAT MAY BE REQUIRED FOR THE  TABS
         # --------------------------------------------------------------------------------------------------------------
-        settings_folder = Path(GRIME_AI_Save_Utils().get_settings_folder()).resolve()
+        settings_folder = Path(Save_Utils().get_settings_folder()).resolve()
         config_file = (settings_folder / "site_config.json").resolve()
 
         mgr = ModelConfigManager(str(config_file))
@@ -614,7 +614,7 @@ class ML_ImageProcessingDlg(QDialog):
         Gather all dialog values and create a JSON configuration file.
         The main structure is site_config, not values.
         """
-        settings_folder = Path(GRIME_AI_Save_Utils().get_settings_folder()).resolve()
+        settings_folder = Path(Save_Utils().get_settings_folder()).resolve()
         config_file = (settings_folder / "site_config.json").resolve()
 
         # Use ModelConfigManager to handle backup + load
