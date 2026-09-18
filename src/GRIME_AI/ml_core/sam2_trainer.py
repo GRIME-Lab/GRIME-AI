@@ -1741,7 +1741,7 @@ class SAM2Trainer:
             if device.type == "cuda":
                 # bf16: same range as fp32, no loss scaling / overflow risk.
                 # Falls back to fp16 + GradScaler on pre-Ampere cards.
-                autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+                autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
             else:  # CPU
                 autocast_dtype = torch.bfloat16  # CPU autocast only supports bfloat16
 
@@ -1765,7 +1765,7 @@ class SAM2Trainer:
 
                 # Use pre-selected SDPA backend (selected once in train_sam)
                 if hasattr(self, 'selected_backend') and self.selected_backend is not None:
-                    with sdpa_kernel(self.selected_backend):
+                    with sdpa_kernel([self.selected_backend, SDPBackend.MATH]):
                         low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(**decoder_kwargs)
                 else:
                     # Fallback to default if backend selection failed
@@ -2520,7 +2520,7 @@ class SAM2Trainer:
             text_file.write(f"Max Positive Prompts: {self.site_config.get('max_positives', _DEFAULT_MAX_POSITIVES)}\n")
             text_file.write(f"Negative Balance: {self.site_config.get('negative_balance', _DEFAULT_NEGATIVE_BALANCE)}:1\n")
             text_file.write(f"Batch Size: {getattr(self, 'batch_size', 1)}\n")
-            _amp = "bf16" if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else "fp16"
+            _amp = "bf16" if (torch.cuda.is_available() and torch.cuda.is_bf16_supported(including_emulation=False)) else "fp16"
             text_file.write(f"AMP dtype: {_amp}\n")
             if getattr(self, "val_best_thr", None) is not None:
                 text_file.write(f"Val F1-optimal threshold: {self.val_best_thr:.3f} "
