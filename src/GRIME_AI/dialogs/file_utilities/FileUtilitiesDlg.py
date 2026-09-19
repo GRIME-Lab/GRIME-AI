@@ -18,10 +18,10 @@ from PyQt5.QtCore import pyqtSignal, pyqtSlot
 from PyQt5.QtWidgets import QDialog
 from PyQt5.uic import loadUi
 
-from GRIME_AI.App_Utils import App_Utils
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.Video import Video
-from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
+from appcore.App_Utils import App_Utils
+from appcore.JSON_Editor import JsonEditor
+from appcore.Video import Video
+from appcore.TimeStamp_Utils import TimeStamp_Utils
 
 
 # ======================================================================================================================
