@@ -30,13 +30,14 @@ from neonutilities import zips_by_product, stack_by_table
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+from GRIME_AI.JSON_Editor import JsonEditor
 # GRIME AI MODULES
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
-from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
+from GRIME_AI.QProgressWheel import QProgressWheel
+from GRIME_AI.App_Utils import App_Utils
 from GRIME_AI.nitrateData import nitrateData
 from GRIME_AI.siteData import siteData
 from GRIME_AI.dialogs.api_keys import APIKeyManager
+from ..app_identity import DOWNLOADS_DIR
 
 SERVER = 'https://data.neonscience.org/api/v0/'  # default; overridden per-instance by APIKeyManager
 
@@ -342,10 +343,7 @@ class  NEON_API:
         session.mount("https://", adapter)
 
         # Build target directory
-        configFilePath = os.path.join(
-            os.path.expanduser('~'),
-            'Documents', 'GRIME-AI', 'Downloads', 'NEON', 'Metadata'
-        )
+        configFilePath = os.path.join(str(DOWNLOADS_DIR), 'NEON', 'Metadata')
         os.makedirs(configFilePath, exist_ok=True)
         filename_with_path = os.path.join(configFilePath, file_name)
 
@@ -601,7 +599,7 @@ class  NEON_API:
         siteList = []
         url = 'https://www.neonscience.org/field-sites/explore-field-sites'
 
-        nErrorCode = GRIME_AI_Utils().check_url_validity(url)
+        nErrorCode = App_Utils().check_url_validity(url)
 
         # IF AT LEAST ONE FIELD SITE TABLE IS FOUND ON THE NEON SITE...
         if nErrorCode == 0:

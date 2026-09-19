@@ -21,13 +21,14 @@ from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QWidget, QFileDialog, QMessageBox, QSizePolicy, QTableWidget, QToolButton, QSplitter, QSplitterHandle, QVBoxLayout
 from PyQt5.uic import loadUi
 
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
+from GRIME_AI.Save_Utils import Save_Utils
+from GRIME_AI.JSON_Editor import JsonEditor
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from GRIME_AI.utils.resource_utils import ui_path
-from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
+from GRIME_AI.CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
 from PyQt5.QtGui import QPalette, QColor, QFont
 from PyQt5.QtCore import Qt
+from ...app_identity import APP_DISPLAY_NAME
 
 # import torch if using torch metadata extraction
 try:
@@ -181,7 +182,7 @@ class SegmentImagesTab(QWidget):
         layout.setStretch(0, 4)  # left content area
         layout.setStretch(1, 1)  # right splitter panel
 
-        settings_folder = Path(GRIME_AI_Save_Utils().get_settings_folder()).resolve()
+        settings_folder = Path(Save_Utils().get_settings_folder()).resolve()
         config_file = (settings_folder / "site_config.json").resolve()
 
         # Backup existing config if present
@@ -780,7 +781,7 @@ QLineEdit:focus {
                         "but is not installed in this environment.\n\n"
                         "Install it with:\n"
                         "  pip install ultralytics\n\n"
-                        "Reverting to SAM2. All other GRIME AI features remain available."
+                        f"Reverting to SAM2. All other {APP_DISPLAY_NAME} features remain available."
                     )
                     self.radioButton_segment_model_sam2.setChecked(True)
                     return
@@ -1062,7 +1063,7 @@ QLineEdit:focus {
         Gather all dialog values and update the JSON configuration file.
         Preserves existing settings from other classes by merging instead of resetting.
         """
-        settings_folder = Path(GRIME_AI_Save_Utils().get_settings_folder()).resolve()
+        settings_folder = Path(Save_Utils().get_settings_folder()).resolve()
         config_file = (settings_folder / "site_config.json").resolve()
 
         # Use ModelConfigManager to handle backup + load

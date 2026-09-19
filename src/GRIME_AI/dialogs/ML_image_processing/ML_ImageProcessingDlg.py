@@ -24,7 +24,8 @@ from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget, QApplication
 from PyQt5.uic import loadUi
 
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+from GRIME_AI.Save_Utils import Save_Utils
+from ...app_identity import PLUGINS_DIR
 # Tab classes are imported lazily in _add_tab_safe() so a missing or broken tab
 # module cannot stop this dialog from loading. ModelConfigManager is not a tab
 # and is imported normally.
@@ -136,7 +137,7 @@ class ML_ImageProcessingDlg(QDialog):
         # --------------------------------------------------------------------------------------------------------------
         # LOAD CONFIGURATION SETTINGS THAT MAY BE REQUIRED FOR THE  TABS
         # --------------------------------------------------------------------------------------------------------------
-        settings_folder = Path(GRIME_AI_Save_Utils().get_settings_folder()).resolve()
+        settings_folder = Path(Save_Utils().get_settings_folder()).resolve()
         config_file = (settings_folder / "site_config.json").resolve()
 
         mgr = ModelConfigManager(str(config_file))
@@ -217,8 +218,7 @@ class ML_ImageProcessingDlg(QDialog):
         crashing the dialog. Presence of the file is the only gate."""
         import os
         import importlib.util
-        plugin_dir = os.path.join(os.path.expanduser("~"), "Documents",
-                                  "GRIME-AI", "plugins")
+        plugin_dir = str(PLUGINS_DIR)
         if not os.path.isdir(plugin_dir):
             return
         for fname in sorted(os.listdir(plugin_dir)):
@@ -227,7 +227,7 @@ class ML_ImageProcessingDlg(QDialog):
             path = os.path.join(plugin_dir, fname)
             title = fname
             try:
-                mod_name = "grime_ai_plugin_" + os.path.splitext(fname)[0]
+                mod_name = "app_plugin_" + os.path.splitext(fname)[0]
                 spec = importlib.util.spec_from_file_location(mod_name, path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)       # executes the plugin file
@@ -614,7 +614,7 @@ class ML_ImageProcessingDlg(QDialog):
         Gather all dialog values and create a JSON configuration file.
         The main structure is site_config, not values.
         """
-        settings_folder = Path(GRIME_AI_Save_Utils().get_settings_folder()).resolve()
+        settings_folder = Path(Save_Utils().get_settings_folder()).resolve()
         config_file = (settings_folder / "site_config.json").resolve()
 
         # Use ModelConfigManager to handle backup + load

@@ -10,7 +10,7 @@
 import math
 from typing import Final
 
-from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
+from GRIME_AI.App_Utils import App_Utils
 
 
 '''
@@ -55,7 +55,7 @@ class GreennessIndex:
 # **********************************************************************************************************************
 #
 # **********************************************************************************************************************
-class GRIME_AI_Vegetation_Indices:
+class Vegetation_Indices:
     # CONSTANTS
     BCC: Final[str] = "BCC"
     BGI: Final[str] = "BGI"
@@ -98,7 +98,7 @@ class GRIME_AI_Vegetation_Indices:
     WI: Final[str] = "WI"
 
     def __init__(self):
-        self.className = "GRIME_AI_Vegetation_Indices"
+        self.className = "Vegetation_Indices"
 
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -506,9 +506,9 @@ class GRIME_AI_Vegetation_Indices:
         # Reset so a failed computation never returns the previous image's value.
         greenness.set_value(-999.0)
         try:
-            myGRIME_AI_Utils = GRIME_AI_Utils()
-            red, green, blue = myGRIME_AI_Utils.separateChannels(image)
-            red_sum, green_sum, blue_sum = myGRIME_AI_Utils.sumChannels(red, green, blue)
+            myApp_Utils = App_Utils()
+            red, green, blue = myApp_Utils.separateChannels(image)
+            red_sum, green_sum, blue_sum = myApp_Utils.sumChannels(red, green, blue)
             # Plain floats: division by zero raises instead of silently producing inf/nan.
             red_sum, green_sum, blue_sum = float(red_sum), float(green_sum), float(blue_sum)
 

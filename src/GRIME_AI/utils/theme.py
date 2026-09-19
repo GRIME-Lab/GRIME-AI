@@ -31,7 +31,7 @@ source of truth instead.
 from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
-_APP_PROPERTY = "grime_ai_dark_mode"
+_APP_PROPERTY = "app_dark_mode"
 
 # Named colors: (light, dark). Dark values are chosen for the qdarkstyle
 # background (#19232D) and text (#DFE1E2).

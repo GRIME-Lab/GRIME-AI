@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import QMessageBox
 from GRIME_AI.ml_core.ml_helpers import (
     init_coco_structure, add_coco_entries, save_coco_json
 )
+from ..app_identity import APP_DISPLAY_NAME
 
 
 # ======================================================================================================================
@@ -117,7 +118,7 @@ class YOLOInferenceEngine:
         if not isinstance(grime_ckpt, dict) or "categories" not in grime_ckpt:
             raise ValueError(
                 f"[YOLOInferenceEngine] {self.YOLO_MODEL} does not appear to be a "
-                "GRIME AI YOLO checkpoint."
+                f"{APP_DISPLAY_NAME} YOLO checkpoint."
             )
 
         # Print metadata

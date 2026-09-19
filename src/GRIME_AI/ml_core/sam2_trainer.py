@@ -45,10 +45,10 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+from GRIME_AI.QProgressWheel import QProgressWheel
+from GRIME_AI.Save_Utils import Save_Utils
 from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
-from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
+from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
 from GRIME_AI.utils.datasetutils import DatasetUtils
@@ -218,7 +218,7 @@ class SAM2Trainer:
             # Convert the Hydra DictConfig to a standard dict using OmegaConf.to_container.
             self.site_config = OmegaConf.to_container(cfg.site_config, resolve=True)
         else:
-            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            settings_folder = Save_Utils().get_settings_folder()
             CONFIG_FILENAME = "site_config.json"
             site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
             print(site_configuration_file)
@@ -296,7 +296,7 @@ class SAM2Trainer:
         # create output folder
         try:
             self.model_output_folder = os.path.join(
-                GRIME_AI_Save_Utils().get_models_folder(), 'sam2',
+                Save_Utils().get_models_folder(), 'sam2',
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)
@@ -1741,7 +1741,7 @@ class SAM2Trainer:
             if device.type == "cuda":
                 # bf16: same range as fp32, no loss scaling / overflow risk.
                 # Falls back to fp16 + GradScaler on pre-Ampere cards.
-                autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+                autocast_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported(including_emulation=False) else torch.float16
             else:  # CPU
                 autocast_dtype = torch.bfloat16  # CPU autocast only supports bfloat16
 
@@ -1765,7 +1765,7 @@ class SAM2Trainer:
 
                 # Use pre-selected SDPA backend (selected once in train_sam)
                 if hasattr(self, 'selected_backend') and self.selected_backend is not None:
-                    with sdpa_kernel(self.selected_backend):
+                    with sdpa_kernel([self.selected_backend, SDPBackend.MATH]):
                         low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(**decoder_kwargs)
                 else:
                     # Fallback to default if backend selection failed
@@ -2520,7 +2520,7 @@ class SAM2Trainer:
             text_file.write(f"Max Positive Prompts: {self.site_config.get('max_positives', _DEFAULT_MAX_POSITIVES)}\n")
             text_file.write(f"Negative Balance: {self.site_config.get('negative_balance', _DEFAULT_NEGATIVE_BALANCE)}:1\n")
             text_file.write(f"Batch Size: {getattr(self, 'batch_size', 1)}\n")
-            _amp = "bf16" if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else "fp16"
+            _amp = "bf16" if (torch.cuda.is_available() and torch.cuda.is_bf16_supported(including_emulation=False)) else "fp16"
             text_file.write(f"AMP dtype: {_amp}\n")
             if getattr(self, "val_best_thr", None) is not None:
                 text_file.write(f"Val F1-optimal threshold: {self.val_best_thr:.3f} "
@@ -2825,7 +2825,7 @@ class SAM2Trainer:
     # ------------------------------------------------------------------------
     def _terminate_training(self, progressBar):
         msg = "You have cancelled the model training currently in-progress. A model has not been generated."
-        msgBox = GRIME_AI_QMessageBox('Model Training Terminated', msg, GRIME_AI_QMessageBox.Close)
+        msgBox = App_QMessageBox('Model Training Terminated', msg, App_QMessageBox.Close)
         msgBox.displayMsgBox()
 
         """Clean up progress bar."""
@@ -2841,7 +2841,7 @@ class SAM2Trainer:
     # ------------------------------------------------------------------------
     def _terminate_validation(self, progressBar):
         msg = "You have cancelled the validation currently in-progress."
-        msgBox = GRIME_AI_QMessageBox('Validation Terminated', msg, GRIME_AI_QMessageBox.Close)
+        msgBox = App_QMessageBox('Validation Terminated', msg, App_QMessageBox.Close)
         msgBox.displayMsgBox()
 
         if progressBar and progressBar.isVisible():

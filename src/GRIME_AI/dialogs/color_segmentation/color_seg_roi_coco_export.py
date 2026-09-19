@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# GRIME_AI_ROI_COCO_Export.py
+# color_seg_roi_coco_export.py
 #
 # Export Color Segmentation ROIs to COCO 1.0, matching the format the ML /
 # SAGE training path consumes. ROI name -> category; ROI shape (rectangle,
@@ -26,6 +26,7 @@ import datetime
 import cv2
 
 from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import ROIShape
+from ...app_identity import APP_DISPLAY_NAME
 
 
 _SHAPE_NAMES = {ROIShape.RECTANGLE: "rectangle", ROIShape.POLYGON: "polygon", ROIShape.FREEFORM: "freeform"}
@@ -109,7 +110,7 @@ def export_roi_masks(roi_list, images_list, image_folder,
         "categories": categories,
         "licenses": [{"name": "", "id": 0, "url": ""}],
         "info": {"contributor": "", "date_created": "",
-                 "description": "GRIME AI Color Segmentation ROIs",
+                 "description": f"{APP_DISPLAY_NAME} Color Segmentation ROIs",
                  "url": "", "version": "1.0", "year": ""},
     }
 

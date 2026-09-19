@@ -13,7 +13,7 @@
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
 from PyQt5.uic import loadUi
 
-from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE
+from GRIME_AI.CSS_Styles import BUTTON_CSS_STEEL_BLUE
 from GRIME_AI.coco_generator import CocoGenerator
 from GRIME_AI.utils.resource_utils import ui_path
 

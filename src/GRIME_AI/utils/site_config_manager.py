@@ -37,6 +37,7 @@ import copy
 import json
 import os
 import sys
+from GRIME_AI.app_identity import APP_DISPLAY_NAME
 
 
 # ============================================================================
@@ -243,8 +244,8 @@ def _dest(flag):
 def _default_config_path():
     """Resolve the settings-folder site_config.json. Imported lazily so the
     module stays light unless the default path is actually needed."""
-    from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-    settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+    from GRIME_AI.Save_Utils import Save_Utils
+    settings_folder = Save_Utils().get_settings_folder()
     return os.path.normpath(os.path.join(settings_folder, "site_config.json"))
 
 
@@ -688,7 +689,7 @@ def _add_config_arguments(p):
     """Add the config-editor arguments to any parser (subparser or flat)."""
     p.add_argument("config_path", nargs="?", default=None,
                    help="Path to the site config JSON (optional; default: the "
-                        "GRIME AI settings folder). May also be given as --config.")
+                        f"{APP_DISPLAY_NAME} settings folder). May also be given as --config.")
     p.add_argument("--config", dest="config", default=None,
                    help="Path to the site config JSON (alternative to the positional path)")
     p.add_argument("--show", action="store_true",
@@ -910,7 +911,7 @@ def run_config(args):
         sel_order = [str(s) for s in cfg.get("selected_folders", [])]
         sel = set(sel_order)
         canonical = sel_order[0] if sel_order else None
-        print(f"[GRIME AI] datasets under {root}:")
+        print(f"[{APP_DISPLAY_NAME}] datasets under {root}:")
         for name in valid:
             n_img, cats = folder_details(root, name)
             labels = ", ".join(c.get("name", "?") for c in cats) or "no categories"
@@ -931,7 +932,7 @@ def run_config(args):
             return 1
         labels, coverage, conflicts = collect_training_labels(root, selected)
         current = get_training_categories(cfg)
-        print(f"[GRIME AI] categories across {len(selected)} selected folder(s):")
+        print(f"[{APP_DISPLAY_NAME}] categories across {len(selected)} selected folder(s):")
         for lbl in labels:
             have = len(coverage.get(lbl, ()))
             mark = "*" if lbl == current else " "
@@ -956,7 +957,7 @@ def run_config(args):
         return 0
 
     if args.show:
-        print(f"[GRIME AI] site config: {path}")
+        print(f"[{APP_DISPLAY_NAME}] site config: {path}")
         for _, key, _, _ in _PARAMS:
             if key in cfg:
                 print(f"  {key:28s} = {_fmt(cfg[key])}")
@@ -985,7 +986,7 @@ def run_config(args):
 
     updates = _collect_updates(args)
     if not updates and not dataset_changed:
-        print("[GRIME AI] No parameters supplied — nothing changed. "
+        print(f"[{APP_DISPLAY_NAME}] No parameters supplied — nothing changed. "
               "Use --show to view, --list-folders to inspect datasets, "
               "--gui to edit visually, or --help for options.")
         return 0
@@ -1004,7 +1005,7 @@ def run_config(args):
                for k in updates if before.get(k, "<unset>") != cfg[k]]
     _write(path, cfg, eol)
 
-    print(f"[GRIME AI] Updated {path}")
+    print(f"[{APP_DISPLAY_NAME}] Updated {path}")
     for m in dataset_msgs:
         print(f"  {m}")
     if dataset_changed:
@@ -1076,7 +1077,7 @@ def _get_editor_class():
     # matches the Training tab; falls back to equivalents when the module is run
     # standalone with the GRIME_AI package off the path.
     try:
-        from GRIME_AI.GRIME_AI_CSS_Styles import (
+        from GRIME_AI.CSS_Styles import (
             BUTTON_CSS_STEEL_BLUE as _BTN_CSS,
             BUTTON_CSS_RED_OUTLINE as _BTN_CSS_RED_OUTLINE,
         )
@@ -1158,7 +1159,7 @@ def _get_editor_class():
     class SiteConfigEditor(QDialog):
         def __init__(self, path=None, parent=None):
             super().__init__(parent)
-            self.setWindowTitle("GRIME AI — Site Config Editor")
+            self.setWindowTitle(f"{APP_DISPLAY_NAME} — Site Config Editor")
             self.setModal(False)
             self.resize(1020, 720)
             self._cfg = {}
@@ -1983,7 +1984,7 @@ def open_editor(parent=None, path=None):
 def main(argv=None):
     raw = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(
-        description="Edit a GRIME AI site config JSON — CLI flags to edit in "
+        description=f"Edit a {APP_DISPLAY_NAME} site config JSON — CLI flags to edit in "
                     "place, or --gui (or no args) for the visual editor."
     )
     _add_config_arguments(parser)

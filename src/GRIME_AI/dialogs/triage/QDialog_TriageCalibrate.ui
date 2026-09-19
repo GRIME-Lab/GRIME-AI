@@ -238,9 +238,9 @@
      <property name="toolTip"><string>Draw a rectangle on the image to restrict blur scoring to a specific region. Leave empty to score the full frame.</string></property>
      <layout class="QVBoxLayout" name="vLayoutFocusRegion">
 
-      <!-- GRIME_AI_QLabel promoted widget -->
+      <!-- App_QLabel promoted widget -->
       <item>
-       <widget class="GRIME_AI_QLabel" name="label_FocusImage">
+       <widget class="App_QLabel" name="label_FocusImage">
         <property name="text"><string></string></property>
         <property name="alignment"><set>Qt::AlignCenter</set></property>
         <property name="scaledContents"><bool>false</bool></property>
@@ -308,9 +308,9 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>GRIME_AI_QLabel</class>
+   <class>App_QLabel</class>
    <extends>QLabel</extends>
-   <header location="global">GRIME_AI.GRIME_AI_QLabel</header>
+   <header location="global">GRIME_AI.App_QLabel</header>
   </customwidget>
  </customwidgets>
  <resources/>

@@ -24,15 +24,16 @@ from PyQt5.QtWidgets import QMessageBox
 from omegaconf import OmegaConf, DictConfig
 
 # Project imports
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
-from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+from GRIME_AI.QProgressWheel import QProgressWheel
+from GRIME_AI.App_QMessageBox import App_QMessageBox
+from GRIME_AI.Save_Utils import Save_Utils
 
 # Engines
 from GRIME_AI.ml_core.sam2_inference_engine import SAM2InferenceEngine
 from GRIME_AI.ml_core.segformer_inference_engine import SegFormerInferenceEngine
 from GRIME_AI.ml_core.yolo_inference_engine import YOLOInferenceEngine
 from GRIME_AI.ml_core.ml_helpers import add_coco_entries
+from ..app_identity import APP_DISPLAY_NAME
 
 
 # ======================================================================================================================
@@ -48,7 +49,7 @@ class MLImageSegmentation:
 
         # Load config (same as before)
         if cfg is None or "load_model" not in cfg:
-            settings_folder = os.path.normpath(GRIME_AI_Save_Utils().get_settings_folder())
+            settings_folder = os.path.normpath(Save_Utils().get_settings_folder())
             CONFIG_FILENAME = "site_config.json"
             config_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
             with open(config_file, 'r') as file:
@@ -106,7 +107,7 @@ class MLImageSegmentation:
     def show_missing_files_dialog(self, missing_items):
         lines = [f"{name}: {path}" for name, path in missing_items]
         full_msg = "The following files or directories are missing or have been moved:\n\n" + "\n".join(lines) + "\n"
-        msgBox = GRIME_AI_QMessageBox('Model Configuration Error', full_msg, QMessageBox.Close, icon=QMessageBox.Critical)
+        msgBox = App_QMessageBox('Model Configuration Error', full_msg, QMessageBox.Close, icon=QMessageBox.Critical)
         msgBox.displayMsgBox()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -235,7 +236,7 @@ class MLImageSegmentation:
                         "but is not installed in this environment.\n\n"
                         "Install it with:\n"
                         "  pip install ultralytics\n\n"
-                        "All other GRIME AI features remain available."
+                        f"All other {APP_DISPLAY_NAME} features remain available."
                     )
                     try:
                         progressBar.close()

@@ -158,7 +158,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidgetItem, QToolBa
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu
 from PyQt5.QtWidgets import QTreeWidgetItem
 
-from GRIME_AI.GRIME_AI_SplashScreen import GRIME_AI_SplashScreen
+from GRIME_AI.SplashScreen import SplashScreen
 from GRIME_AI.utils.window_utils import (
     install_window_placement_guard,
     reset_window_layout,
@@ -171,39 +171,39 @@ from GRIME_AI.usgs.usgs_client import USGSClient
 # ----------------------------------------------------------------------------
 # POP-UP/MODELESS DIALOG BOXES
 # ----------------------------------------------------------------------------
-# lazy: from GRIME_AI.dialogs.color_segmentation.GRIME_AI_ColorSegmentationDlg import GRIME_AI_ColorSegmentationDlg
-# lazy: from GRIME_AI.dialogs.edge_detection.GRIME_AI_EdgeDetectionDlg import GRIME_AI_EdgeDetectionDlg
-# lazy: from GRIME_AI.dialogs.image_navigation.GRIME_AI_ImageNavigationDlg import GRIME_AI_ImageNavigationDlg
-# lazy: from GRIME_AI.dialogs.file_utilities.GRIME_AI_FileUtilitiesDlg import GRIME_AI_FileUtilitiesDlg
-# lazy: from GRIME_AI.dialogs.mask_editor.GRIME_AI_MaskEditorDlg import GRIME_AI_MaskEditorDlg
-# lazy: from GRIME_AI.dialogs.composite_slice.GRIME_AI_CompositeSliceDlg import GRIME_AI_CompositeSliceDlg
-# lazy: from GRIME_AI.dialogs.release_notes.GRIME_AI_ReleaseNotesDlg import GRIME_AI_ReleaseNotesDlg
-# lazy: from GRIME_AI.dialogs.extract_coco_masks.GRIME_AI_ExportCOCOMasksDlg import GRIME_AI_ExportCOCOMasksDlg
-# lazy: from GRIME_AI.dialogs.image_organizer.GRIME_AI_ImageOrganizerDlg import GRIME_AI_ImageOrganizerDlg
-# lazy: from GRIME_AI.dialogs.temporal_averaging.GRIME_AI_TemporalAveragingDlg import GRIME_AI_TemporalAveragingDlg
-from GRIME_AI.dialogs.triage.GRIME_AI_TriageOptionsDlg import GRIME_AI_TriageOptionsDlg
-from GRIME_AI.GRIME_AI_Color import GRIME_AI_Color
-from GRIME_AI.vegetation_indices import GRIME_AI_Vegetation_Indices, GreennessIndex
-from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
-from GRIME_AI.GRIME_AI_ImageData import imageData
-from GRIME_AI.GRIME_AI_ProductTable import GRIME_AI_ProductTable
-from GRIME_AI.GRIME_AI_QLabel import DrawingMode
-from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
-from GRIME_AI.GRIME_AI_QProgressWheel import QProgressWheel
-from GRIME_AI.GRIME_AI_Utils import GRIME_AI_Utils
-from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import GRIME_AI_roiData, ROIShape
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-from GRIME_AI.GRIME_AI_Resize_Controls import GRIME_AI_Resize_Controls
-from GRIME_AI.GRIME_AI_TimeStamp_Utils import GRIME_AI_TimeStamp_Utils
-from GRIME_AI.GRIME_AI_ImageTriage import GRIME_AI_ImageTriage
-from GRIME_AI.GRIME_AI_GreenImageGenerator import GreenImageGenerator
-from GRIME_AI.GRIME_AI_COCO_Utils import GRIME_AI_COCO_Utils
+# lazy: from GRIME_AI.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
+# lazy: from GRIME_AI.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
+# lazy: from GRIME_AI.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
+# lazy: from GRIME_AI.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
+# lazy: from GRIME_AI.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
+# lazy: from GRIME_AI.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
+# lazy: from GRIME_AI.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
+# lazy: from GRIME_AI.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
+# lazy: from GRIME_AI.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
+# lazy: from GRIME_AI.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
+from GRIME_AI.dialogs.triage.TriageOptionsDlg import TriageOptionsDlg
+from GRIME_AI.Color import Color
+from GRIME_AI.vegetation_indices import Vegetation_Indices, GreennessIndex
+from GRIME_AI.JSON_Editor import JsonEditor
+from GRIME_AI.ImageData import imageData
+from GRIME_AI.ProductTable import ProductTable
+from GRIME_AI.App_QLabel import DrawingMode
+from GRIME_AI.App_QMessageBox import App_QMessageBox
+from GRIME_AI.QProgressWheel import QProgressWheel
+from GRIME_AI.App_Utils import App_Utils
+from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
+from GRIME_AI.Save_Utils import Save_Utils
+from GRIME_AI.Resize_Controls import Resize_Controls
+from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
+from GRIME_AI.ImageTriage import ImageTriage
+from GRIME_AI.GreenImageGenerator import GreenImageGenerator
+from GRIME_AI.COCO_Utils import COCO_Utils
 
 # ----------------------------------------------------------------------------
 # PHENOCAM
 # ----------------------------------------------------------------------------
-from GRIME_AI.phenocam.GRIME_AI_PhenoCam import GRIME_AI_PhenoCam, dailyList
-from GRIME_AI.phenocam.GRIME_AI_Phenocam_API import GRIME_AI_Phenocam_API
+from GRIME_AI.phenocam.PhenoCam import PhenoCam, dailyList
+from GRIME_AI.phenocam.Phenocam_API import Phenocam_API
 
 from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
 
@@ -232,6 +232,7 @@ from GRIME_AI.constants import edgeMethodsClass, featureMethodsClass, modelSetti
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 from GRIME_AI.exifData import EXIFData
+from GRIME_AI.app_identity import APP_NAME, APP_DISPLAY_NAME, USER_ROOT, APP_LOGO_FILENAME, APP_REPO_URL
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -298,7 +299,7 @@ class PhenocamPreviewFetcher(QtCore.QThread):
         self.roi_name  = roi_name  # e.g. "NEON.D01.BART.DP1.00033_DB_1000"
     def run(self):
         import urllib.request, datetime as dt_mod
-        from GRIME_AI.phenocam.GRIME_AI_PhenoCam import GRIME_AI_PhenoCam
+        from GRIME_AI.phenocam.PhenoCam import PhenoCam
         today = dt_mod.date.today()
         t0, t1 = dt_mod.time(11, 0), dt_mod.time(13, 0)
         # Extract ROI type prefix for filename filtering (e.g. "DB" from "..._DB_1000")
@@ -314,7 +315,7 @@ class PhenocamPreviewFetcher(QtCore.QThread):
             url = (f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
                    f"{check.year}/{str(check.month).zfill(2)}/{str(check.day).zfill(2)}")
             try:
-                imgs = GRIME_AI_PhenoCam().getVisibleImages(url, t0, t1).getVisibleList()
+                imgs = PhenoCam().getVisibleImages(url, t0, t1).getVisibleList()
                 if imgs:
                     if roi_filter:
                         # Filter to images whose filename contains the ROI type
@@ -353,7 +354,7 @@ class PhenocamDownloadWorker(QtCore.QThread):
 
     def run(self):
         import urllib.request, os, datetime as dt_mod
-        from GRIME_AI.phenocam.GRIME_AI_PhenoCam import GRIME_AI_PhenoCam
+        from GRIME_AI.phenocam.PhenoCam import PhenoCam
 
         # All PhenoCam filename timestamps are local time (both NEON via PhenoCam
         # and strictly PhenoCam sites), so the user's local start/end times are
@@ -380,7 +381,7 @@ class PhenocamDownloadWorker(QtCore.QThread):
 
             try:
                 image_list.extend(
-                    GRIME_AI_PhenoCam().getVisibleImages(url, t0, t1).getVisibleList()
+                    PhenoCam().getVisibleImages(url, t0, t1).getVisibleList()
                 )
             except Exception as e:
                 print(f"[PhenocamDownloadWorker] Error scanning {current}: {e}")
@@ -572,7 +573,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event):
 
         # PARENT CLASS WHICH CONTAINS ALL FUNCTIONS TO RESIZE ALL CONTROLS ON THE GUI, AS NEEDED
-        resizeControls = GRIME_AI_Resize_Controls()
+        resizeControls = Resize_Controls()
 
         # TAB 0 - NEON SITES
         resizeControls.resizeTab_0(self, event)
@@ -631,18 +632,18 @@ class MainWindow(QMainWindow):
         ui_path = os.path.join(os.path.dirname(__file__), "resources", "ui", "neonAIgui.ui")
         uic.loadUi(ui_path, self)
 
-        self.setWindowTitle("GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME}" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
         self.tabWidget.setTabVisible(1, False)
         #self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowStaysOnTopHint)
 
         # Initialize a variable to hold the current NEON site information
         self.current_site_info = ["No site info available."]
-        # Set the tooltip generator on your GRIME_AI_QLabel widget(s). For example, if your widget is named NEON_labelLatestImage:
+        # Set the tooltip generator on your App_QLabel widget(s). For example, if your widget is named NEON_labelLatestImage:
         if 0:
             if hasattr(self.NEON_labelLatestImage, "tooltipGenerator"):
                 self.NEON_labelLatestImage.tooltipGenerator = self.siteInfoTooltip
             else:
-                print("Warning: NEON_labelLatestImage is not an instance of GRIME_AI_QLabel.")
+                print("Warning: NEON_labelLatestImage is not an instance of App_QLabel.")
 
         # Set stylesheet for the tabs to change color when a tab is selected.
         # Theme-aware: re-applied whenever light/dark mode is toggled.
@@ -660,7 +661,7 @@ class MainWindow(QMainWindow):
         # ------------------------------------------------------------------------------------------------------------------
         # CREATE REQUIRED FOLDERS IN THE USER'S DOCUMENTS FOLDER
         # ------------------------------------------------------------------------------------------------------------------
-        utils = GRIME_AI_Utils()
+        utils = App_Utils()
         utils.create_GRIME_folders()
 
         self.populate_controls()
@@ -679,16 +680,16 @@ class MainWindow(QMainWindow):
 
         # ----------------------------------------------------------------------------------------------------
         # ----------------------------------------------------------------------------------------------------
-        #JES file_utils = GRIME_AI_Save_Utils()
+        #JES file_utils = Save_Utils()
         #JES file_utils.read_config_file()
 
         global imageFileFolder
         imageFileFolder = JsonEditor().getValue("Local_Image_Folder")
 
-        #JES folderPath = GRIME_AI_Save_Utils().NEON_getSaveFolderPath()
+        #JES folderPath = Save_Utils().NEON_getSaveFolderPath()
         #JES self.edit_NEONSaveFilePath.1setText(folderPath)
 
-        #JES folderPath = GRIME_AI_Save_Utils().USGS_getSaveFolderPath()
+        #JES folderPath = Save_Utils().USGS_getSaveFolderPath()
         #JES self.edit_USGSSaveFilePath.setText(folderPath)
 
 
@@ -840,7 +841,7 @@ class MainWindow(QMainWindow):
         self._menu_view.addSeparator()
         self._action_reset_layout = QAction("Reset Window Layout", self)
         self._action_reset_layout.setStatusTip(
-            "Resize and re-center the GRIME AI window inside the visible screen area")
+            f"Resize and re-center the {APP_DISPLAY_NAME} window inside the visible screen area")
         self._action_reset_layout.triggered.connect(self._reset_window_layout)
         self._menu_view.addAction(self._action_reset_layout)
 
@@ -1150,7 +1151,7 @@ class MainWindow(QMainWindow):
         from pathlib import Path
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("About GRIME AI")
+        dlg.setWindowTitle(f"About {APP_DISPLAY_NAME}")
         dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         dlg.setFixedSize(480, 420)
 
@@ -1159,14 +1160,14 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
-        logo_path  = splash_dir / "GRIME-AI Logo with Tagline.png"
+        logo_path  = splash_dir / APP_LOGO_FILENAME
         lbl_logo   = QLabel()
         lbl_logo.setAlignment(Qt.AlignCenter)
         if logo_path.exists():
             pix = QPixmap(str(logo_path)).scaledToWidth(320, Qt.SmoothTransformation)
             lbl_logo.setPixmap(pix)
         else:
-            lbl_logo.setText("GRIME AI")
+            lbl_logo.setText(APP_DISPLAY_NAME)
             lbl_logo.setStyleSheet("font-size: 28px; font-weight: bold;")
         layout.addWidget(lbl_logo)
 
@@ -1186,7 +1187,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(lbl_date)
 
         if SHA != 'N/A':
-            commit_url = f"https://github.com/JohnStranzl/GRIME-AI/commit/{SHA}"
+            commit_url = f"{APP_REPO_URL}/commit/{SHA}"
             lbl_sha = QLabel(f'Commit: <a href="{commit_url}" style="color: gray;">{SHA[:12]}</a>')
         else:
             lbl_sha = QLabel("Commit: N/A")
@@ -1206,7 +1207,7 @@ class MainWindow(QMainWindow):
     def _on_usgs_startup_result(self, hivis, camera_dict, camera_list):
         """Callback when USGS HIVIS data has been fetched in background."""
         if hivis is None:
-            msgBox = GRIME_AI_QMessageBox('USGS NIMS Error', 'Unable to access USGS NIMS/HIVIS Database!')
+            msgBox = App_QMessageBox('USGS NIMS Error', 'Unable to access USGS NIMS/HIVIS Database!')
             msgBox.displayMsgBox()
             return
 
@@ -1453,7 +1454,7 @@ class MainWindow(QMainWindow):
 
         # POPULATE THE MAP WITH BLUE PINS FOR SD MESONET STATIONS
         try:
-            from geomaps.SDMESONET import SDMesonet
+            from GRIME_AI.geomaps.SDMESONET import SDMesonet
             sd_df = SDMesonet().get_dataframe()
             self.osm_widget.add_sdmesonet_pins(sd_df)
         except Exception as e:
@@ -1475,7 +1476,7 @@ class MainWindow(QMainWindow):
              └─ Hyperlink items (opened in browser on click)
         """
         import pandas as pd
-        api = GRIME_AI_Phenocam_API()
+        api = Phenocam_API()
         cameras_df = api.get_cameras(all_records=True)
         rois_df    = api.get_roilists(all_records=True)
 
@@ -1578,7 +1579,7 @@ class MainWindow(QMainWindow):
         ###JES - THIS INTERACTION WITH THE PHENOCAM SERVERS TAKES ON THE ORDER OF 4 MINUTES; SO I
         if 0:
             print("START: Phenocam Meta Data Export...")
-            api.export_all_to_excel(output_dir=GRIME_AI_Save_Utils().get_phenocam_folder())
+            api.export_all_to_excel(output_dir=Save_Utils().get_phenocam_folder())
             print("COMPLETED: Phenocam Meta Data Export.")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -1834,13 +1835,13 @@ class MainWindow(QMainWindow):
 
         site_name = self._phenocam_get_selected_sitename()
         if not site_name:
-            GRIME_AI_QMessageBox("PhenoCam Download",
+            App_QMessageBox("PhenoCam Download",
                                  "Please select a site first.").displayMsgBox()
             return
 
         save_folder = self.phenocam_folder_edit.text().strip()
         if not save_folder:
-            GRIME_AI_QMessageBox("PhenoCam Download",
+            App_QMessageBox("PhenoCam Download",
                                  "Please specify a download folder.").displayMsgBox()
             return
 
@@ -1848,7 +1849,7 @@ class MainWindow(QMainWindow):
         end_dt = self._phenocam_get_end_datetime()
 
         if start_dt >= end_dt:
-            GRIME_AI_QMessageBox("PhenoCam Download",
+            App_QMessageBox("PhenoCam Download",
                                  "Start must be before End.").displayMsgBox()
             return
 
@@ -1884,7 +1885,7 @@ class MainWindow(QMainWindow):
 
         if count == -1:
             self.phenocam_status_label.setText("Download cancelled.")
-            GRIME_AI_QMessageBox("PhenoCam Download", "Download cancelled.").displayMsgBox()
+            App_QMessageBox("PhenoCam Download", "Download cancelled.").displayMsgBox()
             return
 
         self.phenocam_progress_bar.setValue(100)
@@ -1895,7 +1896,7 @@ class MainWindow(QMainWindow):
             else "No new images found for the selected date range."
         )
         self.phenocam_status_label.setText(msg)
-        GRIME_AI_QMessageBox("PhenoCam Download", msg).displayMsgBox()
+        App_QMessageBox("PhenoCam Download", msg).displayMsgBox()
 
     # ------------------------------------------------------------------------------------------------------------------
     #
@@ -1954,7 +1955,7 @@ class MainWindow(QMainWindow):
 
     def siteInfoTooltip(self):
         """
-        This function returns the dynamic tooltip string for GRIME_AI_QLabel.
+        This function returns the dynamic tooltip string for App_QLabel.
         It uses self.current_site_info (a list of strings) to create the tooltip.
         """
         if self.current_site_info:
@@ -1992,17 +1993,17 @@ class MainWindow(QMainWindow):
         except Exception:
             images_list = []
         if not self.roiList:
-            msgBox = GRIME_AI_QMessageBox('Export ROI Masks', 'Draw and add at least one ROI first.', buttons=QMessageBox.Close)
+            msgBox = App_QMessageBox('Export ROI Masks', 'Draw and add at least one ROI first.', buttons=QMessageBox.Close)
             msgBox.displayMsgBox(); return
         if not images_list:
-            msgBox = GRIME_AI_QMessageBox('Export ROI Masks', 'No images in the current folder.', buttons=QMessageBox.Close)
+            msgBox = App_QMessageBox('Export ROI Masks', 'No images in the current folder.', buttons=QMessageBox.Close)
             msgBox.displayMsgBox(); return
         try:
             out_path = export_roi_masks(self.roiList, images_list, imageFileFolder)
         except Exception as e:
-            msgBox = GRIME_AI_QMessageBox('Export ROI Masks', f'Export failed: {e}', buttons=QMessageBox.Close)
+            msgBox = App_QMessageBox('Export ROI Masks', f'Export failed: {e}', buttons=QMessageBox.Close)
             msgBox.displayMsgBox(); return
-        msgBox = GRIME_AI_QMessageBox('Export ROI Masks', f'Saved COCO 1.0 ROI masks to:\n{out_path}', buttons=QMessageBox.Close)
+        msgBox = App_QMessageBox('Export ROI Masks', f'Saved COCO 1.0 ROI masks to:\n{out_path}', buttons=QMessageBox.Close)
         msgBox.displayMsgBox()
 
     def buildFeatureFile(self):
@@ -2033,8 +2034,8 @@ class MainWindow(QMainWindow):
             print('This is Test Function 1.')
 
             # KMeans EXPECTS THE BYTE ORDER TO BE RGB
-            img1 = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
-            #img1 = GRIME_AI_Utils().convertQImageToMat(myImage.toImage())
+            img1 = App_Utils().convertQImageToMat(currentImage.toImage())
+            #img1 = App_Utils().convertQImageToMat(myImage.toImage())
 
             rgb = cv2.blur(img1, ksize=(11, 11))
 
@@ -2044,10 +2045,10 @@ class MainWindow(QMainWindow):
             if len(self.roiList) > 0:
                 # DIAGNOSTICS
                 #if self.checkBoxColorDiagnostics.checkState():
-                from GRIME_AI.GRIME_AI_Diagnostics import GRIME_AI_Diagnostics
-                GRIME_AI_Diagnostics.RGB3DPlot(rgb)
-                GRIME_AI_Diagnostics.plotHSVChannelsGray(hsv)
-                GRIME_AI_Diagnostics.plotHSVChannelsColor(hsv)
+                from GRIME_AI.Diagnostics import Diagnostics
+                Diagnostics.RGB3DPlot(rgb)
+                Diagnostics.plotHSVChannelsGray(hsv)
+                Diagnostics.plotHSVChannelsColor(hsv)
 
                 # segment colors
                 rgb1 = myGRIMe_Color.segmentColors(rgb, hsv, self.roiList)
@@ -2076,15 +2077,15 @@ class MainWindow(QMainWindow):
         self.greenness_index_list.clear()
 
         if self.colorSegmentationParams.GCC:
-            self.greenness_index_list.append(GreennessIndex(GRIME_AI_Vegetation_Indices.GCC))
+            self.greenness_index_list.append(GreennessIndex(Vegetation_Indices.GCC))
         if self.colorSegmentationParams.GLI:
-            self.greenness_index_list.append(GreennessIndex(GRIME_AI_Vegetation_Indices.GLI))
+            self.greenness_index_list.append(GreennessIndex(Vegetation_Indices.GLI))
         if self.colorSegmentationParams.NDVI:
-            self.greenness_index_list.append(GreennessIndex(GRIME_AI_Vegetation_Indices.NDVI))
+            self.greenness_index_list.append(GreennessIndex(Vegetation_Indices.NDVI))
         if self.colorSegmentationParams.ExG:
-            self.greenness_index_list.append(GreennessIndex(GRIME_AI_Vegetation_Indices.ExG))
+            self.greenness_index_list.append(GreennessIndex(Vegetation_Indices.ExG))
         if self.colorSegmentationParams.RGI:
-            self.greenness_index_list.append(GreennessIndex(GRIME_AI_Vegetation_Indices.RGI))
+            self.greenness_index_list.append(GreennessIndex(Vegetation_Indices.RGI))
 
         self.initROITable(self.greenness_index_list)
 
@@ -2092,7 +2093,7 @@ class MainWindow(QMainWindow):
     # TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR
     # ------------------------------------------------------------------------------------------------------------------
     def createToolBar(self):
-        toolbar = QToolBar("GRIME-AI Toolbar")
+        toolbar = QToolBar(f"{APP_NAME} Toolbar")
         self.addToolBar(toolbar)
         toolbar.setIconSize(QtCore.QSize(48, 48))
 
@@ -2603,16 +2604,16 @@ class MainWindow(QMainWindow):
         global currentImage
 
         if currentImage:
-            myGRIME_Color = GRIME_AI_Color()
+            myApp_Color = Color()
 
             # CREATE AN ROI OBJECT
-            roiObj = GRIME_AI_roiData()
+            roiObj = roiData()
 
             # POPULATE ROI OBJECT WITH ROI INFORMATION
             if len(roiParameters.strROIName) > 0:
                 roiObj.setROIName(roiParameters.strROIName)
             else:
-                msgBox = GRIME_AI_QMessageBox('ROI Error', 'A name for the ROI is required!', buttons=QMessageBox.Close)
+                msgBox = App_QMessageBox('ROI Error', 'A name for the ROI is required!', buttons=QMessageBox.Close)
                 response = msgBox.displayMsgBox()
                 return
 
@@ -2637,7 +2638,7 @@ class MainWindow(QMainWindow):
             if rectROI != None:
                 roiObj.setDisplayROI(rectROI)
             else:
-                msgBox = GRIME_AI_QMessageBox('ROI Error', 'Please draw the ROI on the image!', buttons=QMessageBox.Close)
+                msgBox = App_QMessageBox('ROI Error', 'Please draw the ROI on the image!', buttons=QMessageBox.Close)
                 response = msgBox.displayMsgBox()
                 return
 
@@ -2650,7 +2651,7 @@ class MainWindow(QMainWindow):
 
                 roiObj.setROIShape(roiShape)
             except Exception:
-                msgBox = GRIME_AI_QMessageBox('ROI Error',
+                msgBox = App_QMessageBox('ROI Error',
                                            'An unexpected error occurred calculating the ROI of the full resolution image!', buttons=QMessageBox.Close)
                 response = msgBox.displayMsgBox()
 
@@ -2664,12 +2665,12 @@ class MainWindow(QMainWindow):
 
             # EXTRACT DOMINANT RGB COLORS AND ADD THEM TO THE ROI OBJECT
             #JES - PROVISIONAL - RGB CLUSTERS ARE NOT CURRENTLY USED.
-            #JES qImg, clusterCenters, hist = myGRIME_Color.KMeans(rgb, roiObj.getNumColorClusters())
+            #JES qImg, clusterCenters, hist = myApp_Color.KMeans(rgb, roiObj.getNumColorClusters())
             #JES roiObj.setClusterCenters(clusterCenters, hist)
 
-            img1 = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+            img1 = App_Utils().convertQImageToMat(currentImage.toImage())
             if not self._addTrainedROI(roiObj, img1):
-                msgBox = GRIME_AI_QMessageBox('ROI Error', 'The ROI contains too few pixels. Please draw a larger ROI.', buttons=QMessageBox.Close)
+                msgBox = App_QMessageBox('ROI Error', 'The ROI contains too few pixels. Please draw a larger ROI.', buttons=QMessageBox.Close)
                 response = msgBox.displayMsgBox()
                 return
 
@@ -2680,14 +2681,14 @@ class MainWindow(QMainWindow):
     # Returns False (nothing added) if the ROI has too few pixels.
     # ==================================================================================================================
     def _addTrainedROI(self, roiObj, img1):
-        myGRIME_Color = GRIME_AI_Color()
+        myApp_Color = Color()
 
         # EXTRACT DOMINANT HSV COLORS AND ADD THEM TO THE ROI OBJECT
         # Only pixels inside the ROI (rectangle, polygon or free-form) are used.
         rgb = roiObj.insidePixels(img1)
         if rgb is None or rgb.shape[0] < roiObj.getNumColorClusters():
             return False
-        hist, colorClusters = myGRIME_Color.extractDominant_HSV(rgb, roiObj.getNumColorClusters())
+        hist, colorClusters = myApp_Color.extractDominant_HSV(rgb, roiObj.getNumColorClusters())
         roiObj.setHSVClusterCenters(colorClusters, hist)
 
         roiObj.setTrainingImageName(currentImageFilename)
@@ -2698,7 +2699,7 @@ class MainWindow(QMainWindow):
         # DISPLAY IN FEATURE TABLE
         # ----------------------------------------------------------------------------------------------------------
         # CREATE COLOR BAR TO DISPLAY CLUSTER COLORS
-        colorBar = GRIME_AI_Color.create_color_bar(hist, colorClusters)
+        colorBar = Color.create_color_bar(hist, colorClusters)
 
         # CONVERT colorBar TO A QImage FOR USE IN DISPLAYING IN QT GUI
         qImg = QImage(colorBar.data, colorBar.shape[1], colorBar.shape[0], QImage.Format_BGR888)
@@ -2751,7 +2752,7 @@ class MainWindow(QMainWindow):
         parent = self.colorSegmentationDlg if self.colorSegmentationDlg is not None else self
 
         if not currentImage:
-            GRIME_AI_QMessageBox('Import ROI Masks', 'Open an image first.', buttons=QMessageBox.Close).displayMsgBox()
+            App_QMessageBox('Import ROI Masks', 'Open an image first.', buttons=QMessageBox.Close).displayMsgBox()
             return
 
         path, _ = QFileDialog.getOpenFileName(parent, 'Import ROI Masks', imageFileFolder or '',
@@ -2762,16 +2763,16 @@ class MainWindow(QMainWindow):
         try:
             data = load_roi_masks(path, os.path.basename(currentImageFilename or ''))
         except Exception as e:
-            GRIME_AI_QMessageBox('Import ROI Masks', f'Could not read the file:\n{e}', buttons=QMessageBox.Close).displayMsgBox()
+            App_QMessageBox('Import ROI Masks', f'Could not read the file:\n{e}', buttons=QMessageBox.Close).displayMsgBox()
             return
 
         # The ROI coordinates only make sense on images of the same size.
         img_w, img_h = currentImage.width(), currentImage.height()
         if data['width'] and data['height'] and (data['width'], data['height']) != (img_w, img_h):
-            GRIME_AI_QMessageBox('Import ROI Masks',
+            App_QMessageBox('Import ROI Masks',
                                  f"The ROI file was made for {data['width']} x {data['height']} images, "
                                  f"but the current image is {img_w} x {img_h}. Nothing was imported.",
-                                 buttons=QMessageBox.Close).displayMsgBox()
+                            buttons=QMessageBox.Close).displayMsgBox()
             return
 
         # Replace or add to existing ROIs.
@@ -2796,10 +2797,10 @@ class MainWindow(QMainWindow):
         sy = disp_h / img_h if img_h else 1.0
         shapes = {'rectangle': ROIShape.RECTANGLE, 'polygon': ROIShape.POLYGON, 'freeform': ROIShape.FREEFORM}
 
-        img1 = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+        img1 = App_Utils().convertQImageToMat(currentImage.toImage())
         added, too_small = 0, []
         for r in data['rois']:
-            roiObj = GRIME_AI_roiData()
+            roiObj = roiData()
             roiObj.setROIName(r['name'])
             roiObj.setROIShape(shapes.get(r['shape'], ROIShape.POLYGON))
             roiObj.setImageSize(currentImage.size())
@@ -2828,7 +2829,7 @@ class MainWindow(QMainWindow):
             msg += f"\n\nSkipped (too few pixels): {', '.join(too_small)}"
         if data['skipped']:
             msg += f"\n\nSkipped {data['skipped']} annotation(s) that are not polygons or boxes."
-        GRIME_AI_QMessageBox('Import ROI Masks', msg, buttons=QMessageBox.Close).displayMsgBox()
+        App_QMessageBox('Import ROI Masks', msg, buttons=QMessageBox.Close).displayMsgBox()
 
     # ==================================================================================================================
     #
@@ -3043,8 +3044,8 @@ class MainWindow(QMainWindow):
         JsonEditor().update_json_entry("USGS_Root_Folder", USGS_download_file_path)
 
         if len(USGS_download_file_path) == 0:
-            strMessage = 'A download folder has not been specified. Would you like to use the last GRIME-AI USGS download folder used?'
-            msgBox = GRIME_AI_QMessageBox('USGS Root Download Folder', strMessage, QMessageBox.Yes | QMessageBox.No)
+            strMessage = f'A download folder has not been specified. Would you like to use the last {APP_NAME} USGS download folder used?'
+            msgBox = App_QMessageBox('USGS Root Download Folder', strMessage, QMessageBox.Yes | QMessageBox.No)
             response = msgBox.displayMsgBox()
 
             if response == QMessageBox.Yes:
@@ -3154,7 +3155,7 @@ class MainWindow(QMainWindow):
             return None
         '''
 
-        settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+        settings_folder = Save_Utils().get_settings_folder()
         CONFIG_FILENAME = "site_config.json"
         site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
 
@@ -3274,15 +3275,15 @@ class MainWindow(QMainWindow):
         global currentImageIndex
 
         if len(dailyImagesList.getVisibleList()) == 0:
-            strMessage = 'You must first create a list of images to operate on. Use the FETCH files feature of GRIME AI.'
-            msgBox = GRIME_AI_QMessageBox('Composite Slice Error', strMessage, QMessageBox.Close)
+            strMessage = f'You must first create a list of images to operate on. Use the FETCH files feature of {APP_DISPLAY_NAME}.'
+            msgBox = App_QMessageBox('Composite Slice Error', strMessage, QMessageBox.Close)
             response = msgBox.displayMsgBox()
         else:
             imageFilename = dailyImagesList.getVisibleList()[currentImageIndex].fullPathAndFilename
 
             if self.compositeSliceDlg is None:
-                from GRIME_AI.dialogs.composite_slice.GRIME_AI_CompositeSliceDlg import GRIME_AI_CompositeSliceDlg
-                self.compositeSliceDlg = GRIME_AI_CompositeSliceDlg()
+                from GRIME_AI.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
+                self.compositeSliceDlg = CompositeSliceDlg()
                 self.compositeSliceDlg.compositeSliceGenerateSignal.connect(self.generateCompositeSlices)
                 self.compositeSliceDlg.compositeSliceCancelSignal.connect(self.closeCompositeSlices)
                 self.compositeSliceDlg.label_Image.setDrawingMode(DrawingMode.SLICE)
@@ -3295,12 +3296,12 @@ class MainWindow(QMainWindow):
         print("Generating composite slices image(s)...")
 
         global imageFileFolder
-        composite_slices_folder = GRIME_AI_Save_Utils().create_composite_slices_folder(imageFileFolder)
+        composite_slices_folder = Save_Utils().create_composite_slices_folder(imageFileFolder)
 
         slice_rect = self.compositeSliceDlg.label_Image.getSliceRectInOriginal()
 
-        from GRIME_AI.GRIME_AI_CompositeSlices import GRIME_AI_CompositeSlices
-        compositeSlices = GRIME_AI_CompositeSlices(slice_rect)
+        from GRIME_AI.CompositeSlices import CompositeSlices
+        compositeSlices = CompositeSlices(slice_rect)
         compositeSlices.create_composite_image(dailyImagesList.visibleList, composite_slices_folder)
 
     def closeCompositeSlices(self):
@@ -3311,8 +3312,7 @@ class MainWindow(QMainWindow):
     def menubar_Generate_Greenness_Test_Images(self):
         # initialize with default settings
 
-        rootFolder = os.path.expanduser('~')
-        rootFolder = os.path.join(rootFolder, 'Documents', 'GRIME-AI', 'Test Images')
+        rootFolder = os.path.join(str(USER_ROOT), 'Test Images')
         gen = GreenImageGenerator(out_dir=rootFolder)
 
         # generate all images (solids, splotches, masks)
@@ -3329,7 +3329,7 @@ class MainWindow(QMainWindow):
 
     def toolbarButtonImageTriage(self, folder_path=None, checkBox_FetchRecursive=False):
         strMessage = 'You are about to perform Image Triage. Would you like to continue?'
-        msgBox = GRIME_AI_QMessageBox('Download Image Files', strMessage, QMessageBox.Yes | QMessageBox.No)
+        msgBox = App_QMessageBox('Download Image Files', strMessage, QMessageBox.Yes | QMessageBox.No)
         response = msgBox.displayMsgBox()
 
         if response == QMessageBox.Yes:
@@ -3338,10 +3338,10 @@ class MainWindow(QMainWindow):
 
             if len(folder) == 0:
                 strMessage = 'ERROR! Please specify an image folder containing images to triage.'
-                msgBox = GRIME_AI_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
+                msgBox = App_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
                 response = msgBox.displayMsgBox()
             else:
-                TriageDlg = GRIME_AI_TriageOptionsDlg(folder=folder)
+                TriageDlg = TriageOptionsDlg(folder=folder)
 
                 response = TriageDlg.exec_()
 
@@ -3349,10 +3349,10 @@ class MainWindow(QMainWindow):
 
                     if len(TriageDlg.getReferenceImageFilename()) == 0 and TriageDlg.getCorrectAlignment() == True:
                         strMessage = 'Please select reference image if you want to correct image alignment.'
-                        msgBox = GRIME_AI_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
+                        msgBox = App_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
                         response = msgBox.displayMsgBox()
                     else:
-                        myTriage = GRIME_AI_ImageTriage()
+                        myTriage = ImageTriage()
                         myTriage.cleanImages(folder, \
                                              False, \
                                              TriageDlg.getBlurThreshold(), TriageDlg.getShiftSize(), \
@@ -3365,21 +3365,21 @@ class MainWindow(QMainWindow):
                                              color_imbalance_threshold=TriageDlg.getColorImbalanceThreshold())
 
                         strMessage = 'Image triage is complete!'
-                        msgBox = GRIME_AI_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
+                        msgBox = App_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
                         response = msgBox.displayMsgBox()
                 else:
                     strMessage = 'ABORT! You cancelled the triage operation.'
-                    msgBox = GRIME_AI_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
+                    msgBox = App_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
                     response = msgBox.displayMsgBox()
         else:
             strMessage = 'ABORT! You cancelled the triage operation.'
-            msgBox = GRIME_AI_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
+            msgBox = App_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
             response = msgBox.displayMsgBox()
 
 
     def menubarExtractCOCOMasks(self):
-        from GRIME_AI.dialogs.extract_coco_masks.GRIME_AI_ExportCOCOMasksDlg import GRIME_AI_ExportCOCOMasksDlg
-        self.COCOdlg = GRIME_AI_ExportCOCOMasksDlg(self)
+        from GRIME_AI.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
+        self.COCOdlg = ExportCOCOMasksDlg(self)
 
         self.COCOdlg.COCO_signal_ok.connect(self.accepted_COCODlg)
         self.COCOdlg.COCO_signal_cancel.connect(self.rejected_COCODlg)
@@ -3392,7 +3392,7 @@ class MainWindow(QMainWindow):
         output_dir = os.path.join(image_dir, "training_masks")
 
         #JES CLEANUP TASK: THE ANNOTATION FILE IS NOT REQUIRED TO BE IN THE TRAINING IMAGES FOLDER.
-        utils = GRIME_AI_COCO_Utils(image_dir)
+        utils = COCO_Utils(image_dir)
         utils.extract_masks(image_dir, output_dir)
 
     def rejected_COCODlg(self):
@@ -3411,7 +3411,7 @@ class MainWindow(QMainWindow):
         )
 
         if selected_dir:
-            util = GRIME_AI_COCO_Utils(selected_dir)
+            util = COCO_Utils(selected_dir)
             print("Selected folder:", selected_dir)
 
             """Execute full validation and cleaning pipeline."""
@@ -3461,7 +3461,7 @@ class MainWindow(QMainWindow):
         #directory = "C:/",  # initial directory
 
         if selected_dir:
-            utils = GRIME_AI_COCO_Utils(selected_dir)
+            utils = COCO_Utils(selected_dir)
             print("Selected folder:", selected_dir)
             utils.load_coco()
 
@@ -3478,7 +3478,7 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     # ==================================================================================================================
     def menubarSaveSettings(self):
-        utils = GRIME_AI_Save_Utils()
+        utils = Save_Utils()
         utils.saveSettings()
 
 
@@ -3685,7 +3685,7 @@ class MainWindow(QMainWindow):
                 JsonEditor().update_json_entry("Phenocam_Root_Folder", recipe.phenocam)
 
             # Composite / video / GIF outputs have no dedicated widgets yet;
-            # persist to JSON so the output pipeline (GRIME_AI_Save_Utils)
+            # persist to JSON so the output pipeline (Save_Utils)
             # can redirect them. Videos and GIFs use separate folders.
             if recipe.composites:
                 JsonEditor().update_json_entry("Composite_Slices_Folder", recipe.composites)
@@ -3754,8 +3754,8 @@ class MainWindow(QMainWindow):
         # Create and show new dialog
         try:
             print("[DEBUG] Creating new Image Organizer dialog")
-            from GRIME_AI.dialogs.image_organizer.GRIME_AI_ImageOrganizerDlg import GRIME_AI_ImageOrganizerDlg
-            self.imageOrganizerDlg = GRIME_AI_ImageOrganizerDlg(self)
+            from GRIME_AI.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
+            self.imageOrganizerDlg = ImageOrganizerDlg(self)
             print("[DEBUG] Showing Image Organizer dialog")
             self.imageOrganizerDlg.show()
             print("[INFO] Image Organizer dialog launched successfully")
@@ -3770,8 +3770,8 @@ class MainWindow(QMainWindow):
     def toolbarButtonTemporalAveraging(self):
         """Launch the Temporal Averaging dialog."""
         if not hasattr(self, "_temporalAvgDlg") or self._temporalAvgDlg is None:
-            from GRIME_AI.dialogs.temporal_averaging.GRIME_AI_TemporalAveragingDlg import GRIME_AI_TemporalAveragingDlg
-            self._temporalAvgDlg = GRIME_AI_TemporalAveragingDlg(self)
+            from GRIME_AI.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
+            self._temporalAvgDlg = TemporalAveragingDlg(self)
         self._temporalAvgDlg.show()
         self._temporalAvgDlg.raise_()
         self._temporalAvgDlg.activateWindow()
@@ -3795,8 +3795,8 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def toolbarButtonReleaseNotes(self):
         global frame
-        from GRIME_AI.dialogs.release_notes.GRIME_AI_ReleaseNotesDlg import GRIME_AI_ReleaseNotesDlg
-        releaseNotesDlg = GRIME_AI_ReleaseNotesDlg(frame)
+        from GRIME_AI.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
+        releaseNotesDlg = ReleaseNotesDlg(frame)
 
         releaseNotesDlg.show()
 
@@ -3806,7 +3806,7 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def toolbarButtonGRIME2(self):
         strMessage = 'Potential future home for GRIME2 Water Level/Stage measurement functionality.'
-        msgBox = GRIME_AI_QMessageBox('Water Level Measurement', strMessage, QMessageBox.Close)
+        msgBox = App_QMessageBox('Water Level Measurement', strMessage, QMessageBox.Close)
         response = msgBox.displayMsgBox()
 
 
@@ -3815,8 +3815,8 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def toolbarButtonEdgeDetection(self):
         global frame
-        from GRIME_AI.dialogs.edge_detection.GRIME_AI_EdgeDetectionDlg import GRIME_AI_EdgeDetectionDlg
-        self.edgeDetectionDlg = GRIME_AI_EdgeDetectionDlg(frame)
+        from GRIME_AI.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
+        self.edgeDetectionDlg = EdgeDetectionDlg(frame)
 
         self.edgeDetectionDlg.edgeDetectionSignal.connect(self.edgeDetectionMethod)
         self.edgeDetectionDlg.featureDetectionSignal.connect(self.featureDetectionMethod)
@@ -3876,8 +3876,8 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def onMyToolBarFileFolder(self):
         global frame
-        from GRIME_AI.dialogs.file_utilities.GRIME_AI_FileUtilitiesDlg import GRIME_AI_FileUtilitiesDlg
-        self.fileFolderDlg = GRIME_AI_FileUtilitiesDlg(frame)
+        from GRIME_AI.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
+        self.fileFolderDlg = FileUtilitiesDlg(frame)
 
         self.fileFolderDlg.create_composite_slice_signal.connect(self.menubarCompositeSlices)
         self.fileFolderDlg.triage_images_signal.connect(self.toolbarButtonImageTriage_1)
@@ -3922,8 +3922,8 @@ class MainWindow(QMainWindow):
             global currentImageCount
 
             if gFrameCount > 0:
-                from GRIME_AI.dialogs.image_navigation.GRIME_AI_ImageNavigationDlg import GRIME_AI_ImageNavigationDlg
-                self.imageNavigationDlg = GRIME_AI_ImageNavigationDlg(frame)
+                from GRIME_AI.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
+                self.imageNavigationDlg = ImageNavigationDlg(frame)
                 self.imageNavigationDlg.imageIndexSignal.connect(self.getImageIndex)
 
                 self.imageNavigationDlg.accepted.connect(self.closeNavigationDlg)
@@ -3937,7 +3937,7 @@ class MainWindow(QMainWindow):
                 self.imageNavigationDlg.show()
             else:
                 strMessage = 'You must first fetch images to navigate and/or operate on.'
-                msgBox = GRIME_AI_QMessageBox('Image Navigation', strMessage, QMessageBox.Close)
+                msgBox = App_QMessageBox('Image Navigation', strMessage, QMessageBox.Close)
                 response = msgBox.displayMsgBox()
 
     # ==================================================================================================================
@@ -3970,8 +3970,8 @@ class MainWindow(QMainWindow):
             if self.maskEditorDlg == None:
                 self.labelOriginalImage.setDrawingMode(DrawingMode.COLOR_SEGMENTATION)
 
-                from GRIME_AI.dialogs.color_segmentation.GRIME_AI_ColorSegmentationDlg import GRIME_AI_ColorSegmentationDlg
-                self.colorSegmentationDlg = GRIME_AI_ColorSegmentationDlg()
+                from GRIME_AI.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
+                self.colorSegmentationDlg = ColorSegmentationDlg()
 
                 self.colorSegmentationDlg.colorSegmentation_Signal.connect(self.colorSegmentation)
                 self.colorSegmentationDlg.addROI_Signal.connect(self.trainROI)
@@ -3997,7 +3997,7 @@ class MainWindow(QMainWindow):
                 self.colorSegmentationDlg.show()
             else:
                 strMessage = 'Please close the Mask Editor toolbox if you want to use the Mask Editor toolbox.\nThis will be resolved in a future design change.'
-                msgBox = GRIME_AI_QMessageBox('Tool Conflict', strMessage, QMessageBox.Yes | QMessageBox.No)
+                msgBox = App_QMessageBox('Tool Conflict', strMessage, QMessageBox.Yes | QMessageBox.No)
                 response = msgBox.displayMsgBox()
 
 
@@ -4046,7 +4046,7 @@ class MainWindow(QMainWindow):
         global dailyImagesList
         videoFileList = dailyImagesList.getVisibleList()
 
-        myGRIMe_Color = GRIME_AI_Color()
+        myGRIMe_Color = Color()
 
         nImageIndex = 1
 
@@ -4092,7 +4092,7 @@ class MainWindow(QMainWindow):
         # JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES   JES
         # JES - PROVISIONAL - MASK CREATION IS NOT AVAILABLE FOR THE USGS SOFTWARE RELEASE
         strMessage = 'Mask Creation is not available in this software release.\nThis functionality may be consumed into other pre-existing functionality at some later date.'
-        msgBox = GRIME_AI_QMessageBox('Tool Conflict', strMessage, QMessageBox.Yes | QMessageBox.No)
+        msgBox = App_QMessageBox('Tool Conflict', strMessage, QMessageBox.Yes | QMessageBox.No)
         response = msgBox.displayMsgBox(on_top=True)
         return
         # ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^     ^
@@ -4101,8 +4101,8 @@ class MainWindow(QMainWindow):
             if self.colorSegmentationDlg == None:
                 self.labelOriginalImage.setDrawingMode(DrawingMode.MASK)
 
-                from GRIME_AI.dialogs.mask_editor.GRIME_AI_MaskEditorDlg import GRIME_AI_MaskEditorDlg
-                self.maskEditorDlg = GRIME_AI_MaskEditorDlg()
+                from GRIME_AI.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
+                self.maskEditorDlg = MaskEditorDlg()
 
                 self.maskEditorDlg.addMask_Signal.connect(self.addMask)
                 self.maskEditorDlg.generateMask_Signal.connect(self.generateMask)
@@ -4118,7 +4118,7 @@ class MainWindow(QMainWindow):
                 self.maskEditorDlg.show()
             else:
                 strMessage = 'Please close the Color Segmentatoin toolbox if you want to use the Mask Editor toolbox.\nThis will be resolved in a future design change.'
-                msgBox = GRIME_AI_QMessageBox('Tool Conflict', strMessage, QMessageBox.Yes | QMessageBox.No)
+                msgBox = App_QMessageBox('Tool Conflict', strMessage, QMessageBox.Yes | QMessageBox.No)
                 response = msgBox.displayMsgBox(on_top=True)
 
 
@@ -4156,7 +4156,7 @@ class MainWindow(QMainWindow):
 
         # CONVERT IMAGE TO A MAT FORMAT TO USE ITS PARAMETERS TO CREATE A MASK IMAGE TEMPLATE
         # --------------------------------------------------------------------------------------------------------------
-        img1 = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+        img1 = App_Utils().convertQImageToMat(currentImage.toImage())
 
         # CREATE A MASK IMAGE
         mask = np.zeros(img1.shape[:2], np.uint8)
@@ -4203,7 +4203,7 @@ class MainWindow(QMainWindow):
             # Check for the existence of the files. If they exist, display overwrite option dialog box
             if os.path.isfile(mask_filename) or os.path.isfile(mask_filename):
                 strMessage = 'The mask and/or polygon file exist. Overwrite files?'
-                msgBox = GRIME_AI_QMessageBox('Save Mask Files', strMessage, QMessageBox.Yes | QMessageBox.No)
+                msgBox = App_QMessageBox('Save Mask Files', strMessage, QMessageBox.Yes | QMessageBox.No)
                 response = msgBox.displayMsgBox()
 
                 if response == QMessageBox.No:
@@ -4230,7 +4230,7 @@ class MainWindow(QMainWindow):
                 csvFile.close()
 
                 # EXTRACT DOMINANT RGB COLORS
-                myGRIMe_Color = GRIME_AI_Color()
+                myGRIMe_Color = Color()
 
                 _, _, hist = myGRIMe_Color.KMeans(masked, 6)
 
@@ -4238,7 +4238,7 @@ class MainWindow(QMainWindow):
                 hist, colorClusters = myGRIMe_Color.extractDominant_HSV(masked, 6)
 
                 # CREATE COLOR BAR TO DISPLAY CLUSTER COLORS
-                colorBar = GRIME_AI_Color.create_color_bar(hist, colorClusters[0:5])
+                colorBar = Color.create_color_bar(hist, colorClusters[0:5])
 
                 # CONVERT colorBar TO A QImage FOR USE IN DISPLAYING IN QT GUI
                 qImg = QImage(colorBar.data, colorBar.shape[1], colorBar.shape[0], QImage.Format_BGR888)
@@ -4370,7 +4370,7 @@ class MainWindow(QMainWindow):
         if not pix == []:
             self.labelEdgeImage.setPixmap(
                 pix.scaled(self.labelEdgeImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
-            img = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+            img = App_Utils().convertQImageToMat(currentImage.toImage())
 
         # CALL PROCESSEVENTS IN ORDER TO UPDATE GUI
         QCoreApplication.processEvents()
@@ -4497,15 +4497,15 @@ class MainWindow(QMainWindow):
         )
 
         # Extract dominant HSV colors
-        hist, colorClusters = GRIME_AI_Color.extractDominant_HSV(
+        hist, colorClusters = Color.extractDominant_HSV(
             img, self.colorSegmentationParams.numColorClusters
         )
-        colorBar = GRIME_AI_Color.create_color_bar(hist, colorClusters)
+        colorBar = Color.create_color_bar(hist, colorClusters)
 
         # Compute greenness values
         greenness_values = []
         for index, greenness in enumerate(self.greenness_index_list):
-            greenness_updated = GRIME_AI_Vegetation_Indices().get_greenness(greenness, img)
+            greenness_updated = Vegetation_Indices().get_greenness(greenness, img)
             self.greenness_index_list[index] = greenness_updated
             greenness_values.append(greenness_updated.get_value())
 
@@ -4587,7 +4587,7 @@ class MainWindow(QMainWindow):
             try:
                 features = self.compute_roi_features(roiObj, img)
                 self.display_roi_features(row, features)
-                # ROI overlays drawn by GRIME_AI_QLabel.paintEvent via savedROIs
+                # ROI overlays drawn by App_QLabel.paintEvent via savedROIs
             except Exception as e:
                 import traceback
                 print(f"Error processing ROI {roiObj.getROIName()}: {e}")
@@ -4617,13 +4617,13 @@ class MainWindow(QMainWindow):
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
         # Dominant HSV colors
-        hist, colorClusters = GRIME_AI_Color.extractDominant_HSV(rgb, roiObj.getNumColorClusters())
-        colorBar = GRIME_AI_Color.create_color_bar(hist, colorClusters)
+        hist, colorClusters = Color.extractDominant_HSV(rgb, roiObj.getNumColorClusters())
+        colorBar = Color.create_color_bar(hist, colorClusters)
 
         # Greenness indices
         greenness_values = []
         for index, greenness in enumerate(self.greenness_index_list):
-            greenness_updated = GRIME_AI_Vegetation_Indices().get_greenness(greenness, rgb)
+            greenness_updated = Vegetation_Indices().get_greenness(greenness, rgb)
             self.greenness_index_list[index] = greenness_updated
             greenness_values.append(greenness_updated.get_value())
 
@@ -4741,10 +4741,10 @@ def fetchLocalImageList(self, filePath, bFetchRecursive, bCreateEXIFFile, start_
     # count the number of images that will potentially be processed and possibly saved with the specified extension
     # to display an "hourglass" to give an indication as to how long the process will take. Furthermore, the number
     # of images will help determine whether or not there is enough disk space to accomodate storing the images.
-    imageCount = GRIME_AI_Utils().get_image_count(filePath, extensions)
+    imageCount = App_Utils().get_image_count(filePath, extensions)
 
     # RECURSE AND TRAVERSE FROM THE SPECIFIED FOLDER DOWN TO DETERMINE THE DATE RANGE FOR THE IMAGES FOUND
-    file_count, files = GRIME_AI_Utils().getFileList(filePath, extensions, bFetchRecursive)
+    file_count, files = App_Utils().getFileList(filePath, extensions, bFetchRecursive)
 
     if bShow_GUI:
         progressBar = QProgressWheel()
@@ -4774,7 +4774,7 @@ def fetchLocalImageList(self, filePath, bFetchRecursive, bCreateEXIFFile, start_
         ext = os.path.splitext(file)[-1].lower()
 
         if ext in extensions:
-            fileDate, fileTime = GRIME_AI_TimeStamp_Utils().extractDateFromFilename(file)
+            fileDate, fileTime = TimeStamp_Utils().extractDateFromFilename(file)
 
             if fileDate >= start_date and fileDate <= end_date:
                 fullPathAndFilename = file
@@ -4860,7 +4860,7 @@ def fetchLocalImageList(self, filePath, bFetchRecursive, bCreateEXIFFile, start_
 def processLocalImage(self, nImageIndex=0, imageFileFolder=''):
     global currentImage
 
-    myGRIMe_Color = GRIME_AI_Color()
+    myGRIMe_Color = Color()
 
     # videoFilePath = Path(frameFolder)
     ##JES videoFileList = [str(pp) for pp in videoFilePath.glob("**/*.jpg")]
@@ -4889,7 +4889,7 @@ def processLocalImage(self, nImageIndex=0, imageFileFolder=''):
     # DISPLAY IMAGE FROM NEON SITE
     # ------------------------------------------------------------------------------------------------------------------
     if currentImage:
-        numpyImg = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+        numpyImg = App_Utils().convertQImageToMat(currentImage.toImage())
 
         scaledCurrentImage = currentImage.scaled(self.labelOriginalImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
 
@@ -4898,7 +4898,7 @@ def processLocalImage(self, nImageIndex=0, imageFileFolder=''):
 
         currentImageRescaled = currentImage.scaled(self.labelOriginalImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
 
-        img = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+        img = App_Utils().convertQImageToMat(currentImage.toImage())
 
         self.whole_image_feature_extraction(img)
 
@@ -4967,7 +4967,7 @@ def processImage(self, myImage):
     # luma weights are 0.299R + 0.587G + 0.114B, so swapping R and B is not cosmetic for
     # river imagery -- water is blue-dominant and sandbars are red/tan-dominant, meaning the
     # wrong conversion directly weakens contrast at the boundary of interest.
-    img_rgb = GRIME_AI_Utils().convertQImageToMat(myImage.toImage())
+    img_rgb = App_Utils().convertQImageToMat(myImage.toImage())
 
     if img_rgb is None or img_rgb.size == 0:
         return pix
@@ -5004,8 +5004,8 @@ def processImage(self, myImage):
     # the same elif chain gated on g_edgeMethodSettings.method, so they were only reachable
     # by accident of the dialog zeroing out the edge method first.
     # ------------------------------------------------------------------------------------
-    from GRIME_AI.GRIME_AI_ProcessImage import GRIME_AI_ProcessImage
-    myProcessImage = GRIME_AI_ProcessImage()
+    from GRIME_AI.ProcessImage import ProcessImage
+    myProcessImage = ProcessImage()
 
     edge_method    = g_edgeMethodSettings.method
     feature_method = g_featureMethodSettings.method
@@ -5182,7 +5182,7 @@ def NEON_updateProductTable(self, item):
         self.NEON_selected_products.setItem(i, m, QTableWidgetItem(strText))
 
         # CONFIGURE DATES - columns: 0=Site, 1=Image Count, 2=Start Date, 3=End Date, 4=Start Time, 5=End Time
-        nYear, nMonth, nDay = GRIME_AI_PhenoCam().getEndDate()
+        nYear, nMonth, nDay = PhenoCam().getEndDate()
 
         m += 2
         date_widget = QtWidgets.QDateEdit(calendarPopup=True)
@@ -5226,7 +5226,7 @@ def NEON_dateChangeMethod(date_widget, tableWidget, bUniqueDates):
     strProductIDCell = tableWidget.item(nRow, 0).text().upper()
 
     # FETCH DATE THAT CHANGED FOR THE SPECIFIC ROW
-    start_date, start_time, end_date, end_time = GRIME_AI_ProductTable().fetchTableDates(tableWidget, nRow)
+    start_date, start_time, end_date, end_time = ProductTable().fetchTableDates(tableWidget, nRow)
 
     if bUniqueDates == False:
         for i in range(tableWidget.rowCount()):
@@ -5244,7 +5244,7 @@ def NEON_dateChangeMethod(date_widget, tableWidget, bUniqueDates):
         if tableWidget.cellWidget(nRow, 3):
             tableWidget.cellWidget(nRow, 3).setDate(end_date)
 
-    #imageCount = GRIME_AI_PhenoCam.getPhenocamImageCount(SITECODE, DOMAINCODE, start_date, end_date, start_time, end_time)
+    #imageCount = PhenoCam.getPhenocamImageCount(SITECODE, DOMAINCODE, start_date, end_date, start_time, end_time)
 
     #tableWidget.setItem(nRow, 2, QTableWidgetItem(str(imageCount)))
 
@@ -5299,7 +5299,7 @@ def DP1_20002_buildImageList(self, nProductID, nRow, start_date, end_date, start
             f"{start_date.year}/{str(start_date.month).zfill(2)}/{str(start_date.day).zfill(2)}"
         )
 
-        phenoCam = GRIME_AI_PhenoCam()
+        phenoCam = PhenoCam()
         tmpList = phenoCam.getVisibleImages(dailyURLvisible, start_time, end_time)
 
         dailyImagesList.setVisibleList(tmpList.getVisibleList())
@@ -5350,7 +5350,7 @@ def DP1_20002_downloadImages(self, imageList, downloadsFilePath):
 #jes LET THE CALLING FUNCTION BE RESPONSIBLE FOR REPORTING DOWNLOAD COMPLETION.
 #jes MODIFY THIS IN A FUTURE RELEASE TO RETURN A PASS/FAIL MESSAGE TO THE FUNCTION THAT INVOKED THIS FUNCTION.
 #jes strMessage = 'Data download is complete!'
-#jes msgBox = GRIME_AI_QMessageBox('Data Download', strMessage)
+#jes msgBox = App_QMessageBox('Data Download', strMessage)
 #jes response = msgBox.displayMsgBox()
 
 
@@ -5377,8 +5377,8 @@ def downloadProductDataFiles(self, item):
     JsonEditor().update_json_entry("NEON_Root_Folder", NEON_download_file_path)
 
     if len(NEON_download_file_path) == 0:
-        strMessage = 'A download folder has not been specified. Would you like to use the last GRIME-AI NEON download folder?'
-        msgBox = GRIME_AI_QMessageBox('NEON Root Download Folder', strMessage, QMessageBox.Yes | QMessageBox.No)
+        strMessage = f'A download folder has not been specified. Would you like to use the last {APP_NAME} NEON download folder?'
+        msgBox = App_QMessageBox('NEON Root Download Folder', strMessage, QMessageBox.Yes | QMessageBox.No)
         response = msgBox.displayMsgBox()
 
         if response == QMessageBox.Yes:
@@ -5404,8 +5404,8 @@ def downloadProductDataFiles(self, item):
     rowRange = range(self.NEON_selected_products.rowCount())
 
     for nRow in rowRange:
-        GRIME_AI_ProductTableObj = GRIME_AI_ProductTable()
-        start_date, start_time, end_date, end_time = GRIME_AI_ProductTableObj.fetchTableDates(self.NEON_selected_products, nRow)
+        ProductTableObj = ProductTable()
+        start_date, start_time, end_date, end_time = ProductTableObj.fetchTableDates(self.NEON_selected_products, nRow)
 
         # EXTRACT THE PRODUCT ID
         prodIDCol = 0
@@ -5437,7 +5437,7 @@ def downloadProductDataFiles(self, item):
                 PRODUCTCODE = strProductIDCell.split(':')[0]
 
                 # GET THE RANGE OF MONTHS FROM THE START DATE TO THE END DATE
-                dateRange = GRIME_AI_Utils().getRangeOfDates(strStartYearMonth, strEndYearMonth)
+                dateRange = App_Utils().getRangeOfDates(strStartYearMonth, strEndYearMonth)
 
                 # GET THE AVAILABLE MONTHS FOR THE SELECTED DATA SET
                 availableMonths = NEON_API().getAvailableMonths(SITECODE, PRODUCTCODE)
@@ -5466,9 +5466,9 @@ def downloadProductDataFiles(self, item):
             missing_data_message = missing_data_message + 'NEON Error!\n  ' + strProductIDCell + 'Product not available!' + '\n'
 
     if missing_data_message != "":
-        msgBox = GRIME_AI_QMessageBox('Download Error!', missing_data_message, buttons=QMessageBox.Close)
+        msgBox = App_QMessageBox('Download Error!', missing_data_message, buttons=QMessageBox.Close)
     else:
-        msgBox = GRIME_AI_QMessageBox('Download Complete!', 'Download Complete!', buttons=QMessageBox.Close)
+        msgBox = App_QMessageBox('Download Complete!', 'Download Complete!', buttons=QMessageBox.Close)
     response = msgBox.displayMsgBox()
 
         # ----------------------------------------------------------------------------------------------------------
@@ -5510,7 +5510,7 @@ def NEON_labelOriginalImageDoubleClickEvent(self):
     global currentImage
 
     if currentImage != []:
-        img = GRIME_AI_Utils().convertQImageToMat(currentImage.toImage())
+        img = App_Utils().convertQImageToMat(currentImage.toImage())
 
         self.setMouseTracking(False)
 
@@ -5526,7 +5526,7 @@ def NEON_labelOriginalImageDoubleClickEvent(self):
 #
 # ======================================================================================================================
 def NEON_labelMouseDoubleClickEvent(self, event):
-    img = GRIME_AI_Utils().convertQImageToMat(self.NEON_labelLatestImage.toImage())
+    img = App_Utils().convertQImageToMat(self.NEON_labelLatestImage.toImage())
     cv2.imshow('Original', img)
 
     # ----------
@@ -5587,7 +5587,7 @@ def NEON_labelMouseDoubleClickEvent(self, event):
 # ======================================================================================================================
 def retranslateUi(self, MainWindow):
 
-    szWindowsTitle = "GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD"
+    szWindowsTitle = f"{APP_DISPLAY_NAME}" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD"
 
     _translate = QtCore.QCoreApplication.translate
     MainWindow.setWindowTitle(_translate(szWindowsTitle, szWindowsTitle))
@@ -5638,9 +5638,9 @@ def run_gui():
     global frame
 
     # If Hydra is already initialized, clear it
-    from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+    from GRIME_AI.Save_Utils import Save_Utils
 
-    settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+    settings_folder = Save_Utils().get_settings_folder()
     print(settings_folder)
     hydra_working_folder = os.path.normpath(os.path.join(settings_folder, "MyHydraOutputs"))
     sys.argv.append(f"hydra.run.dir={hydra_working_folder}")
@@ -5661,8 +5661,8 @@ def run_gui():
     # SHOW SPLASH IN SEPARATE PROCESS — stays visible throughout all of MainWindow init
     # ------------------------------------------------------------------------------------------------------------------
     _splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
-    _splash = GRIME_AI_SplashScreen(
-        image_path=os.path.join(_splash_dir, "GRIME-AI Logo with Tagline.png")
+    _splash = SplashScreen(
+        image_path=os.path.join(_splash_dir, APP_LOGO_FILENAME)
     )
     _splash.show()   # blocks briefly until splash is painted, then returns
 
@@ -5705,7 +5705,7 @@ def my_main():
     global bShow_GUI
 
     # Main parser
-    parser = argparse.ArgumentParser(description='CLI for GRIME AI')
+    parser = argparse.ArgumentParser(description=f'CLI for {APP_DISPLAY_NAME}')
     parser.add_argument("-v", "--version", action=version_action(print_version),
                         nargs=0, help="Show version info (-v for short, --version for full details)")
 
@@ -5751,7 +5751,7 @@ def my_main():
                              help="(Optional) Override output JSON file path.")
 
     # Segment parser
-    segment_parser = subparsers.add_parser('segment', help='Segment a single image using a trained GRIME AI model')
+    segment_parser = subparsers.add_parser('segment', help=f'Segment a single image using a trained {APP_DISPLAY_NAME} model')
     segment_parser.add_argument('--model',          required=True,  help='Path to trained model checkpoint (.torch)')
     segment_parser.add_argument('--image',          required=False, default=None,
                                 help='Path to a single input image')
@@ -5814,7 +5814,7 @@ def my_main():
                                 help='DEPRECATED: use --no-copy-original-images')
 
     # Train / fine-tune parser
-    train_parser = subparsers.add_parser('train', help='Train / fine-tune a GRIME AI model from a site configuration (headless)')
+    train_parser = subparsers.add_parser('train', help=f'Train / fine-tune a {APP_DISPLAY_NAME} model from a site configuration (headless)')
     train_parser.add_argument('--config', required=True,
                               help='Path to a site_config.json (as produced by the Training tab)')
     train_parser.add_argument('--label',  required=False, default=None,
@@ -5912,9 +5912,69 @@ def my_main():
         help='(meanshift, manual) Fixed bandwidth value (default: 1.0).'
     )
 
+    # Color Segmentation parser
+    colorseg_parser = subparsers.add_parser(
+        'colorseg',
+        help='Run Color Segmentation feature extraction (headless) and write the CSV/XLSX feature file'
+    )
+    colorseg_parser.add_argument(
+        '--folder', required=True,
+        help='Folder containing the images to analyze.'
+    )
+    colorseg_parser.add_argument(
+        '--recursive', action='store_true',
+        help='Include images in sub-folders.'
+    )
+    colorseg_parser.add_argument(
+        '--rois', required=False, default=None,
+        help='ROI_Masks (COCO 1.0) JSON file holding fixed ROIs used for every image. '
+             'Required unless --region whole or --masks is given.'
+    )
+    colorseg_parser.add_argument(
+        '--masks', required=False, default=None,
+        help='Folder of per-image masks, one mask per image, named <image>_mask.<ext> '
+             '(png, jpg, tif or bmp). Use instead of --rois when the region changes from image to image.'
+    )
+    colorseg_parser.add_argument(
+        '--mask-name', dest='mask_name', required=False, default=None,
+        help='Column prefix for the masked region (required with --masks), e.g. water.'
+    )
+    colorseg_parser.add_argument(
+        '--mask-value', dest='mask_value', required=False, type=int, default=None,
+        help='Class index to select in a class-index mask. Omit for a binary mask, where every '
+             'non-zero pixel is inside the region.'
+    )
+    colorseg_parser.add_argument(
+        '--region', required=False, default=None, choices=['whole', 'roi', 'both'],
+        help='Which regions to measure (default: both when --rois is given, otherwise whole).'
+    )
+    colorseg_parser.add_argument(
+        '--features', required=False, default='intensity,entropy,hsv',
+        help="Comma-separated list of intensity, entropy, hsv. 'all' or 'none' also accepted "
+             "(default: intensity,entropy,hsv)."
+    )
+    colorseg_parser.add_argument(
+        '--texture', required=False, default='none',
+        help="Comma-separated list of glcm, gabor, lbp, wavelet, fourier. 'all' or 'none' also "
+             "accepted (default: none)."
+    )
+    colorseg_parser.add_argument(
+        '--greenness', required=False, default='all',
+        help="Comma-separated list of gcc, gli, ndvi, exg, rgi. 'all' or 'none' also accepted "
+             "(default: all)."
+    )
+    colorseg_parser.add_argument(
+        '--clusters', required=False, type=int, default=4,
+        help='Number of dominant HSV color clusters (default: 4).'
+    )
+    colorseg_parser.add_argument(
+        '--output', required=False, default=None,
+        help='Output folder for the CSV/XLSX feature files (default: --folder).'
+    )
+
     # Custom help handling
     if '-h' in sys.argv or '--help' in sys.argv:
-        print("Global Help: CLI for GRIME AI")
+        print(f"Global Help: CLI for {APP_DISPLAY_NAME}")
         parser.print_help()  # General help for the main parser
         print("\nHelp for 'triage' command:")
         triage_parser.print_help()  # Help for triage subparser
@@ -5924,6 +5984,8 @@ def my_main():
         segment_parser.print_help()  # Help for segment subparser
         print("\nHelp for 'roi' command:")
         roi_parser.print_help()  # Help for roi subparser
+        print("\nHelp for 'colorseg' command:")
+        colorseg_parser.print_help()  # Help for colorseg subparser
         sys.exit(0)  # Exit after displaying help
 
     # API key arguments (session-only; not written to api_keys.ini)
@@ -6014,7 +6076,7 @@ def run_cli(args):
         print(args.command)
 
         print("These are the Triage parameters:", args.folder, args.min, args.max)
-        myTriage = GRIME_AI_ImageTriage(False)
+        myTriage = ImageTriage(False)
         myTriage.cleanImages(args.folder, \
                              fetch_recursive, \
                              blur_threshold, shift_size, \
@@ -6030,7 +6092,7 @@ def run_cli(args):
 
         from PyQt5.QtCore import QRect
         from PIL import Image
-        from GRIME_AI.GRIME_AI_CompositeSlices import GRIME_AI_CompositeSlices
+        from GRIME_AI.CompositeSlices import CompositeSlices
         first_image = Image.open(filenames[0].fullPathAndFilename)
         slice_rect = QRect(
             int(args.center - args.width / 2),
@@ -6039,10 +6101,147 @@ def run_cli(args):
             first_image.height
         )
 
-        compositeSlices = GRIME_AI_CompositeSlices(slice_rect, False)
+        compositeSlices = CompositeSlices(slice_rect, False)
         compositeSlices.create_composite_image(filenames, args.folder+'\compositeSlices')
 
         print("Composite slice complete!")
+
+    elif args.command == 'colorseg':
+        # Headless Color Segmentation: same feature extraction as the dialog's
+        # "Build Feature File", with ROIs read from an ROI_Masks (COCO) file.
+        import cv2
+        from PyQt5.QtCore import QRect, QPoint
+
+        from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
+        from GRIME_AI.vegetation_indices import Vegetation_Indices, GreennessIndex
+        from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
+        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
+
+        def _csv_option(value, valid, label):
+            """Parse a comma-separated option, allowing 'all' and 'none'."""
+            items = [v.strip().lower() for v in (value or '').split(',') if v.strip()]
+            if items == ['all']:
+                return set(valid)
+            if items == ['none'] or not items:
+                return set()
+            bad = [v for v in items if v not in valid]
+            if bad:
+                print(f"[ERROR] Unknown {label}: {', '.join(bad)}. Valid: {', '.join(valid)}", file=sys.stderr)
+                sys.exit(1)
+            return set(items)
+
+        folder = args.folder
+        if not os.path.isdir(folder):
+            print(f"[ERROR] Folder not found: {folder}", file=sys.stderr)
+            sys.exit(1)
+
+        output_folder = args.output if args.output else folder
+        os.makedirs(output_folder, exist_ok=True)
+
+        images = cli_fetchLocalImageList(folder, args.recursive)
+        if not images:
+            print(f"[ERROR] No images found in: {folder}", file=sys.stderr)
+            sys.exit(1)
+
+        if args.rois and args.masks:
+            print("[ERROR] Use --rois (fixed ROIs) or --masks (one mask per image), not both.", file=sys.stderr)
+            sys.exit(1)
+        if args.masks:
+            if not os.path.isdir(args.masks):
+                print(f"[ERROR] Mask folder not found: {args.masks}", file=sys.stderr)
+                sys.exit(1)
+            if not args.mask_name:
+                print("[ERROR] --mask-name is required with --masks.", file=sys.stderr)
+                sys.exit(1)
+
+        region = args.region or ('both' if (args.rois or args.masks) else 'whole')
+        if region in ('roi', 'both') and not (args.rois or args.masks):
+            print("[ERROR] --rois or --masks is required unless --region whole.", file=sys.stderr)
+            sys.exit(1)
+
+        features = _csv_option(args.features, ('intensity', 'entropy', 'hsv'), 'feature')
+        texture = _csv_option(args.texture, ('glcm', 'gabor', 'lbp', 'wavelet', 'fourier'), 'texture method')
+        greenness = _csv_option(args.greenness, ('gcc', 'gli', 'ndvi', 'exg', 'rgi'), 'greenness index')
+
+        params = colorSegmentationParamsClass()
+        params.Intensity = 'intensity' in features
+        params.ShannonEntropy = 'entropy' in features
+        params.HSV = 'hsv' in features
+        params.Texture = bool(texture)
+        params.numColorClusters = args.clusters
+        params.wholeImage = region in ('whole', 'both')
+        params.ROI = region in ('roi', 'both')
+        params.GCC = 'gcc' in greenness
+        params.GLI = 'gli' in greenness
+        params.NDVI = 'ndvi' in greenness
+        params.ExG = 'exg' in greenness
+        params.RGI = 'rgi' in greenness
+
+        # Order here sets the column order, matching the dialog.
+        greenness_index_list = []
+        for key, index in (('gcc', Vegetation_Indices.GCC),
+                           ('gli', Vegetation_Indices.GLI),
+                           ('ndvi', Vegetation_Indices.NDVI),
+                           ('exg', Vegetation_Indices.ExG),
+                           ('rgi', Vegetation_Indices.RGI)):
+            if key in greenness:
+                greenness_index_list.append(GreennessIndex(index))
+
+        texture_options = {m: (m in texture) for m in ('glcm', 'gabor', 'lbp', 'wavelet', 'fourier')}
+        texture_options['enabled'] = bool(texture)
+
+        # ------------------------------------------------------------------
+        # ROIs from an ROI_Masks (COCO 1.0) file, as exported by the dialog.
+        # ------------------------------------------------------------------
+        # Per-image mask region (one mask per image), as an alternative to fixed ROIs.
+        mask_spec = None
+        if params.ROI and args.masks:
+            mask_spec = {'name': args.mask_name, 'folder': args.masks, 'value': args.mask_value}
+            kind = 'binary' if args.mask_value is None else f'class index {args.mask_value}'
+            print(f"[INFO] Per-image masks ({kind}) from {args.masks}, region name '{args.mask_name}'")
+
+        roiList = []
+        if params.ROI and args.rois:
+            try:
+                roi_data = load_roi_masks(args.rois)
+            except Exception as e:
+                print(f"[ERROR] Could not read ROI file: {e}", file=sys.stderr)
+                sys.exit(1)
+
+            first = cv2.imread(images[0].fullPathAndFilename)
+            if first is not None and roi_data['width'] and roi_data['height']:
+                if (roi_data['width'], roi_data['height']) != (first.shape[1], first.shape[0]):
+                    print(f"[WARN] The ROI file was made for {roi_data['width']} x {roi_data['height']} "
+                          f"images but the first image is {first.shape[1]} x {first.shape[0]}. "
+                          f"ROI coordinates may not line up.")
+
+            shapes = {'rectangle': ROIShape.RECTANGLE, 'polygon': ROIShape.POLYGON, 'freeform': ROIShape.FREEFORM}
+            for r in roi_data['rois']:
+                roiObj = roiData()
+                roiObj.setROIName(r['name'])
+                roiObj.setROIShape(shapes.get(r['shape'], ROIShape.POLYGON))
+                roiObj.setNumColorClusters(args.clusters)
+                x, y, w, h = r['bbox']
+                roiObj.setImageROI(QRect(x, y, w, h))
+                if roiObj.getROIShape() != ROIShape.RECTANGLE:
+                    roiObj.setImagePolygon([QPoint(px, py) for (px, py) in r['polygon']])
+                roiList.append(roiObj)
+
+            print(f"[INFO] Loaded {len(roiList)} ROI(s) from {args.rois}: "
+                  f"{', '.join(r['name'] for r in roi_data['rois'])}")
+            if roi_data['skipped']:
+                print(f"[WARN] Skipped {roi_data['skipped']} annotation(s) that are not polygons or boxes.")
+
+        print(f"[INFO] Color Segmentation: {len(images)} image(s), region={region}, "
+              f"clusters={args.clusters}, features={sorted(features) or ['none']}, "
+              f"texture={sorted(texture) or ['none']}, greenness={sorted(greenness) or ['none']}")
+
+        ColorSegFeatureExport().ExtractFeatures(images, output_folder, roiList, params,
+                                                greenness_index_list, texture_options=texture_options,
+                                                mask_spec=mask_spec)
+
+        print('Color segmentation feature extraction complete!')
 
     elif args.command == "coco":
         # Import your CocoGenerator class from coco_generator.py
@@ -6066,7 +6265,7 @@ def run_cli(args):
         generator.generate_annotations()
 
     elif args.command == 'segment':
-        from GRIME_AI.GRIME_AI_segment import run_sam2, run_segformer
+        from GRIME_AI.cli_segment import run_sam2, run_segformer
 
         # Validate inputs
         if not os.path.isfile(args.model):
@@ -6078,11 +6277,11 @@ def run_cli(args):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         category = {"id": args.category_id, "name": args.category_name}
 
-        print(f"[GRIME AI] Mode:      {args.mode.upper()}")
-        print(f"[GRIME AI] Model:     {args.model}")
-        print(f"[GRIME AI] Image:     {args.image}")
-        print(f"[GRIME AI] Output:    {args.output}")
-        print(f"[GRIME AI] Category:  {args.category_name} (ID: {args.category_id})")
+        print(f"[{APP_DISPLAY_NAME}] Mode:      {args.mode.upper()}")
+        print(f"[{APP_DISPLAY_NAME}] Model:     {args.model}")
+        print(f"[{APP_DISPLAY_NAME}] Image:     {args.image}")
+        print(f"[{APP_DISPLAY_NAME}] Output:    {args.output}")
+        print(f"[{APP_DISPLAY_NAME}] Category:  {args.category_name} (ID: {args.category_id})")
 
         # ------------------------------------------------------------------
         # Resolve the deprecated negative flags onto the new positive ones.
@@ -6090,10 +6289,10 @@ def run_cli(args):
         # exactly as before.
         # ------------------------------------------------------------------
         if getattr(args, 'no_mask', False):
-            print("[GRIME AI] NOTE: --no-mask is deprecated; use --no-save-masks.")
+            print(f"[{APP_DISPLAY_NAME}] NOTE: --no-mask is deprecated; use --no-save-masks.")
             args.save_masks = False
         if getattr(args, 'no_copy', False):
-            print("[GRIME AI] NOTE: --no-copy is deprecated; use --no-copy-original-images.")
+            print(f"[{APP_DISPLAY_NAME}] NOTE: --no-copy is deprecated; use --no-copy-original-images.")
             args.copy_original_image = False
 
         # Aliases so run_sam2()/run_segformer() can read whichever attribute
@@ -6103,18 +6302,18 @@ def run_cli(args):
         args.save_probability_map = args.save_probability_maps
         args.save_diagnostic_panel = args.save_diagnostic_panels
 
-        print(f"[GRIME AI] Output options:")
-        print(f"[GRIME AI]   Save predicted masks:    {args.save_masks}")
-        print(f"[GRIME AI]   Save probability maps:   {args.save_probability_maps}")
-        print(f"[GRIME AI]   Copy original images:    {args.copy_original_image}")
-        print(f"[GRIME AI]   Save diagnostic panels:  {args.save_diagnostic_panels}")
+        print(f"[{APP_DISPLAY_NAME}] Output options:")
+        print(f"[{APP_DISPLAY_NAME}]   Save predicted masks:    {args.save_masks}")
+        print(f"[{APP_DISPLAY_NAME}]   Save probability maps:   {args.save_probability_maps}")
+        print(f"[{APP_DISPLAY_NAME}]   Copy original images:    {args.copy_original_image}")
+        print(f"[{APP_DISPLAY_NAME}]   Save diagnostic panels:  {args.save_diagnostic_panels}")
 
         if args.mode == 'sam2':
             run_sam2(args, device, category, progressBar=None)
         elif args.mode == 'segformer':
             run_segformer(args, device, category, progressBar=None)
 
-        print("[GRIME AI] Segmentation complete.")
+        print(f"[{APP_DISPLAY_NAME}] Segmentation complete.")
 
     elif args.command == 'train':
         import json
@@ -6124,9 +6323,9 @@ def run_cli(args):
         with open(args.config, 'r', encoding='utf-8') as f:
             site_config = json.load(f)
 
-        print(f"[GRIME AI] Training mode: {args.mode.upper()}")
-        print(f"[GRIME AI] Config:        {args.config}")
-        print(f"[GRIME AI] Site:          {site_config.get('siteName', '?')}")
+        print(f"[{APP_DISPLAY_NAME}] Training mode: {args.mode.upper()}")
+        print(f"[{APP_DISPLAY_NAME}] Config:        {args.config}")
+        print(f"[{APP_DISPLAY_NAME}] Site:          {site_config.get('siteName', '?')}")
 
         # ------------------------------------------------------------------
         # Validation overlay overrides. Only applied when the flag was passed,
@@ -6144,7 +6343,7 @@ def run_cli(args):
             _val = getattr(args, _flag, None)
             if _val is not None:
                 site_config[_key] = _val
-                print(f"[GRIME AI] Override:      {_key} = {_val}")
+                print(f"[{APP_DISPLAY_NAME}] Override:      {_key} = {_val}")
 
         if (site_config.get('validation_overlay_interval') is not None
                 and int(site_config.get('validation_overlay_interval', 5)) < 1):
@@ -6154,7 +6353,7 @@ def run_cli(args):
                 and int(site_config.get('validation_overlay_samples', 5)) < 1):
             print('[ERROR] --validation-overlay-samples must be >= 1.', file=sys.stderr)
             sys.exit(1)
-        print(f"[GRIME AI] Overlays:      "
+        print(f"[{APP_DISPLAY_NAME}] Overlays:      "
               f"mode={site_config.get('validation_overlay_mode', 'last')} "
               f"interval={site_config.get('validation_overlay_interval', 5)} "
               f"samples={site_config.get('validation_overlay_samples', 5)}")
@@ -6199,7 +6398,7 @@ def run_cli(args):
                 sys.exit(1)
 
             set_training_categories(site_config, resolved)
-            print(f"[GRIME AI] Label:         {resolved}  (--label overrides the config)")
+            print(f"[{APP_DISPLAY_NAME}] Label:         {resolved}  (--label overrides the config)")
         else:
             current_label = get_training_categories(site_config)
             if not current_label:
@@ -6208,7 +6407,7 @@ def run_cli(args):
                 print("        Pass --label, or set one in the Site Config Editor.",
                       file=sys.stderr)
                 sys.exit(1)
-            print(f"[GRIME AI] Label:         {current_label}")
+            print(f"[{APP_DISPLAY_NAME}] Label:         {current_label}")
 
         # Build the SAM2 model config headlessly (the GUI path uses
         # @hydra.main); SegFormer does not need a Hydra cfg.
@@ -6228,7 +6427,7 @@ def run_cli(args):
         dispatcher = MLModelTraining(cfg, parent_widget=None, site_config=site_config)
         dispatcher.Model_Training_Dispatcher(cfg=cfg, mode=args.mode)
 
-        print("[GRIME AI] Training complete.")
+        print(f"[{APP_DISPLAY_NAME}] Training complete.")
 
     elif args.command == 'roi':
 
@@ -6248,7 +6447,7 @@ def run_cli(args):
         from openpyxl import Workbook
         from openpyxl.styles import Font
 
-        from GRIME_AI.GRIME_AI_ROI_Analyzer import GRIME_AI_ROI_Analyzer
+        from GRIME_AI.ROI_Analyzer import ROI_Analyzer
 
         # ------------------------------------------------------------------
         # Validate folder
@@ -6395,7 +6594,7 @@ def run_cli(args):
         # ------------------------------------------------------------------
         # Generate image/mask pairs
         # ------------------------------------------------------------------
-        temp = GRIME_AI_ROI_Analyzer("", "")
+        temp = ROI_Analyzer("", "")
         pairs = temp.generate_file_pairs(folder)
 
         if not pairs:
@@ -6427,7 +6626,7 @@ def run_cli(args):
             print(f"[ROI] Analyzing: {orig_path}")
             print(f"[ROI] Mask:      {mask_path}")
 
-            analyzer = GRIME_AI_ROI_Analyzer(
+            analyzer = ROI_Analyzer(
                 orig_path, mask_path,
                 clusters=n_clusters,
                 clustering_method=clustering,
@@ -6551,7 +6750,7 @@ def run_cli(args):
 
                 capture_date, capture_time = _extract_datetime_from_path(orig_path)
 
-                analyzer = GRIME_AI_ROI_Analyzer(
+                analyzer = ROI_Analyzer(
                     orig_path, mask_path,
                     clusters=n_clusters,
                     clustering_method=clustering,
@@ -6749,7 +6948,7 @@ def cli_fetchLocalImageList(filePath, bFetchRecursive=False):
     List = []
 
     # RECURSE AND TRAVERSE FROM THE SPECIFIED FOLDER DOWN TO DETERMINE THE DATE RANGE FOR THE IMAGES FOUND
-    file_count, files = GRIME_AI_Utils().getFileList(filePath, extensions, bFetchRecursive)
+    file_count, files = App_Utils().getFileList(filePath, extensions, bFetchRecursive)
 
     for image_index, file in enumerate(files):
         ext = os.path.splitext(file)[-1].lower()

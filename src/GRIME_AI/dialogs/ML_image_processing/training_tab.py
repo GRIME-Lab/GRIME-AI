@@ -10,18 +10,19 @@ from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtWidgets import QFileDialog, QListWidgetItem, QAbstractItemView, QSizePolicy, QListWidget, QMessageBox, QTreeWidget, QTreeWidgetItem
 
 from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.GRIME_AI_CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_DARK_RED, BUTTON_CSS_YELLOW, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
+from GRIME_AI.CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_DARK_RED, BUTTON_CSS_YELLOW, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
 from PyQt5.QtGui import QPalette, QColor, QIcon
 
 try:
     from GRIME_AI.dialogs.ML_image_processing.chain_link_resources import get_icon as _get_chain_icon
 except Exception:
     _get_chain_icon = None
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
-from GRIME_AI.GRIME_AI_JSON_Editor import JsonEditor
-from GRIME_AI.GRIME_AI_QMessageBox import GRIME_AI_QMessageBox
+from GRIME_AI.Save_Utils import Save_Utils
+from GRIME_AI.JSON_Editor import JsonEditor
+from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.utils import theme
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from ...app_identity import APP_DISPLAY_NAME
 
 # Optional: if there is a training entry point, import it. Replace with the actual path/class.
 #try:
@@ -265,7 +266,7 @@ class TrainingTab(QtWidgets.QWidget):
         self._init_labels_widget_reference()
 
         # Init config manager
-        settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+        settings_folder = Save_Utils().get_settings_folder()
         config_file = Path(settings_folder) / "site_config.json"
         self._mgr = ModelConfigManager(str(config_file))
 
@@ -843,7 +844,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
                     "but is not installed in this environment.\n\n"
                     "Install it with:\n"
                     "  pip install ultralytics\n\n"
-                    "Reverting to SAM2. All other GRIME AI features remain available."
+                    f"Reverting to SAM2. All other {APP_DISPLAY_NAME} features remain available."
                 )
                 self.radioButton_train_model_SAM2.setChecked(True)
                 return  # set_training_model will re-fire and call this method again
@@ -1376,7 +1377,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         a training run.
         """
         try:
-            settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+            settings_folder = Save_Utils().get_settings_folder()
             config_file = os.path.normpath(os.path.join(settings_folder, "site_config.json"))
             if not os.path.exists(config_file):
                 print("No existing site_config.json to back up; skipping.")
@@ -1397,10 +1398,10 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         """
         msg = self.validate_training_inputs()
         if msg:
-            GRIME_AI_QMessageBox(
+            App_QMessageBox(
                 'Missing Parameters',
                 msg,
-                GRIME_AI_QMessageBox.Ok,
+                App_QMessageBox.Ok,
                 icon=QMessageBox.Warning
             ).displayMsgBox()
             return
@@ -1426,10 +1427,10 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
                 lines.append("❌  Annotation file missing or unreadable:")
                 for f in unreadable:
                     lines.append(f"    • {f}")
-            GRIME_AI_QMessageBox(
+            App_QMessageBox(
                 'Annotation Errors — Training Blocked',
                 "\n".join(lines),
-                GRIME_AI_QMessageBox.Ok,
+                App_QMessageBox.Ok,
                 icon=QMessageBox.Critical
             ).displayMsgBox()
             return
@@ -1972,10 +1973,10 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
 
         if not state:
             if not silent:
-                GRIME_AI_QMessageBox(
+                App_QMessageBox(
                     'Validate Labels',
                     'No folders are selected.',
-                    GRIME_AI_QMessageBox.Ok,
+                    App_QMessageBox.Ok,
                     icon=QMessageBox.Information
                 ).displayMsgBox()
             return True
@@ -2019,7 +2020,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
                 QMessageBox.Warning if yellow_folders else QMessageBox.Information
             )
             title = "Validate Labels — Issues Found" if (has_errors or yellow_folders) else "Validate Labels — All Clear"
-            GRIME_AI_QMessageBox(title, msg, GRIME_AI_QMessageBox.Ok, icon=icon).displayMsgBox()
+            App_QMessageBox(title, msg, App_QMessageBox.Ok, icon=icon).displayMsgBox()
 
         return not has_errors
 
@@ -2162,7 +2163,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
     # *   OTHER    OTHER     OTHER     OTHER     OTHER     OTHER     OTHER     OTHER     OTHER     OTHER     OTHER     *
     # ******************************************************************************************************************
     def save_site_name_to_json(self):
-        settings_folder = GRIME_AI_Save_Utils().get_settings_folder()
+        settings_folder = Save_Utils().get_settings_folder()
         CONFIG_FILENAME = "site_config.json"
         config_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
 

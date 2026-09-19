@@ -14,7 +14,7 @@ from PyQt5.uic import loadUi
 
 from GRIME_AI import PROJECT_ROOT
 from GRIME_AI.utils.resource_utils import ui_path
-from GRIME_AI.GRIME_AI_ImageAnnotatorDlg import ImageAnnotatorDialog
+from GRIME_AI.ImageAnnotatorDlg import ImageAnnotatorDialog
 
 
 class AnnotationTab(QWidget):

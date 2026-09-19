@@ -8,7 +8,7 @@ from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox
 
 from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.GRIME_AI_Save_Utils import GRIME_AI_Save_Utils
+from GRIME_AI.Save_Utils import Save_Utils
 
 
 # ======================================================================================================================
@@ -189,10 +189,10 @@ class AnnotationAnalyzerTab(QtWidgets.QWidget):
         Output goes into analysis_outputs folder inside the user's GRIME AI folder.
         """
         # Get user's GRIME AI folder
-        grime_ai_folder = GRIME_AI_Save_Utils().get_users_GRIME_AI_folder()
+        user_root_folder = Save_Utils().get_user_root_folder()
 
         # Create analysis_outputs subfolder if it doesn't exist
-        output_dir = os.path.join(grime_ai_folder, "analysis_outputs")
+        output_dir = os.path.join(user_root_folder, "analysis_outputs")
         os.makedirs(output_dir, exist_ok=True)
 
         # Prepare workbook
