@@ -37,6 +37,7 @@ from GRIME_AI.App_Utils import App_Utils
 from GRIME_AI.nitrateData import nitrateData
 from GRIME_AI.siteData import siteData
 from GRIME_AI.dialogs.api_keys import APIKeyManager
+from ..app_identity import DOWNLOADS_DIR
 
 SERVER = 'https://data.neonscience.org/api/v0/'  # default; overridden per-instance by APIKeyManager
 
@@ -342,10 +343,7 @@ class  NEON_API:
         session.mount("https://", adapter)
 
         # Build target directory
-        configFilePath = os.path.join(
-            os.path.expanduser('~'),
-            'Documents', 'GRIME-AI', 'Downloads', 'NEON', 'Metadata'
-        )
+        configFilePath = os.path.join(str(DOWNLOADS_DIR), 'NEON', 'Metadata')
         os.makedirs(configFilePath, exist_ok=True)
         filename_with_path = os.path.join(configFilePath, file_name)
 

@@ -14,7 +14,7 @@ Supports SAM2 and SegFormer-LoRA models.
 Usage
 -----
 SAM2:
-    python grime_ai_segment.py \\
+    python cli_segment.py \\
         --model  path/to/model.torch \\
         --image  path/to/image.jpg \\
         --output path/to/output_folder \\
@@ -23,7 +23,7 @@ SAM2:
         --category-name Vegetation
 
 SegFormer:
-    python grime_ai_segment.py \\
+    python cli_segment.py \\
         --model  path/to/model.torch \\
         --image  path/to/image.jpg \\
         --output path/to/output_folder \\
@@ -47,6 +47,7 @@ import importlib.util
 import numpy as np
 import torch
 from PIL import Image
+from GRIME_AI.app_identity import APP_DISPLAY_NAME
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -54,7 +55,7 @@ from PIL import Image
 # ──────────────────────────────────────────────────────────────────────────────
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="GRIME AI — single-image segmentation CLI",
+        description=f"{APP_DISPLAY_NAME} — single-image segmentation CLI",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -283,19 +284,19 @@ def main():
     category = {"id": args.category_id, "name": args.category_name}
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(f"[GRIME AI] Using device: {device}")
-    print(f"[GRIME AI] Mode:         {args.mode.upper()}")
-    print(f"[GRIME AI] Model:        {args.model}")
-    print(f"[GRIME AI] Images:       {len(image_list)} file(s)")
-    print(f"[GRIME AI] Output:       {args.output}")
-    print(f"[GRIME AI] Category:     {args.category_name} (ID: {args.category_id})")
+    print(f"[{APP_DISPLAY_NAME}] Using device: {device}")
+    print(f"[{APP_DISPLAY_NAME}] Mode:         {args.mode.upper()}")
+    print(f"[{APP_DISPLAY_NAME}] Model:        {args.model}")
+    print(f"[{APP_DISPLAY_NAME}] Images:       {len(image_list)} file(s)")
+    print(f"[{APP_DISPLAY_NAME}] Output:       {args.output}")
+    print(f"[{APP_DISPLAY_NAME}] Category:     {args.category_name} (ID: {args.category_id})")
 
     if args.mode == "sam2":
         run_sam2(args, device, category, progressBar=None, image_list=image_list)
     elif args.mode == "segformer":
         run_segformer(args, device, category, progressBar=None, image_list=image_list)
 
-    print("[GRIME AI] Segmentation complete.")
+    print(f"[{APP_DISPLAY_NAME}] Segmentation complete.")
 
 
 if __name__ == "__main__":

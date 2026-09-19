@@ -189,10 +189,10 @@ class AnnotationAnalyzerTab(QtWidgets.QWidget):
         Output goes into analysis_outputs folder inside the user's GRIME AI folder.
         """
         # Get user's GRIME AI folder
-        grime_ai_folder = Save_Utils().get_users_GRIME_AI_folder()
+        user_root_folder = Save_Utils().get_user_root_folder()
 
         # Create analysis_outputs subfolder if it doesn't exist
-        output_dir = os.path.join(grime_ai_folder, "analysis_outputs")
+        output_dir = os.path.join(user_root_folder, "analysis_outputs")
         os.makedirs(output_dir, exist_ok=True)
 
         # Prepare workbook

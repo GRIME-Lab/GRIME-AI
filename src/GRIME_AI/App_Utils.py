@@ -25,6 +25,7 @@ from pathlib import Path
 
 from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.JSON_Editor import JsonEditor
+from .app_identity import USER_ROOT, APP_CONFIG_FILENAME
 
 
 # ======================================================================================================================
@@ -122,7 +123,7 @@ class App_Utils:
 
         filenames.sort()
 
-        output_path = os.path.join(os.path.expanduser('~'), 'Documents', 'GRIME-AI', 'sorted_list.txt')
+        output_path = os.path.join(str(USER_ROOT), 'sorted_list.txt')
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         with open(output_path, 'w') as f:
             for filepath in filenames:
@@ -152,8 +153,7 @@ class App_Utils:
         # CREATE A GRIME-AI FOLDER IN THE USER'S DOCUMENTS FOLDER
         # <user>/Documents/GRIME-AI
         # --------------------------------------------------------------------------------------------------------------
-        rootFolder = os.path.expanduser('~')
-        rootFolder = os.path.join(rootFolder, 'Documents', 'GRIME-AI')
+        rootFolder = str(USER_ROOT)
         if not os.path.exists(rootFolder):
             os.mkdir(rootFolder)
 
@@ -166,7 +166,7 @@ class App_Utils:
             os.mkdir(configFilePath)
 
         # CHECK TO SEE IF THE GRIME-AI CONFIGURATION FILE EXISTS. IF IT DOES NOT, THEN CREATE IT USING touch
-        configFile = os.path.join(configFilePath, 'GRIME-AI.json')
+        configFile = os.path.join(configFilePath, APP_CONFIG_FILENAME)
         if not os.path.isfile(configFile):
             configFileWithPath = Path(configFile)
             configFileWithPath.touch(exist_ok=True)
@@ -359,9 +359,7 @@ class App_Utils:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def fetchDownloadsFolderPath(self):
-        downloadsFilePath = os.path.expanduser('~')
-        downloadsFilePath = os.path.join(downloadsFilePath, 'Documents')
-        downloadsFilePath = os.path.join(downloadsFilePath, 'GRIME-AI')
+        downloadsFilePath = str(USER_ROOT)
         if not os.path.exists(downloadsFilePath):
             os.mkdir(downloadsFilePath)
         downloadsFilePath = os.path.join(downloadsFilePath, 'Downloads')

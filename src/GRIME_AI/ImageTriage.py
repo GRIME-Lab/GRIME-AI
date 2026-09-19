@@ -20,6 +20,7 @@ from GRIME_AI.QProgressWheel import QProgressWheel
 from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.ImageQualityCheck import ImageQualityAnalyzer
 from datetime import datetime
+from .app_identity import APP_DISPLAY_NAME
 
 
 class ImageTriage:
@@ -268,7 +269,7 @@ class ImageTriage:
             SW_VERSION = "unknown"
 
         return {
-            "software":                  "GRIME AI Image Triage",
+            "software":                  f"{APP_DISPLAY_NAME} Image Triage",
             "software_version":          SW_VERSION,
             "run_timestamp":             runTimestamp.strftime("%Y-%m-%d %H:%M:%S"),
             "image_folder":              folder,

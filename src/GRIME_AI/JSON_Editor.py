@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from GRIME_AI.Save_Utils import Save_Utils
+from .app_identity import APP_CONFIG_FILENAME
 
 
 # ======================================================================================================================
@@ -21,7 +22,7 @@ class JsonEditor():
         if filename is not None:
             self.json_filename = filename
         else:
-            self.json_filename = 'GRIME-AI.json'
+            self.json_filename = APP_CONFIG_FILENAME
 
     '''
     def save_to_json(self):

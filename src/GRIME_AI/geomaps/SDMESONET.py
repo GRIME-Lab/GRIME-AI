@@ -8,6 +8,8 @@ Self-contained: does not depend on the dataset manager.
 """
 import re
 
+from ..app_identity import APP_NAME
+
 MESONET_STATIONS_URL = "https://climate.sdstate.edu/information/stations/"
 
 
@@ -30,7 +32,7 @@ class SDMesonet:
 
     # ---- fetch ----
     def _fetch_html(self, url):
-        headers = {"User-Agent": "Mozilla/5.0 (GRIME-AI geomaps)"}
+        headers = {"User-Agent": f"Mozilla/5.0 ({APP_NAME} geomaps)"}
         try:
             import urllib.request
             req = urllib.request.Request(url, headers=headers)

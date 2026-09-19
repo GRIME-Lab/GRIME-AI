@@ -22,6 +22,7 @@ from GRIME_AI.JSON_Editor import JsonEditor
 from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.utils import theme
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from ...app_identity import APP_DISPLAY_NAME
 
 # Optional: if there is a training entry point, import it. Replace with the actual path/class.
 #try:
@@ -843,7 +844,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
                     "but is not installed in this environment.\n\n"
                     "Install it with:\n"
                     "  pip install ultralytics\n\n"
-                    "Reverting to SAM2. All other GRIME AI features remain available."
+                    f"Reverting to SAM2. All other {APP_DISPLAY_NAME} features remain available."
                 )
                 self.radioButton_train_model_SAM2.setChecked(True)
                 return  # set_training_model will re-fire and call this method again

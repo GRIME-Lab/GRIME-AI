@@ -31,6 +31,7 @@ from typing import List, Dict, Optional, Tuple
 from GRIME_AI.ml_core.seasonal_only import filter_seasons_only
 from GRIME_AI.ml_core.seasonal_dropout import extract_date_from_usgs_filename, get_season
 from GRIME_AI.utils.datasetutils import DatasetUtils
+from ..app_identity import APP_DISPLAY_NAME
 
 SEASON_TYPE = "Meteorological"
 
@@ -401,7 +402,7 @@ class HoldoutEvaluator:
         # Title
         pdf.set_font("Helvetica", "B", 16)
         pdf.set_text_color(31, 78, 121)
-        pdf.cell(0, 10, "GRIME AI - Holdout Validation Report", ln=True, align="C")
+        pdf.cell(0, 10, f"{APP_DISPLAY_NAME} - Holdout Validation Report", ln=True, align="C")
         pdf.set_font("Helvetica", "", 11)
         pdf.set_text_color(0, 0, 0)
         pdf.cell(0, 6, f"Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}", ln=True, align="C")

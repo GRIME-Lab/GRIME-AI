@@ -16,9 +16,9 @@ from PyQt5.QtGui import QFont, QIntValidator, QDoubleValidator
 from PyQt5.uic import loadUi
 
 from GRIME_AI.dialogs.triage.TriageCalibrateDlg import TriageCalibrateDlg
+from ...app_identity import APP_CONFIG_FILENAME
 
 BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;}'
-APP_CONFIG_FILENAME = "GRIME-AI.json"
 
 SLIDER_RANGES = {
     "lap":  (0,   500, 150),

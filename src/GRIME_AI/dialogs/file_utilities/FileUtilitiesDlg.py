@@ -21,6 +21,7 @@ from PyQt5.uic import loadUi
 from GRIME_AI.App_Utils import App_Utils
 from GRIME_AI.JSON_Editor import JsonEditor
 from GRIME_AI.Video import Video
+from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
 
 
 # ======================================================================================================================
@@ -207,7 +208,7 @@ def getLocalFileDates(filePath, bFetchRecursive):
         ext = os.path.splitext(file)[-1].lower()
 
         if ext in extensions:
-            fileDate, fileTime = myApp_Utils.extractDateFromFilename(file)
+            fileDate, fileTime = TimeStamp_Utils().extractDateFromFilename(file)
 
             # use the date in the filenames to determine the start and end acquisition dates for the images
             if fileDate < startDate:

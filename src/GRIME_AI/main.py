@@ -227,6 +227,7 @@ from GRIME_AI.constants import edgeMethodsClass, featureMethodsClass, modelSetti
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 from GRIME_AI.exifData import EXIFData
+from GRIME_AI.app_identity import APP_NAME, APP_DISPLAY_NAME, USER_ROOT, APP_LOGO_FILENAME, APP_REPO_URL
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -626,7 +627,7 @@ class MainWindow(QMainWindow):
         ui_path = os.path.join(os.path.dirname(__file__), "resources", "ui", "neonAIgui.ui")
         uic.loadUi(ui_path, self)
 
-        self.setWindowTitle("GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME}" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
         self.tabWidget.setTabVisible(1, False)
         #self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowStaysOnTopHint)
 
@@ -835,7 +836,7 @@ class MainWindow(QMainWindow):
         self._menu_view.addSeparator()
         self._action_reset_layout = QAction("Reset Window Layout", self)
         self._action_reset_layout.setStatusTip(
-            "Resize and re-center the GRIME AI window inside the visible screen area")
+            f"Resize and re-center the {APP_DISPLAY_NAME} window inside the visible screen area")
         self._action_reset_layout.triggered.connect(self._reset_window_layout)
         self._menu_view.addAction(self._action_reset_layout)
 
@@ -1145,7 +1146,7 @@ class MainWindow(QMainWindow):
         from pathlib import Path
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("About GRIME AI")
+        dlg.setWindowTitle(f"About {APP_DISPLAY_NAME}")
         dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         dlg.setFixedSize(480, 420)
 
@@ -1154,14 +1155,14 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
-        logo_path  = splash_dir / "GRIME-AI Logo with Tagline.png"
+        logo_path  = splash_dir / APP_LOGO_FILENAME
         lbl_logo   = QLabel()
         lbl_logo.setAlignment(Qt.AlignCenter)
         if logo_path.exists():
             pix = QPixmap(str(logo_path)).scaledToWidth(320, Qt.SmoothTransformation)
             lbl_logo.setPixmap(pix)
         else:
-            lbl_logo.setText("GRIME AI")
+            lbl_logo.setText(APP_DISPLAY_NAME)
             lbl_logo.setStyleSheet("font-size: 28px; font-weight: bold;")
         layout.addWidget(lbl_logo)
 
@@ -1181,7 +1182,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(lbl_date)
 
         if SHA != 'N/A':
-            commit_url = f"https://github.com/JohnStranzl/GRIME-AI/commit/{SHA}"
+            commit_url = f"{APP_REPO_URL}/commit/{SHA}"
             lbl_sha = QLabel(f'Commit: <a href="{commit_url}" style="color: gray;">{SHA[:12]}</a>')
         else:
             lbl_sha = QLabel("Commit: N/A")
@@ -1448,7 +1449,7 @@ class MainWindow(QMainWindow):
 
         # POPULATE THE MAP WITH BLUE PINS FOR SD MESONET STATIONS
         try:
-            from geomaps.SDMESONET import SDMesonet
+            from GRIME_AI.geomaps.SDMESONET import SDMesonet
             sd_df = SDMesonet().get_dataframe()
             self.osm_widget.add_sdmesonet_pins(sd_df)
         except Exception as e:
@@ -2087,7 +2088,7 @@ class MainWindow(QMainWindow):
     # TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR   TOOLBAR
     # ------------------------------------------------------------------------------------------------------------------
     def createToolBar(self):
-        toolbar = QToolBar("GRIME-AI Toolbar")
+        toolbar = QToolBar(f"{APP_NAME} Toolbar")
         self.addToolBar(toolbar)
         toolbar.setIconSize(QtCore.QSize(48, 48))
 
@@ -3038,7 +3039,7 @@ class MainWindow(QMainWindow):
         JsonEditor().update_json_entry("USGS_Root_Folder", USGS_download_file_path)
 
         if len(USGS_download_file_path) == 0:
-            strMessage = 'A download folder has not been specified. Would you like to use the last GRIME-AI USGS download folder used?'
+            strMessage = f'A download folder has not been specified. Would you like to use the last {APP_NAME} USGS download folder used?'
             msgBox = App_QMessageBox('USGS Root Download Folder', strMessage, QMessageBox.Yes | QMessageBox.No)
             response = msgBox.displayMsgBox()
 
@@ -3269,7 +3270,7 @@ class MainWindow(QMainWindow):
         global currentImageIndex
 
         if len(dailyImagesList.getVisibleList()) == 0:
-            strMessage = 'You must first create a list of images to operate on. Use the FETCH files feature of GRIME AI.'
+            strMessage = f'You must first create a list of images to operate on. Use the FETCH files feature of {APP_DISPLAY_NAME}.'
             msgBox = App_QMessageBox('Composite Slice Error', strMessage, QMessageBox.Close)
             response = msgBox.displayMsgBox()
         else:
@@ -3306,8 +3307,7 @@ class MainWindow(QMainWindow):
     def menubar_Generate_Greenness_Test_Images(self):
         # initialize with default settings
 
-        rootFolder = os.path.expanduser('~')
-        rootFolder = os.path.join(rootFolder, 'Documents', 'GRIME-AI', 'Test Images')
+        rootFolder = os.path.join(str(USER_ROOT), 'Test Images')
         gen = GreenImageGenerator(out_dir=rootFolder)
 
         # generate all images (solids, splotches, masks)
@@ -5372,7 +5372,7 @@ def downloadProductDataFiles(self, item):
     JsonEditor().update_json_entry("NEON_Root_Folder", NEON_download_file_path)
 
     if len(NEON_download_file_path) == 0:
-        strMessage = 'A download folder has not been specified. Would you like to use the last GRIME-AI NEON download folder?'
+        strMessage = f'A download folder has not been specified. Would you like to use the last {APP_NAME} NEON download folder?'
         msgBox = App_QMessageBox('NEON Root Download Folder', strMessage, QMessageBox.Yes | QMessageBox.No)
         response = msgBox.displayMsgBox()
 
@@ -5582,7 +5582,7 @@ def NEON_labelMouseDoubleClickEvent(self, event):
 # ======================================================================================================================
 def retranslateUi(self, MainWindow):
 
-    szWindowsTitle = "GRIME AI" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD"
+    szWindowsTitle = f"{APP_DISPLAY_NAME}" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD"
 
     _translate = QtCore.QCoreApplication.translate
     MainWindow.setWindowTitle(_translate(szWindowsTitle, szWindowsTitle))
@@ -5657,7 +5657,7 @@ def run_gui():
     # ------------------------------------------------------------------------------------------------------------------
     _splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
     _splash = SplashScreen(
-        image_path=os.path.join(_splash_dir, "GRIME-AI Logo with Tagline.png")
+        image_path=os.path.join(_splash_dir, APP_LOGO_FILENAME)
     )
     _splash.show()   # blocks briefly until splash is painted, then returns
 
@@ -5700,7 +5700,7 @@ def my_main():
     global bShow_GUI
 
     # Main parser
-    parser = argparse.ArgumentParser(description='CLI for GRIME AI')
+    parser = argparse.ArgumentParser(description=f'CLI for {APP_DISPLAY_NAME}')
     parser.add_argument("-v", "--version", action=version_action(print_version),
                         nargs=0, help="Show version info (-v for short, --version for full details)")
 
@@ -5746,7 +5746,7 @@ def my_main():
                              help="(Optional) Override output JSON file path.")
 
     # Segment parser
-    segment_parser = subparsers.add_parser('segment', help='Segment a single image using a trained GRIME AI model')
+    segment_parser = subparsers.add_parser('segment', help=f'Segment a single image using a trained {APP_DISPLAY_NAME} model')
     segment_parser.add_argument('--model',          required=True,  help='Path to trained model checkpoint (.torch)')
     segment_parser.add_argument('--image',          required=False, default=None,
                                 help='Path to a single input image')
@@ -5809,7 +5809,7 @@ def my_main():
                                 help='DEPRECATED: use --no-copy-original-images')
 
     # Train / fine-tune parser
-    train_parser = subparsers.add_parser('train', help='Train / fine-tune a GRIME AI model from a site configuration (headless)')
+    train_parser = subparsers.add_parser('train', help=f'Train / fine-tune a {APP_DISPLAY_NAME} model from a site configuration (headless)')
     train_parser.add_argument('--config', required=True,
                               help='Path to a site_config.json (as produced by the Training tab)')
     train_parser.add_argument('--label',  required=False, default=None,
@@ -5969,7 +5969,7 @@ def my_main():
 
     # Custom help handling
     if '-h' in sys.argv or '--help' in sys.argv:
-        print("Global Help: CLI for GRIME AI")
+        print(f"Global Help: CLI for {APP_DISPLAY_NAME}")
         parser.print_help()  # General help for the main parser
         print("\nHelp for 'triage' command:")
         triage_parser.print_help()  # Help for triage subparser
@@ -6272,11 +6272,11 @@ def run_cli(args):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         category = {"id": args.category_id, "name": args.category_name}
 
-        print(f"[GRIME AI] Mode:      {args.mode.upper()}")
-        print(f"[GRIME AI] Model:     {args.model}")
-        print(f"[GRIME AI] Image:     {args.image}")
-        print(f"[GRIME AI] Output:    {args.output}")
-        print(f"[GRIME AI] Category:  {args.category_name} (ID: {args.category_id})")
+        print(f"[{APP_DISPLAY_NAME}] Mode:      {args.mode.upper()}")
+        print(f"[{APP_DISPLAY_NAME}] Model:     {args.model}")
+        print(f"[{APP_DISPLAY_NAME}] Image:     {args.image}")
+        print(f"[{APP_DISPLAY_NAME}] Output:    {args.output}")
+        print(f"[{APP_DISPLAY_NAME}] Category:  {args.category_name} (ID: {args.category_id})")
 
         # ------------------------------------------------------------------
         # Resolve the deprecated negative flags onto the new positive ones.
@@ -6284,10 +6284,10 @@ def run_cli(args):
         # exactly as before.
         # ------------------------------------------------------------------
         if getattr(args, 'no_mask', False):
-            print("[GRIME AI] NOTE: --no-mask is deprecated; use --no-save-masks.")
+            print(f"[{APP_DISPLAY_NAME}] NOTE: --no-mask is deprecated; use --no-save-masks.")
             args.save_masks = False
         if getattr(args, 'no_copy', False):
-            print("[GRIME AI] NOTE: --no-copy is deprecated; use --no-copy-original-images.")
+            print(f"[{APP_DISPLAY_NAME}] NOTE: --no-copy is deprecated; use --no-copy-original-images.")
             args.copy_original_image = False
 
         # Aliases so run_sam2()/run_segformer() can read whichever attribute
@@ -6297,18 +6297,18 @@ def run_cli(args):
         args.save_probability_map = args.save_probability_maps
         args.save_diagnostic_panel = args.save_diagnostic_panels
 
-        print(f"[GRIME AI] Output options:")
-        print(f"[GRIME AI]   Save predicted masks:    {args.save_masks}")
-        print(f"[GRIME AI]   Save probability maps:   {args.save_probability_maps}")
-        print(f"[GRIME AI]   Copy original images:    {args.copy_original_image}")
-        print(f"[GRIME AI]   Save diagnostic panels:  {args.save_diagnostic_panels}")
+        print(f"[{APP_DISPLAY_NAME}] Output options:")
+        print(f"[{APP_DISPLAY_NAME}]   Save predicted masks:    {args.save_masks}")
+        print(f"[{APP_DISPLAY_NAME}]   Save probability maps:   {args.save_probability_maps}")
+        print(f"[{APP_DISPLAY_NAME}]   Copy original images:    {args.copy_original_image}")
+        print(f"[{APP_DISPLAY_NAME}]   Save diagnostic panels:  {args.save_diagnostic_panels}")
 
         if args.mode == 'sam2':
             run_sam2(args, device, category, progressBar=None)
         elif args.mode == 'segformer':
             run_segformer(args, device, category, progressBar=None)
 
-        print("[GRIME AI] Segmentation complete.")
+        print(f"[{APP_DISPLAY_NAME}] Segmentation complete.")
 
     elif args.command == 'train':
         import json
@@ -6318,9 +6318,9 @@ def run_cli(args):
         with open(args.config, 'r', encoding='utf-8') as f:
             site_config = json.load(f)
 
-        print(f"[GRIME AI] Training mode: {args.mode.upper()}")
-        print(f"[GRIME AI] Config:        {args.config}")
-        print(f"[GRIME AI] Site:          {site_config.get('siteName', '?')}")
+        print(f"[{APP_DISPLAY_NAME}] Training mode: {args.mode.upper()}")
+        print(f"[{APP_DISPLAY_NAME}] Config:        {args.config}")
+        print(f"[{APP_DISPLAY_NAME}] Site:          {site_config.get('siteName', '?')}")
 
         # ------------------------------------------------------------------
         # Validation overlay overrides. Only applied when the flag was passed,
@@ -6338,7 +6338,7 @@ def run_cli(args):
             _val = getattr(args, _flag, None)
             if _val is not None:
                 site_config[_key] = _val
-                print(f"[GRIME AI] Override:      {_key} = {_val}")
+                print(f"[{APP_DISPLAY_NAME}] Override:      {_key} = {_val}")
 
         if (site_config.get('validation_overlay_interval') is not None
                 and int(site_config.get('validation_overlay_interval', 5)) < 1):
@@ -6348,7 +6348,7 @@ def run_cli(args):
                 and int(site_config.get('validation_overlay_samples', 5)) < 1):
             print('[ERROR] --validation-overlay-samples must be >= 1.', file=sys.stderr)
             sys.exit(1)
-        print(f"[GRIME AI] Overlays:      "
+        print(f"[{APP_DISPLAY_NAME}] Overlays:      "
               f"mode={site_config.get('validation_overlay_mode', 'last')} "
               f"interval={site_config.get('validation_overlay_interval', 5)} "
               f"samples={site_config.get('validation_overlay_samples', 5)}")
@@ -6393,7 +6393,7 @@ def run_cli(args):
                 sys.exit(1)
 
             set_training_categories(site_config, resolved)
-            print(f"[GRIME AI] Label:         {resolved}  (--label overrides the config)")
+            print(f"[{APP_DISPLAY_NAME}] Label:         {resolved}  (--label overrides the config)")
         else:
             current_label = get_training_categories(site_config)
             if not current_label:
@@ -6402,7 +6402,7 @@ def run_cli(args):
                 print("        Pass --label, or set one in the Site Config Editor.",
                       file=sys.stderr)
                 sys.exit(1)
-            print(f"[GRIME AI] Label:         {current_label}")
+            print(f"[{APP_DISPLAY_NAME}] Label:         {current_label}")
 
         # Build the SAM2 model config headlessly (the GUI path uses
         # @hydra.main); SegFormer does not need a Hydra cfg.
@@ -6422,7 +6422,7 @@ def run_cli(args):
         dispatcher = MLModelTraining(cfg, parent_widget=None, site_config=site_config)
         dispatcher.Model_Training_Dispatcher(cfg=cfg, mode=args.mode)
 
-        print("[GRIME AI] Training complete.")
+        print(f"[{APP_DISPLAY_NAME}] Training complete.")
 
     elif args.command == 'roi':
 

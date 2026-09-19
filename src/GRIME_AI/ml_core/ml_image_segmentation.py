@@ -33,6 +33,7 @@ from GRIME_AI.ml_core.sam2_inference_engine import SAM2InferenceEngine
 from GRIME_AI.ml_core.segformer_inference_engine import SegFormerInferenceEngine
 from GRIME_AI.ml_core.yolo_inference_engine import YOLOInferenceEngine
 from GRIME_AI.ml_core.ml_helpers import add_coco_entries
+from ..app_identity import APP_DISPLAY_NAME
 
 
 # ======================================================================================================================
@@ -235,7 +236,7 @@ class MLImageSegmentation:
                         "but is not installed in this environment.\n\n"
                         "Install it with:\n"
                         "  pip install ultralytics\n\n"
-                        "All other GRIME AI features remain available."
+                        f"All other {APP_DISPLAY_NAME} features remain available."
                     )
                     try:
                         progressBar.close()
