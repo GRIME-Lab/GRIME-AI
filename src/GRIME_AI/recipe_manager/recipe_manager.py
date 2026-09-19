@@ -18,7 +18,7 @@ so the main GRIME AI window can push these paths into its existing options.
 "Use No Recipe" keeps every recipe but makes none active and emits
 `recipeDeactivated()`; GRIME AI then uses its normal folder settings.
 
-Run standalone to try it:  python grime_ai_recipe_manager.py
+Run standalone to try it:  python recipe_manager.py
 """
 
 import os
@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QWidget, QCheckBox, QDialogButtonBox, QScrollArea,
     QStackedWidget,
 )
+from GRIME_AI.app_identity import APP_DISPLAY_NAME
 
 # Editable path fields, in display order, mapped to their default sub-folder name.
 # Input-folder fields (set manually; NOT auto-derived/rebased from root).
@@ -240,14 +241,14 @@ class RecipeStore:
     def _default_path() -> str:
         # Keep recipes alongside the rest of GRIME AI's config, in the visible
         # Documents/GRIME-AI/Settings folder (NOT a hidden AppData location).
+        from GRIME_AI.app_identity import SETTINGS_DIR, APP_RECIPES_FILENAME
         try:
             from GRIME_AI.Save_Utils import Save_Utils
             settings = Save_Utils().get_settings_folder()
         except Exception:
-            settings = os.path.join(os.path.expanduser("~"),
-                                    "Documents", "GRIME-AI", "Settings")
+            settings = str(SETTINGS_DIR)
             os.makedirs(settings, exist_ok=True)
-        return os.path.join(settings, "GRIME_AI_Recipes.json")
+        return os.path.join(settings, APP_RECIPES_FILENAME)
 
     def load(self) -> None:
         self.recipes, self.active_name = [], None
@@ -314,7 +315,7 @@ class RecipeManagerDialog(QDialog):
         self._prev_root = ""    # root value before the current edit (for rebasing)
         self._drafting = False  # True while a New (uncommitted) recipe is in the form
 
-        self.setWindowTitle("GRIME AI — Recipe Manager")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} — Recipe Manager")
         self.setMinimumSize(820, 620)
         self.resize(900, 780)
         self._build_ui()
@@ -368,7 +369,7 @@ class RecipeManagerDialog(QDialog):
             "QPushButton:disabled { color: #d9a5a0; border-color: #e3c2be; }")
         btn_none = QPushButton("Use No Recipe")
         btn_none.setToolTip("Keep all recipes but use none of them.\n"
-                            "GRIME AI uses its normal folder settings until a recipe is set active again.")
+                            f"{APP_DISPLAY_NAME} uses its normal folder settings until a recipe is set active again.")
         btn_none.clicked.connect(self._clear_active)
         btn_none.setStyleSheet(_outline_button_style("#4682B4"))
         btn_act.clicked.connect(self._set_active)
@@ -606,7 +607,7 @@ class RecipeManagerDialog(QDialog):
         if self.store.active_name:
             self.active_label.setText(f"Active: {self.store.active_name}")
         elif self.store.recipes:
-            self.active_label.setText("No recipe active. GRIME AI is using its normal folder settings.")
+            self.active_label.setText(f"No recipe active. {APP_DISPLAY_NAME} is using its normal folder settings.")
         else:
             self.active_label.setText("")
 
@@ -943,7 +944,7 @@ class RecipeManagerDialog(QDialog):
     # ---- Save / dirty / close -------------------------------------------- #
     def _mark_dirty(self) -> None:
         self._dirty = True
-        self.setWindowTitle("GRIME AI — Recipe Manager *")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} — Recipe Manager *")
 
     def _validate(self) -> Optional[str]:
         names = self.store.names()
@@ -961,7 +962,7 @@ class RecipeManagerDialog(QDialog):
             return False
         self.store.save()
         self._dirty = False
-        self.setWindowTitle("GRIME AI — Recipe Manager")
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} — Recipe Manager")
         return True
 
     def closeEvent(self, event) -> None:
@@ -1016,7 +1017,7 @@ def open_manager(parent=None, dark_mode=None, on_activated=None):
 
 def main(argv=None):
     import argparse
-    parser = argparse.ArgumentParser(description="GRIME AI Recipe Manager (standalone).")
+    parser = argparse.ArgumentParser(description=f"{APP_DISPLAY_NAME} Recipe Manager (standalone).")
     parser.add_argument("--dark", action="store_true",
                         help="Use dark-mode button/title tints.")
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])

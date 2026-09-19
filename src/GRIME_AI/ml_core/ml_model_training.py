@@ -41,6 +41,7 @@ print(f"Using device: {device}")
 # HYDRA (for SAM2)
 # ----------------------------------------------------------------------------------------------------------------------
 from omegaconf import DictConfig
+from ..app_identity import APP_DISPLAY_NAME
 
 DEBUG = False  # Set to True if you want print statements
 
@@ -337,7 +338,7 @@ class MLModelTraining:
                     "but is not installed in this environment.\n\n"
                     "Install it with:\n"
                     "  pip install ultralytics\n\n"
-                    "YOLO training has been cancelled. All other GRIME AI features "
+                    f"YOLO training has been cancelled. All other {APP_DISPLAY_NAME} features "
                     "remain available."
                 )
                 return

@@ -18,6 +18,7 @@ from PyQt5.QtSvg import QSvgRenderer
 
 from .api_key_manager  import APIKeyManager
 from .api_key_verifier import verify_neon_token, verify_usgs_key
+from ...app_identity import APP_DISPLAY_NAME
 
 
 BUTTON_CSS_STEEL_BLUE = """
@@ -324,7 +325,7 @@ class APIKeyDialog(QDialog):
         root.setContentsMargins(18, 18, 18, 14)
 
         intro = QLabel(
-            "GRIME AI uses the NEON and USGS Water Data APIs to retrieve "
+            f"{APP_DISPLAY_NAME} uses the NEON and USGS Water Data APIs to retrieve "
             "imagery and site metadata. Register for free accounts at each "
             "service to obtain your keys."
         )

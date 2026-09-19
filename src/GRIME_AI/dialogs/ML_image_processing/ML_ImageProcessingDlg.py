@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget, QApplication
 from PyQt5.uic import loadUi
 
 from GRIME_AI.Save_Utils import Save_Utils
+from ...app_identity import PLUGINS_DIR
 # Tab classes are imported lazily in _add_tab_safe() so a missing or broken tab
 # module cannot stop this dialog from loading. ModelConfigManager is not a tab
 # and is imported normally.
@@ -217,8 +218,7 @@ class ML_ImageProcessingDlg(QDialog):
         crashing the dialog. Presence of the file is the only gate."""
         import os
         import importlib.util
-        plugin_dir = os.path.join(os.path.expanduser("~"), "Documents",
-                                  "GRIME-AI", "plugins")
+        plugin_dir = str(PLUGINS_DIR)
         if not os.path.isdir(plugin_dir):
             return
         for fname in sorted(os.listdir(plugin_dir)):
@@ -227,7 +227,7 @@ class ML_ImageProcessingDlg(QDialog):
             path = os.path.join(plugin_dir, fname)
             title = fname
             try:
-                mod_name = "grime_ai_plugin_" + os.path.splitext(fname)[0]
+                mod_name = "app_plugin_" + os.path.splitext(fname)[0]
                 spec = importlib.util.spec_from_file_location(mod_name, path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)       # executes the plugin file

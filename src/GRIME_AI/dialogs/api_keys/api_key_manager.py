@@ -51,7 +51,8 @@ def _settings_folder() -> Path:
         from GRIME_AI.Save_Utils import Save_Utils
         folder = Path(Save_Utils().get_settings_folder())
     except Exception:
-        folder = Path.home() / "Documents" / "GRIME-AI" / "Settings"
+        from ...app_identity import SETTINGS_DIR
+        folder = SETTINGS_DIR
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 

@@ -30,9 +30,9 @@ from PyQt5.uic import loadUi
 from GRIME_AI.dialogs.triage.TriageCalibrator import TriageCalibrator, CalibrationResult
 from GRIME_AI.Save_Utils import Save_Utils
 from GRIME_AI.QLabel_drawing_modes import DrawingMode
+from ...app_identity import APP_CONFIG_FILENAME
 
 BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;}'
-APP_CONFIG_FILENAME = "GRIME-AI.json"
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff'}
 
 

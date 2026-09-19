@@ -28,6 +28,7 @@ from GRIME_AI.utils.resource_utils import ui_path
 from GRIME_AI.CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
 from PyQt5.QtGui import QPalette, QColor, QFont
 from PyQt5.QtCore import Qt
+from ...app_identity import APP_DISPLAY_NAME
 
 # import torch if using torch metadata extraction
 try:
@@ -780,7 +781,7 @@ QLineEdit:focus {
                         "but is not installed in this environment.\n\n"
                         "Install it with:\n"
                         "  pip install ultralytics\n\n"
-                        "Reverting to SAM2. All other GRIME AI features remain available."
+                        f"Reverting to SAM2. All other {APP_DISPLAY_NAME} features remain available."
                     )
                     self.radioButton_segment_model_sam2.setChecked(True)
                     return

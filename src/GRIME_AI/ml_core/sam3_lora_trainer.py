@@ -61,7 +61,7 @@ _DEFAULT_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "fc1", "fc2"]
 class SAM3LoRATrainer:
     """Builds the SAM3_LoRA config and runs its trainer as a subprocess.
 
-    Mirrors the call shape of the other GRIME/OpsiLum trainers: construct with
+    Mirrors the call shape of the other trainers: construct with
     the parameters the tab collected, then call run().
     """
 

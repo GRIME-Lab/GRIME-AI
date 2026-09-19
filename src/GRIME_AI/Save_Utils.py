@@ -12,6 +12,8 @@ import os
 from configparser import ConfigParser
 import configparser
 
+from .app_identity import USER_ROOT, SETTINGS_DIR, MODELS_DIR, ARTIFACTS_DIR, APP_CFG_FILENAME
+
 
 # ======================================================================================================================
 # ======================================================================================================================
@@ -26,8 +28,8 @@ class Save_Utils:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def get_users_GRIME_AI_folder(self):
-        models_file_path = os.path.join(os.path.expanduser('~'), 'Documents', 'GRIME-AI')
+    def get_user_root_folder(self):
+        models_file_path = str(USER_ROOT)
 
         if not os.path.exists(models_file_path):
             os.makedirs(models_file_path)
@@ -37,7 +39,7 @@ class Save_Utils:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def get_phenocam_folder(self):
-        phenocam_file_path = os.path.join(os.path.expanduser('~'), 'Documents', 'GRIME-AI', 'phenocam')
+        phenocam_file_path = os.path.join(str(USER_ROOT), 'phenocam')
 
         if not os.path.exists(phenocam_file_path):
             os.makedirs(phenocam_file_path)
@@ -47,7 +49,7 @@ class Save_Utils:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def get_models_folder(self):
-        models_file_path = os.path.join(os.path.expanduser('~'), 'Documents', 'GRIME-AI', 'Models')
+        models_file_path = str(MODELS_DIR)
 
         if not os.path.exists(models_file_path):
             os.makedirs(models_file_path)
@@ -58,7 +60,7 @@ class Save_Utils:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def get_artifacts_folder(self):
-        models_file_path = os.path.join(os.path.expanduser('~'), 'Documents', 'GRIME-AI', 'Artifacts')
+        models_file_path = str(ARTIFACTS_DIR)
 
         if not os.path.exists(models_file_path):
             os.makedirs(models_file_path)
@@ -106,7 +108,7 @@ class Save_Utils:
         # Prefer the active recipe's Composite Slices folder; otherwise fall
         # back to the default under Documents/GRIME-AI (not the images folder).
         target = self._recipe_override("Composite_Slices_Folder") \
-            or os.path.join(self.get_users_GRIME_AI_folder(), "composite_slices")
+            or os.path.join(self.get_user_root_folder(), "composite_slices")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         os.makedirs(target, exist_ok=True)
@@ -139,7 +141,7 @@ class Save_Utils:
         # Prefer the active recipe's Videos folder; otherwise fall back to the
         # default under Documents/GRIME-AI (not the images folder).
         target = self._recipe_override("Videos_Folder") \
-            or os.path.join(self.get_users_GRIME_AI_folder(), "videos")
+            or os.path.join(self.get_user_root_folder(), "videos")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         #JES target.mkdir(parents=True, exist_ok=True)
@@ -173,7 +175,7 @@ class Save_Utils:
         # Prefer the active recipe's GIFs folder; otherwise fall back to the
         # default under Documents/GRIME-AI (not the images folder).
         target = self._recipe_override("GIFs_Folder") \
-            or os.path.join(self.get_users_GRIME_AI_folder(), "gifs")
+            or os.path.join(self.get_user_root_folder(), "gifs")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         #JES target.mkdir(parents=True, exist_ok=True)
@@ -216,7 +218,7 @@ class Save_Utils:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def get_settings_folder(self):
-        configFilePath = os.path.join(os.path.expanduser('~'), 'Documents', 'GRIME-AI', 'Settings')
+        configFilePath = str(SETTINGS_DIR)
 
         if not os.path.exists(configFilePath):
             os.makedirs(configFilePath)
@@ -241,7 +243,7 @@ class Save_Utils:
         config = ConfigParser()
 
         configFilePath = self.get_settings_folder()
-        configFile = os.path.join(configFilePath, 'GRIME-AI.cfg')
+        configFile = os.path.join(configFilePath, APP_CFG_FILENAME)
 
         with open(configFile, 'w+') as f:
             config.read(configFile)
@@ -269,7 +271,7 @@ class Save_Utils:
 
         config = ConfigParser()
 
-        configFile = os.path.join(configFilePath, 'GRIME-AI.cfg')
+        configFile = os.path.join(configFilePath, APP_CFG_FILENAME)
         f = open(configFile, 'w+')
 
         config.read(configFile)
@@ -291,7 +293,7 @@ class Save_Utils:
 
         config = ConfigParser()
 
-        configFile = os.path.join(configFilePath, 'GRIME-AI.cfg')
+        configFile = os.path.join(configFilePath, APP_CFG_FILENAME)
         f = open(configFile, 'w+')
 
         config.read(configFile)
@@ -316,7 +318,7 @@ class Save_Utils:
 
             config = ConfigParser()
 
-            configFile = os.path.join(configFilePath, 'GRIME-AI.cfg')
+            configFile = os.path.join(configFilePath, APP_CFG_FILENAME)
             f = open(configFile, 'r')
 
             config.read(configFile)
@@ -343,7 +345,7 @@ class Save_Utils:
 
             config = ConfigParser()
 
-            configFile = os.path.join(configFilePath, 'GRIME-AI.cfg')
+            configFile = os.path.join(configFilePath, APP_CFG_FILENAME)
             f = open(configFile, 'r')
 
             config.read(configFile)

@@ -1,4 +1,1 @@
-from pathlib import Path
-
-HOME = Path.home()
-PROJECT_ROOT = HOME / "Documents" / "GRIME-AI"
+from .app_identity import USER_ROOT as PROJECT_ROOT

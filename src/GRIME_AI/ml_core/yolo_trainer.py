@@ -44,6 +44,7 @@ from GRIME_AI.Save_Utils import Save_Utils
 from GRIME_AI.App_QMessageBox import App_QMessageBox
 from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
+from ..app_identity import APP_DISPLAY_NAME
 
 
 # ============================================================================
@@ -669,14 +670,14 @@ class YOLOTrainer:
 
         # ── Save GRIME AI .torch checkpoint embedding metadata ────────────────
         if best_weights.exists():
-            self._save_grime_ai_checkpoint(best_weights, lr)
+            self._save_app_checkpoint(best_weights, lr)
 
         print(f"[YOLOTrainer] Run complete. Outputs in: {run_dir}")
 
         self._cleanup_dataset(dataset_root_str, yaml_path)
 
     # ─────────────────────────────────────────────────────────────────────────
-    def _save_grime_ai_checkpoint(self, best_pt_path: Path, lr: float):
+    def _save_app_checkpoint(self, best_pt_path: Path, lr: float):
         """
         Save a GRIME AI .torch file alongside best.pt.
 
@@ -685,7 +686,7 @@ class YOLOTrainer:
         best.pt directly via YOLO() since it is the complete fine-tuned model.
         """
         try:
-            print(f"[YOLOTrainer] Saving GRIME AI checkpoint...")
+            print(f"[YOLOTrainer] Saving {APP_DISPLAY_NAME} checkpoint...")
 
             # Extract class names from best.pt
             class_names = {}
@@ -732,10 +733,10 @@ class YOLOTrainer:
             )
             torch_path = best_pt_path.parent / torch_filename
             torch.save(ckpt, str(torch_path))
-            print(f"[YOLOTrainer] GRIME AI checkpoint saved: {torch_path.name}")
+            print(f"[YOLOTrainer] {APP_DISPLAY_NAME} checkpoint saved: {torch_path.name}")
 
         except Exception as e:
-            print(f"[YOLOTrainer] Warning: could not save GRIME AI checkpoint: {e}")
+            print(f"[YOLOTrainer] Warning: could not save {APP_DISPLAY_NAME} checkpoint: {e}")
 
     # ─────────────────────────────────────────────────────────────────────────
     def _cleanup_dataset(self, dataset_root_str: str, yaml_path: str):
