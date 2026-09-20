@@ -53,7 +53,7 @@ import logging
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 
-log = logging.getLogger("GRIME_AI.window")
+log = logging.getLogger(f"{__package__.split('.')[0]}.window")
 
 # Used ONLY when the window manager fails to publish _NET_WORKAREA. Minimal
 # WMs common in VNC sessions (IceWM, Fluxbox, twm) sometimes omit it, in which

@@ -77,7 +77,7 @@ class Save_Utils:
         Recipe Manager on 'Set Active'), or None if no recipe folder is set.
         Falls back silently so behavior is unchanged when no recipe is active."""
         try:
-            from GRIME_AI.JSON_Editor import JsonEditor
+            from appcore.JSON_Editor import JsonEditor
             value = JsonEditor().getValue(json_key)
         except Exception:
             value = None

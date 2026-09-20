@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as T
 from transformers import SegformerForSemanticSegmentation
 from peft import LoraConfig, get_peft_model
-from GRIME_AI.ml_core.ml_helpers import (init_coco_structure, add_coco_entries, save_coco_json)
+from appcore.ml_core.ml_helpers import (init_coco_structure, add_coco_entries, save_coco_json)
 
 
 # ======================================================================================================================

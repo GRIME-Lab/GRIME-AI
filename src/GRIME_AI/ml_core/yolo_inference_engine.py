@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import torch
 from PyQt5.QtWidgets import QMessageBox
 
-from GRIME_AI.ml_core.ml_helpers import (
+from appcore.ml_core.ml_helpers import (
     init_coco_structure, add_coco_entries, save_coco_json
 )
 from ..app_identity import APP_DISPLAY_NAME

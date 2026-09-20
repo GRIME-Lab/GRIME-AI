@@ -23,10 +23,10 @@ from PyQt5.QtWidgets import QMessageBox
 
 # GRIME-AI Classes
 # ----------------------------------------------------------------------------------------------------------------------
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.App_Utils import App_Utils
-from GRIME_AI.Color import Color
-from GRIME_AI.App_QMessageBox import App_QMessageBox
+from appcore.QProgressWheel import QProgressWheel
+from appcore.App_Utils import App_Utils
+from appcore.Color import Color
+from appcore.App_QMessageBox import App_QMessageBox
 
 # ======================================================================================================================
 # ======================================================================================================================
@@ -122,7 +122,7 @@ class Video:
     def __init__(self):
         self.className = "Video"
 
-        from GRIME_AI.Save_Utils import Save_Utils
+        from appcore.Save_Utils import Save_Utils
         self.myApp_save_utils = Save_Utils()
 
     # ======================================================================================================================

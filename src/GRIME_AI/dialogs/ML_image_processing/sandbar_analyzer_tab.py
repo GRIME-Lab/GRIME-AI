@@ -24,8 +24,8 @@ from PyQt5.QtWidgets import (QWidget, QFileDialog, QListWidgetItem, QMessageBox,
                              QTableWidgetItem)
 from PyQt5.QtGui import QPixmap, QIcon, QImage
 
-from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.JSON_Editor import JsonEditor
+from appcore import PROJECT_ROOT
+from appcore.JSON_Editor import JsonEditor
 
 
 class SandbarAnalyzerTab(QWidget):
@@ -149,7 +149,7 @@ class SandbarAnalyzerTab(QWidget):
             return
         JsonEditor().update_json_entry("Sandbar_Analyzer_Images_Folder", folder)
 
-        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
+        from appcore.Sandbar_Analyzer import Sandbar_Analyzer
         self._pairs = Sandbar_Analyzer.generate_file_pairs(folder)
         if not self._pairs:
             QMessageBox.warning(self, "Sandbar Analyzer", "No image/mask pairs found.")
@@ -220,7 +220,7 @@ class SandbarAnalyzerTab(QWidget):
             return
         orig_path, mask_path = self._pairs[self._current_idx]
 
-        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
+        from appcore.Sandbar_Analyzer import Sandbar_Analyzer
         try:
             analyzer = Sandbar_Analyzer(orig_path, mask_path)
             analyzer.run(**self._edge_kwargs())
@@ -398,7 +398,7 @@ class SandbarAnalyzerTab(QWidget):
         if not out_path:
             return
 
-        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
+        from appcore.Sandbar_Analyzer import Sandbar_Analyzer
         import csv
         kwargs = self._edge_kwargs()
         with open(out_path, "w", newline="") as fh:

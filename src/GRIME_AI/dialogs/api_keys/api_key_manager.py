@@ -10,7 +10,7 @@ project .gitignore (api_keys.ini).
 Usage
 -----
 # Read (GUI or CLI):
-    from GRIME_AI.dialogs.api_keys.api_key_manager import APIKeyManager
+    from appcore.dialogs.api_keys.api_key_manager import APIKeyManager
     mgr  = APIKeyManager()
     neon = mgr.get_neon_token()   # str | None
     usgs = mgr.get_usgs_key()     # str | None
@@ -48,7 +48,7 @@ def _settings_folder() -> Path:
          defined in the package __init__.py
     """
     try:
-        from GRIME_AI.Save_Utils import Save_Utils
+        from appcore.Save_Utils import Save_Utils
         folder = Path(Save_Utils().get_settings_folder())
     except Exception:
         from ...app_identity import SETTINGS_DIR

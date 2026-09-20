@@ -25,7 +25,7 @@ import datetime
 
 import cv2
 
-from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import ROIShape
+from appcore.dialogs.color_segmentation.color_seg_roi_data import ROIShape
 from ...app_identity import APP_DISPLAY_NAME
 
 

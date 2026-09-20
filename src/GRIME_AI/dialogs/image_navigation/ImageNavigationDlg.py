@@ -9,7 +9,7 @@
 
 import os
 
-from GRIME_AI.utils.resource_utils import ui_path
+from appcore.utils.resource_utils import ui_path
 
 from PyQt5.QtCore import Qt, QTimer, QSize, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QPixmap, QIcon, QPen

@@ -14,11 +14,11 @@ import shutil
 import cv2
 import numpy as np
 
-from GRIME_AI.App_Utils import App_Utils
-from GRIME_AI.Color import Color
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.ImageQualityCheck import ImageQualityAnalyzer
+from appcore.App_Utils import App_Utils
+from appcore.Color import Color
+from appcore.QProgressWheel import QProgressWheel
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.ImageQualityCheck import ImageQualityAnalyzer
 from datetime import datetime
 from .app_identity import APP_DISPLAY_NAME
 
@@ -264,7 +264,7 @@ class ImageTriage:
         """Assemble the complete run configuration for the settings sidecar
         and the xlsx Triage Settings worksheet."""
         try:
-            from GRIME_AI.version import SW_VERSION
+            from appcore.version import SW_VERSION
         except Exception:
             SW_VERSION = "unknown"
 

@@ -1,7 +1,7 @@
 # usgs/usgs_hivis.py
 import datetime
 from PyQt5.QtWidgets import QMessageBox
-from GRIME_AI.App_QMessageBox import App_QMessageBox
+from appcore.App_QMessageBox import App_QMessageBox
 from .usgs_client import USGSClient
 
 class USGS_HIVIS:

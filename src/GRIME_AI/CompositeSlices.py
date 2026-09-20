@@ -13,7 +13,7 @@ from PIL import Image
 
 from PyQt5.QtCore import QRect
 
-from GRIME_AI.QProgressWheel import QProgressWheel
+from appcore.QProgressWheel import QProgressWheel
 
 
 # ============================================================================

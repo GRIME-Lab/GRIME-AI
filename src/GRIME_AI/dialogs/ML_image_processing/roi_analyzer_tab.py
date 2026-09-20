@@ -19,10 +19,10 @@ from PyQt5.QtCore import Qt, QTimer, QRect
 from PyQt5.QtWidgets import QWidget, QFileDialog, QListWidgetItem, QMessageBox
 from PyQt5.QtGui import QPixmap, QIcon, QImage, QPainter, QColor, QFont
 
-from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.CSS_Styles import BUTTON_CSS_STEEL_BLUE
+from appcore import PROJECT_ROOT
+from appcore.JSON_Editor import JsonEditor
+from appcore.QProgressWheel import QProgressWheel
+from appcore.CSS_Styles import BUTTON_CSS_STEEL_BLUE
 
 
 class ROIAnalyzerTab(QWidget):
@@ -96,7 +96,7 @@ class ROIAnalyzerTab(QWidget):
 
         if self.checkBox_texture_GLCM.isChecked():
             try:
-                from GRIME_AI.Texture import GLCMTexture
+                from appcore.Texture import GLCMTexture
                 features = GLCMTexture().compute_features(image)
                 self.lineEdit_glcm_contrast.setText(f"{features['contrast']:.4f}")
                 self.lineEdit_glcm_homogeneity.setText(f"{features['homogeneity']:.4f}")
@@ -406,7 +406,7 @@ class ROIAnalyzerTab(QWidget):
         n_clusters = self._get_n_clusters()
 
         # Run analysis for this specific pair
-        from GRIME_AI.ROI_Analyzer import ROI_Analyzer
+        from appcore.ROI_Analyzer import ROI_Analyzer
         analyzer = ROI_Analyzer(orig_path, mask_path, clusters=n_clusters, clustering_method=self._get_clustering_method(), **self._get_meanshift_kwargs())
         analyzer.run_analysis()
 
@@ -516,7 +516,7 @@ class ROIAnalyzerTab(QWidget):
 
         JsonEditor().update_json_entry("ROI_Analyzer_Images_Folder", folder)
 
-        from GRIME_AI.ROI_Analyzer import ROI_Analyzer
+        from appcore.ROI_Analyzer import ROI_Analyzer
         temp = ROI_Analyzer("", "")
         pairs = temp.generate_file_pairs(folder)
         if not pairs:
@@ -540,7 +540,7 @@ class ROIAnalyzerTab(QWidget):
             return
 
         try:
-            from GRIME_AI.ROI_Analyzer import ROI_Analyzer
+            from appcore.ROI_Analyzer import ROI_Analyzer
         except ImportError:
             QMessageBox.warning(self, "ROI Analyzer", "Unable to import ROI Analyzer module.")
             return
@@ -832,7 +832,7 @@ class ROIAnalyzerTab(QWidget):
                 filename = os.path.basename(orig_path)
                 capture_date, capture_time = self._extract_datetime_from_path(orig_path)
 
-                from GRIME_AI.ROI_Analyzer import ROI_Analyzer
+                from appcore.ROI_Analyzer import ROI_Analyzer
                 analyzer = ROI_Analyzer(orig_path, mask_path, clusters=n_clusters, clustering_method=self._get_clustering_method(), **self._get_meanshift_kwargs())
 
                 try:
@@ -846,7 +846,7 @@ class ROIAnalyzerTab(QWidget):
                 if self.checkBox_texture_GLCM.isChecked():
                     try:
                         import cv2 as _cv2
-                        from GRIME_AI.Texture import GLCMTexture
+                        from appcore.Texture import GLCMTexture
                         _img = _cv2.imread(str(orig_path))
                         if _img is not None:
                             glcm_features = GLCMTexture().compute_features(_img)
@@ -906,7 +906,7 @@ class ROIAnalyzerTab(QWidget):
         sensor_df = None
         if sensor_file:
             try:
-                from GRIME_AI.SensorImageCorrelator import SensorImageCorrelator
+                from appcore.SensorImageCorrelator import SensorImageCorrelator
                 sensor_df = SensorImageCorrelator().sensor_values_for_images(
                     df["Image Path"].tolist(), sensor_file)
                 df = pd.concat([df.reset_index(drop=True),
@@ -1018,7 +1018,7 @@ class ROIAnalyzerTab(QWidget):
         analysis_path = None
         if sensor_df is not None:
             try:
-                from GRIME_AI.SensorROIAnalysis import SensorROIAnalysis
+                from appcore.SensorROIAnalysis import SensorROIAnalysis
                 analysis_path = os.path.join(correlation_folder, f"{file_dt_prefix}_sensor_analysis.xlsx")
                 png_dir = os.path.join(correlation_folder, f"{file_dt_prefix}_figures")
                 SensorROIAnalysis().write_report(df, analysis_path, png_dir=png_dir)

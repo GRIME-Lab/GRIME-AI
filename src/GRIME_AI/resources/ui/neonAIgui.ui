@@ -1353,12 +1353,12 @@
   <customwidget>
    <class>App_QLabel</class>
    <extends>QLabel</extends>
-   <header location="global">GRIME_AI.App_QLabel</header>
+   <header location="global">appcore.App_QLabel</header>
   </customwidget>
   <customwidget>
    <class>App_QTableWidget</class>
    <extends>QTableWidget</extends>
-   <header location="global">GRIME_AI.App_QTableWidget</header>
+   <header location="global">appcore.App_QTableWidget</header>
   </customwidget>
  </customwidgets>
  <tabstops>

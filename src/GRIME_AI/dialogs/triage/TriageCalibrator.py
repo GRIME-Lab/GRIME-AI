@@ -22,7 +22,7 @@ import numpy as np
 import cv2
 from pathlib import Path
 
-from GRIME_AI.ImageQualityCheck import ImageQualityAnalyzer
+from appcore.ImageQualityCheck import ImageQualityAnalyzer
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}

@@ -126,7 +126,7 @@ class Sandbar_Analyzer:
         method only builds the edgeMethodSettings the shared cores expect and
         adapts their output to (binary, magnitude).
         """
-        from GRIME_AI.ProcessImage import ProcessImage
+        from appcore.ProcessImage import ProcessImage
 
         if blur_ksize and blur_ksize >= 3:
             gray = cv2.GaussianBlur(gray, (blur_ksize | 1, blur_ksize | 1), 0)
@@ -231,7 +231,7 @@ class Sandbar_Analyzer:
         only the largest cluster (POC-style single sub-class).
         Requires run() to have been called first (needs self.edges).
         """
-        from GRIME_AI.Clustering import cluster_masked_pixels
+        from appcore.Clustering import cluster_masked_pixels
 
         if self.edges is None:
             raise RuntimeError("Call run() before build_poc_composite().")
