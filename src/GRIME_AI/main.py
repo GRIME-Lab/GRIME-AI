@@ -628,6 +628,10 @@ class MainWindow(QMainWindow):
         uic.loadUi(ui_path, self)
 
         self.setWindowTitle(f"{APP_DISPLAY_NAME}" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
+
+        # Menu text carrying the product name is set here, not in the .ui file,
+        # so the .ui stays product-neutral.
+        self.action_About.setText(f"&About {APP_DISPLAY_NAME}")
         self.tabWidget.setTabVisible(1, False)
         #self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowStaysOnTopHint)
 

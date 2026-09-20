@@ -7,6 +7,7 @@
 # Created: Mar 6, 2022
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
+from appcore.app_identity import APP_DISPLAY_NAME
 from appcore.utils.resource_utils import ui_path
 
 from PyQt5 import QtCore
@@ -27,3 +28,7 @@ class ReleaseNotesDlg(QDialog):
         self.setWindowModality(QtCore.Qt.NonModal)
 
         loadUi(ui_path("release_notes/QDialog_ReleaseNotes.ui"), self)
+
+        # Title carrying the product name is set here, not in the .ui file,
+        # so the .ui stays product-neutral.
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} Copyright & License")

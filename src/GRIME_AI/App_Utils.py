@@ -150,30 +150,30 @@ class App_Utils:
     # ------------------------------------------------------------------------------------------------------------------
     def create_GRIME_folders(self, full=1):
         # --------------------------------------------------------------------------------------------------------------
-        # CREATE A GRIME-AI FOLDER IN THE USER'S DOCUMENTS FOLDER
-        # <user>/Documents/GRIME-AI
+        # CREATE THE APPLICATION FOLDER IN THE USER'S DOCUMENTS FOLDER
+        # <user>/Documents/<appcore>
         # --------------------------------------------------------------------------------------------------------------
         rootFolder = str(USER_ROOT)
         if not os.path.exists(rootFolder):
             os.mkdir(rootFolder)
 
         # --------------------------------------------------------------------------------------------------------------
-        # CREATE A SETTINGS FOLDERS IN THE USER'S GRIME-AI FOLDER IN WHICH TO STORE THE USER'S PROGRAM SETTINGS
-        # <user>/Documents/GRIME-AI/Settings
+        # CREATE A SETTINGS FOLDERS IN THE USER'S APPLICATION FOLDER IN WHICH TO STORE THE USER'S PROGRAM SETTINGS
+        # <user>/Documents/<appcore>/Settings
         # --------------------------------------------------------------------------------------------------------------
         configFilePath = os.path.join(rootFolder, 'Settings')
         if not os.path.exists(configFilePath):
             os.mkdir(configFilePath)
 
-        # CHECK TO SEE IF THE GRIME-AI CONFIGURATION FILE EXISTS. IF IT DOES NOT, THEN CREATE IT USING touch
+        # CHECK TO SEE IF THE APPLICATION CONFIGURATION FILE EXISTS. IF IT DOES NOT, THEN CREATE IT USING touch
         configFile = os.path.join(configFilePath, APP_CONFIG_FILENAME)
         if not os.path.isfile(configFile):
             configFileWithPath = Path(configFile)
             configFileWithPath.touch(exist_ok=True)
 
         # --------------------------------------------------------------------------------------------------------------
-        # CREATE A SCRATCHPAD FOLDER IN THE USER'S GRIME-AI FOLDER AS A WORKAROUND TO THE NEON API "PATH TOO LONG" ISSUE
-        # <user>/Documents/GRIME-AI/Settings
+        # CREATE A SCRATCHPAD FOLDER IN THE USER'S APPLICATION FOLDER AS A WORKAROUND TO THE NEON API "PATH TOO LONG" ISSUE
+        # <user>/Documents/<appcore>/Settings
         # --------------------------------------------------------------------------------------------------------------
         scratchpadFilePath = os.path.join(rootFolder, 'Scratchpad')
         if not os.path.exists(scratchpadFilePath):
@@ -198,7 +198,7 @@ class App_Utils:
             if not os.path.exists(make_these_folders):
                 os.makedirs(make_these_folders)
 
-            # SAVE THESE DEFAULT IMAGE FOLDER PATHS TO THE GRIME-AI CONFIGURATION FILE (GRIME-AI.json) ONLY IF THEY DON'T EXIST
+            # SAVE THESE DEFAULT IMAGE FOLDER PATHS TO THE APPLICATION CONFIGURATION FILE (<appcore>.json) ONLY IF THEY DON'T EXIST
             # The regular expression pattern to find the word 'images' and extract the word between slashes
             pattern = r'\/([^\/]+)\/Images\b'
 
