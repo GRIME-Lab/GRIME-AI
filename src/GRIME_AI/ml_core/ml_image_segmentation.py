@@ -24,15 +24,15 @@ from PyQt5.QtWidgets import QMessageBox
 from omegaconf import OmegaConf, DictConfig
 
 # Project imports
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.Save_Utils import Save_Utils
+from appcore.QProgressWheel import QProgressWheel
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.Save_Utils import Save_Utils
 
 # Engines
-from GRIME_AI.ml_core.sam2_inference_engine import SAM2InferenceEngine
-from GRIME_AI.ml_core.segformer_inference_engine import SegFormerInferenceEngine
-from GRIME_AI.ml_core.yolo_inference_engine import YOLOInferenceEngine
-from GRIME_AI.ml_core.ml_helpers import add_coco_entries
+from appcore.ml_core.sam2_inference_engine import SAM2InferenceEngine
+from appcore.ml_core.segformer_inference_engine import SegFormerInferenceEngine
+from appcore.ml_core.yolo_inference_engine import YOLOInferenceEngine
+from appcore.ml_core.ml_helpers import add_coco_entries
 from ..app_identity import APP_DISPLAY_NAME
 
 
@@ -165,7 +165,7 @@ class MLImageSegmentation:
         season_filter_active = bool(segment_seasons)
         if season_filter_active:
             try:
-                from GRIME_AI.ml_core.seasonal_only import filter_seasons_only
+                from appcore.ml_core.seasonal_only import filter_seasons_only
                 print(f"[MLImageSegmentation] Season filter active: "
                       f"{', '.join(segment_seasons)} (Meteorological) — only these seasons will be segmented.")
             except ImportError:

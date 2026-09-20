@@ -39,11 +39,11 @@ import matplotlib.pyplot as plt
 
 import torch
 
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
-from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.QProgressWheel import QProgressWheel
+from appcore.Save_Utils import Save_Utils
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
 from ..app_identity import APP_DISPLAY_NAME
 
 
@@ -535,7 +535,7 @@ class YOLOTrainer:
         if not weights_path:
             raise FileNotFoundError(
                 f"[YOLOTrainer] YOLO base weights '{weights_filename}' not found.\n"
-                f"Run: python -m GRIME_AI.ml_core.download_yolo_weights --default\n"
+                f"Run: python -m {__package__.split('.')[0]}.ml_core.download_yolo_weights --default\n"
                 f"Or place the file manually in the ultralytics/assets/ folder of your venv."
             )
 

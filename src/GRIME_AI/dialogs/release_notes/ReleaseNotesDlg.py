@@ -7,7 +7,7 @@
 # Created: Mar 6, 2022
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
-from GRIME_AI.utils.resource_utils import ui_path
+from appcore.utils.resource_utils import ui_path
 
 from PyQt5 import QtCore
 from PyQt5.QtWidgets import QDialog

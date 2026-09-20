@@ -7,8 +7,8 @@ from openpyxl import Workbook
 from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox
 
-from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.Save_Utils import Save_Utils
+from appcore import PROJECT_ROOT
+from appcore.Save_Utils import Save_Utils
 
 
 # ======================================================================================================================

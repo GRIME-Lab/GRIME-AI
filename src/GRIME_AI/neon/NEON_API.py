@@ -30,13 +30,13 @@ from neonutilities import zips_by_product, stack_by_table
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from GRIME_AI.JSON_Editor import JsonEditor
+from appcore.JSON_Editor import JsonEditor
 # GRIME AI MODULES
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.App_Utils import App_Utils
-from GRIME_AI.nitrateData import nitrateData
-from GRIME_AI.siteData import siteData
-from GRIME_AI.dialogs.api_keys import APIKeyManager
+from appcore.QProgressWheel import QProgressWheel
+from appcore.App_Utils import App_Utils
+from appcore.nitrateData import nitrateData
+from appcore.siteData import siteData
+from appcore.dialogs.api_keys import APIKeyManager
 from ..app_identity import DOWNLOADS_DIR
 
 SERVER = 'https://data.neonscience.org/api/v0/'  # default; overridden per-instance by APIKeyManager

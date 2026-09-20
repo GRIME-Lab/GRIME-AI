@@ -47,7 +47,7 @@ import importlib.util
 import numpy as np
 import torch
 from PIL import Image
-from GRIME_AI.app_identity import APP_DISPLAY_NAME
+from appcore.app_identity import APP_DISPLAY_NAME
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ def validate_inputs(args):
 # SAM2 segmentation
 # ──────────────────────────────────────────────────────────────────────────────
 def run_sam2(args, device, category, progressBar, image_list=None):
-    from GRIME_AI.ml_core.sam2_inference_engine import SAM2InferenceEngine
+    from appcore.ml_core.sam2_inference_engine import SAM2InferenceEngine
 
     if image_list is None:
         image_list = collect_images(args)
@@ -202,7 +202,7 @@ def run_sam2(args, device, category, progressBar, image_list=None):
 # SegFormer segmentation
 # ──────────────────────────────────────────────────────────────────────────────
 def run_segformer(args, device, category, progressBar, image_list=None):
-    from GRIME_AI.ml_core.segformer_inference_engine import SegFormerInferenceEngine
+    from appcore.ml_core.segformer_inference_engine import SegFormerInferenceEngine
     from torchvision import transforms as T
     import shutil
     import cv2

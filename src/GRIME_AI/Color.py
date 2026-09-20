@@ -12,7 +12,7 @@ from urllib.request import urlopen
 import cv2
 import numpy as np
 
-from GRIME_AI.App_Utils import App_Utils
+from appcore.App_Utils import App_Utils
 
 
 class Color:

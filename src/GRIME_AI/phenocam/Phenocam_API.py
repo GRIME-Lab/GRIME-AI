@@ -1,7 +1,7 @@
 import os
 import requests
 import pandas as pd
-from GRIME_AI.http_client import TimeoutSession
+from appcore.http_client import TimeoutSession
 from datetime import datetime
 
 class Phenocam_API:

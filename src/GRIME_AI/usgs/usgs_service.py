@@ -7,8 +7,8 @@ import pandas as pd
 from typing import Dict, Optional
 
 from .usgs_types import CameraInfo, LatestImage
-from GRIME_AI.reporting.gap_report import generate_gap_report
-from GRIME_AI.dialogs.api_keys import APIKeyManager
+from appcore.reporting.gap_report import generate_gap_report
+from appcore.dialogs.api_keys import APIKeyManager
 
 # Legacy AWS endpoint - kept as fallback until USGS decommissions it (after July 2026)
 ENDPOINT_LEGACY  = "https://jj5utwupk5.execute-api.us-east-1.amazonaws.com"

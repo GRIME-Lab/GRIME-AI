@@ -31,7 +31,7 @@ from hydra import initialize, compose
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
-from GRIME_AI.ml_core.ml_helpers import (get_color_for_category, init_coco_structure,
+from appcore.ml_core.ml_helpers import (get_color_for_category, init_coco_structure,
                                           add_coco_entries, save_coco_json,
                                           build_centroid_point_prompts)
 from PyQt5.QtWidgets import QMessageBox
@@ -152,7 +152,7 @@ class SAM2InferenceEngine:
         # with.  New checkpoints carry a "prompt_protocol" block.  Legacy
         # checkpoints (no block) were validated with EVERY pooled positive and
         # 3:1 negatives, so that is what they get -- no cap.
-        from GRIME_AI.ml_core.ml_helpers import DEFAULT_NEGATIVE_BALANCE
+        from appcore.ml_core.ml_helpers import DEFAULT_NEGATIVE_BALANCE
         _pp = checkpoint.get("prompt_protocol")
         if _pp:
             self.max_positives    = _pp.get("max_positives")          # int or None
@@ -246,8 +246,8 @@ class SAM2InferenceEngine:
 
         # Tier 2: site_config.json
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
-            from GRIME_AI.JSON_Editor import JsonEditor
+            from appcore.Save_Utils import Save_Utils
+            from appcore.JSON_Editor import JsonEditor
             import os
             settings_folder = Save_Utils().get_settings_folder()
             config_file = os.path.join(settings_folder, "site_config.json")
@@ -280,8 +280,8 @@ class SAM2InferenceEngine:
             print(f"  blob_filter_mode: loaded from checkpoint ({m})")
             return m
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
-            from GRIME_AI.JSON_Editor import JsonEditor
+            from appcore.Save_Utils import Save_Utils
+            from appcore.JSON_Editor import JsonEditor
             import os
             settings_folder = Save_Utils().get_settings_folder()
             cfg = JsonEditor().load_json_file(os.path.join(settings_folder, "site_config.json"))
