@@ -20,6 +20,14 @@ FADE_SMOOTH = 'smooth'  # window opacity fades from 0 → 1, then glow starts
 FADE_SNOW   = 'snow'    # random pixel blocks revealed gradually, then glow starts
 
 # ======================================================================================================================
+# ENVIRONMENT VARIABLES used to pass settings to the splash subprocess.
+# App-neutral names: the child runs as a standalone script and has no package
+# context, so it cannot derive them from app_identity before reading them.
+# ======================================================================================================================
+ENV_FADE_MODE = 'APP_SPLASH_FADE_MODE'
+ENV_DONE_FILE = 'APP_SPLASH_DONE_FILE'
+
+# ======================================================================================================================
 # Run as __main__ to display the splash screen.
 # argv[1] = image_path
 # argv[2] = version_str (may be empty string)
@@ -32,8 +40,9 @@ if __name__ == '__main__':
 
     image_path  = sys.argv[1]
     version_str = sys.argv[2] if len(sys.argv) > 2 else ''
-    fade_mode   = os.environ.get('GRIMEAI_FADE_MODE', FADE_SMOOTH)
-    done_file   = os.environ.get('GRIMEAI_DONE_FILE', '')
+
+    fade_mode = os.environ.get(ENV_FADE_MODE, FADE_SMOOTH)
+    done_file = os.environ.get(ENV_DONE_FILE, '')
 
     from PyQt5.QtWidgets import QApplication, QWidget
     from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QPen
@@ -204,12 +213,14 @@ class SplashScreen:
 
     def show(self, mainWin=None):
         # Communicate fade_mode and done_file via environment — nothing extra in argv
-        done_file = os.path.join(tempfile.gettempdir(), f'grimeai_splash_{os.getpid()}.done')
+        from .app_identity import APP_ID
+        done_file = os.path.join(tempfile.gettempdir(),
+                                 f'{APP_ID.lower()}_splash_{os.getpid()}.done')
         self._done_file = done_file
 
         env = os.environ.copy()
-        env['GRIMEAI_FADE_MODE'] = self._fade_mode
-        env['GRIMEAI_DONE_FILE'] = done_file
+        env[ENV_FADE_MODE] = self._fade_mode
+        env[ENV_DONE_FILE] = done_file
 
         script = os.path.abspath(__file__)
         self._process = subprocess.Popen(

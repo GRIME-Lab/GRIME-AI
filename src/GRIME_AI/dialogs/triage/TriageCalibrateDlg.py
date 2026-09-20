@@ -11,11 +11,11 @@
 #
 # Dialog for calibrating triage parameters from labelled image folders.
 # Delegates all calibration logic to TriageCalibrator (no Qt there).
-# Saves results to GRIME-AI.json and emits calibrated params to caller.
+# Saves results to application json and emit calibrated params to caller.
 #
 # The right-hand panel lets the user browse images from the triage source
 # folder and draw a rubber-band rectangle to define the focus scoring ROI.
-# The ROI is stored as normalised [x, y, w, h] floats in GRIME-AI.json.
+# The ROI is stored as normalised [x, y, w, h] floats in the application json.
 
 import os
 import json
@@ -465,7 +465,7 @@ class TriageCalibrateDlg(QDialog):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _existing_calibration_found(self) -> bool:
-        """Return True if GRIME-AI.json already contains triage calibration data."""
+        """Return True if the application json already contains triage calibration data."""
         try:
             config = self._load_config()
             triage = config.get("triage", {})
