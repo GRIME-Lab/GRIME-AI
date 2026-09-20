@@ -27,9 +27,9 @@ from PyQt5.QtCore import Qt, QThread, QRect, QEvent, pyqtSignal
 from PyQt5.QtGui import QFont, QPixmap, QImage
 from PyQt5.uic import loadUi
 
-from GRIME_AI.dialogs.triage.TriageCalibrator import TriageCalibrator, CalibrationResult
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.QLabel_drawing_modes import DrawingMode
+from appcore.dialogs.triage.TriageCalibrator import TriageCalibrator, CalibrationResult
+from appcore.Save_Utils import Save_Utils
+from appcore.QLabel_drawing_modes import DrawingMode
 from ...app_identity import APP_CONFIG_FILENAME
 
 BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;}'

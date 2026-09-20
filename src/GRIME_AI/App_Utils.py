@@ -23,8 +23,8 @@ from urllib3.util.retry import Retry
 
 from pathlib import Path
 
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.JSON_Editor import JsonEditor
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.JSON_Editor import JsonEditor
 from .app_identity import USER_ROOT, APP_CONFIG_FILENAME
 
 

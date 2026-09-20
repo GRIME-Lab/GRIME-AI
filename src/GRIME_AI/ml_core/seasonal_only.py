@@ -25,7 +25,7 @@ Season type options:
     "Astronomical"    - fixed-date boundaries  (Dec 21, Mar 20, Jun 21, Sep 23)
 """
 
-from GRIME_AI.ml_core.seasonal_dropout import extract_date_from_usgs_filename, get_season
+from appcore.ml_core.seasonal_dropout import extract_date_from_usgs_filename, get_season
 from typing import Optional
 from datetime import date
 

@@ -11,7 +11,7 @@ import os
 import promptlib
 import datetime
 
-from GRIME_AI.utils.resource_utils import ui_path
+from appcore.utils.resource_utils import ui_path
 
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal, pyqtSlot

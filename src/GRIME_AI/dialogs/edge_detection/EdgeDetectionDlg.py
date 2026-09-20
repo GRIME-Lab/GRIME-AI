@@ -9,14 +9,14 @@
 
 import copy
 
-from GRIME_AI.utils.resource_utils import ui_path
+from appcore.utils.resource_utils import ui_path
 
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QDialog
 from PyQt5.uic import loadUi
 
-from GRIME_AI.constants import edgeMethodsClass, featureMethodsClass
+from appcore.constants import edgeMethodsClass, featureMethodsClass
 
 
 # ======================================================================================================================

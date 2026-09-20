@@ -18,18 +18,18 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Qt5Agg")      # <<< FORCE Qt5Agg backend for PyQt5
 
-from GRIME_AI.utils.resource_utils import ui_path
+from appcore.utils.resource_utils import ui_path
 
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget, QApplication
 from PyQt5.uic import loadUi
 
-from GRIME_AI.Save_Utils import Save_Utils
+from appcore.Save_Utils import Save_Utils
 from ...app_identity import PLUGINS_DIR
 # Tab classes are imported lazily in _add_tab_safe() so a missing or broken tab
 # module cannot stop this dialog from loading. ModelConfigManager is not a tab
 # and is imported normally.
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
 # ======================================================================================================================
 # ======================================================================================================================
@@ -78,7 +78,7 @@ class ML_ImageProcessingDlg(QDialog):
         # TRAINING TAB    ---    TRAINING TAB    ---   TRAINING TAB    ---    TRAINING TAB    ---    TRAINING TAB
         # --------------------------------------------------------------------------------------------------------------
         # Instantiate the TrainingTab and add it to the tabWidget
-        _MOD = "GRIME_AI.dialogs.ML_image_processing."
+        _MOD = __package__ + "."
 
         self.training_tab = self._add_tab_safe(
             "Train Model", _MOD + "training_tab", "TrainingTab",
@@ -213,7 +213,7 @@ class ML_ImageProcessingDlg(QDialog):
 
         The module is loaded BY FILE PATH (spec_from_file_location), so a
         plugin need not be an installed package module; its own
-        `from GRIME_AI...` imports still resolve against the installed package.
+        `from appcore...` imports still resolve against the installed package.
         Every plugin is fully guarded — a bad one is skipped and logged, never
         crashing the dialog. Presence of the file is the only gate."""
         import os

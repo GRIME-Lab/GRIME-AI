@@ -40,7 +40,7 @@
 # ----------------------------------------------------------------------------------------------------------------------
 try:
     # TRY TO IMPORT THE VERSION CONSTANT FROM VERSION.PY
-    from GRIME_AI.version import SW_VERSION
+    from appcore.version import SW_VERSION
 except ImportError:
     # FALLBACK IF VERSION.PY DOES NOT EXIST. 0.0.0.0 IS AN INVALID VERSION NUMBER
     SW_VERSION = "Ver. 0.0.0.0"
@@ -139,7 +139,7 @@ import traceback
 
 from dataclasses import dataclass
 
-from GRIME_AI.utils.resource_utils import icon_path
+from appcore.utils.resource_utils import icon_path
 
 from pathlib import Path
 
@@ -153,15 +153,15 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidgetItem, QToolBa
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu
 from PyQt5.QtWidgets import QTreeWidgetItem
 
-from GRIME_AI.SplashScreen import SplashScreen
-from GRIME_AI.utils.window_utils import (
+from appcore.SplashScreen import SplashScreen
+from appcore.utils.window_utils import (
     install_window_placement_guard,
     reset_window_layout,
 )
 
 # pandas imported lazily inside functions
 
-from GRIME_AI.usgs.usgs_client import USGSClient
+from appcore.usgs.usgs_client import USGSClient
 
 # ----------------------------------------------------------------------------
 # POP-UP/MODELESS DIALOG BOXES
@@ -176,37 +176,37 @@ from GRIME_AI.usgs.usgs_client import USGSClient
 # lazy: from GRIME_AI.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
 # lazy: from GRIME_AI.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
 # lazy: from GRIME_AI.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
-from GRIME_AI.dialogs.triage.TriageOptionsDlg import TriageOptionsDlg
-from GRIME_AI.Color import Color
-from GRIME_AI.vegetation_indices import Vegetation_Indices, GreennessIndex
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.ImageData import imageData
-from GRIME_AI.ProductTable import ProductTable
-from GRIME_AI.App_QLabel import DrawingMode
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.App_Utils import App_Utils
-from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.Resize_Controls import Resize_Controls
-from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
-from GRIME_AI.ImageTriage import ImageTriage
-from GRIME_AI.GreenImageGenerator import GreenImageGenerator
-from GRIME_AI.COCO_Utils import COCO_Utils
+from appcore.dialogs.triage.TriageOptionsDlg import TriageOptionsDlg
+from appcore.Color import Color
+from appcore.vegetation_indices import Vegetation_Indices, GreennessIndex
+from appcore.JSON_Editor import JsonEditor
+from appcore.ImageData import imageData
+from appcore.ProductTable import ProductTable
+from appcore.App_QLabel import DrawingMode
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.QProgressWheel import QProgressWheel
+from appcore.App_Utils import App_Utils
+from appcore.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
+from appcore.Save_Utils import Save_Utils
+from appcore.Resize_Controls import Resize_Controls
+from appcore.TimeStamp_Utils import TimeStamp_Utils
+from appcore.ImageTriage import ImageTriage
+from appcore.GreenImageGenerator import GreenImageGenerator
+from appcore.COCO_Utils import COCO_Utils
 
 # ----------------------------------------------------------------------------
 # PHENOCAM
 # ----------------------------------------------------------------------------
-from GRIME_AI.phenocam.PhenoCam import PhenoCam, dailyList
-from GRIME_AI.phenocam.Phenocam_API import Phenocam_API
+from appcore.phenocam.PhenoCam import PhenoCam, dailyList
+from appcore.phenocam.Phenocam_API import Phenocam_API
 
-from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
+from appcore.colorSegmentationParams import colorSegmentationParamsClass
 
 # ----------------------------------------------------------------------------
 # DIGITAL MAPPING PLATFORMS
 # ----------------------------------------------------------------------------
-from GRIME_AI.geomaps.google_maps_viewer import GoogleMapWidget
-from GRIME_AI.geomaps.openstreetmap_viewer import OpenStreetMapWidget
+from appcore.geomaps.google_maps_viewer import GoogleMapWidget
+from appcore.geomaps.openstreetmap_viewer import OpenStreetMapWidget
 
 # ----------------------------------------------------------------------------------------------------------------------
 # HYDRA (for SAM2)
@@ -217,17 +217,17 @@ from omegaconf import OmegaConf, DictConfig
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-from GRIME_AI.neon.NEON_API import NEON_API
-from GRIME_AI.dialogs.api_keys import APIKeyManager, APIKeyDialog
+from appcore.neon.NEON_API import NEON_API
+from appcore.dialogs.api_keys import APIKeyManager, APIKeyDialog
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-from GRIME_AI.constants import edgeMethodsClass, featureMethodsClass, modelSettingsClass
+from appcore.constants import edgeMethodsClass, featureMethodsClass, modelSettingsClass
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-from GRIME_AI.exifData import EXIFData
-from GRIME_AI.app_identity import APP_NAME, APP_DISPLAY_NAME, USER_ROOT, APP_LOGO_FILENAME, APP_REPO_URL
+from appcore.exifData import EXIFData
+from appcore.app_identity import APP_NAME, APP_DISPLAY_NAME, USER_ROOT, APP_LOGO_FILENAME, APP_REPO_URL
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -294,7 +294,7 @@ class PhenocamPreviewFetcher(QtCore.QThread):
         self.roi_name  = roi_name  # e.g. "NEON.D01.BART.DP1.00033_DB_1000"
     def run(self):
         import urllib.request, datetime as dt_mod
-        from GRIME_AI.phenocam.PhenoCam import PhenoCam
+        from appcore.phenocam.PhenoCam import PhenoCam
         today = dt_mod.date.today()
         t0, t1 = dt_mod.time(11, 0), dt_mod.time(13, 0)
         # Extract ROI type prefix for filename filtering (e.g. "DB" from "..._DB_1000")
@@ -349,7 +349,7 @@ class PhenocamDownloadWorker(QtCore.QThread):
 
     def run(self):
         import urllib.request, os, datetime as dt_mod
-        from GRIME_AI.phenocam.PhenoCam import PhenoCam
+        from appcore.phenocam.PhenoCam import PhenoCam
 
         # All PhenoCam filename timestamps are local time (both NEON via PhenoCam
         # and strictly PhenoCam sites), so the user's local start/end times are
@@ -419,7 +419,7 @@ class NEONPreviewFetcher(QtCore.QThread):
         self.domain_code = domain_code
         self.product_id = product_id
     def run(self):
-        from GRIME_AI.neon.NEON_API import NEON_API as _NEON_API
+        from appcore.neon.NEON_API import NEON_API as _NEON_API
         try:
             nErrorCode, pixmap, count = _NEON_API().DownloadLatestImage(
                 self.site_code, self.domain_code, self.product_id)
@@ -475,7 +475,7 @@ class USGSStartupFetcher(QtCore.QThread):
 
     def run(self):
         try:
-            from GRIME_AI.usgs.usgs_hivis import USGS_HIVIS
+            from appcore.usgs.usgs_hivis import USGS_HIVIS
             hivis    = USGS_HIVIS()
             cam_dict = hivis.get_camera_dictionary()
             cam_list = hivis.get_camera_list()
@@ -1126,14 +1126,14 @@ class MainWindow(QMainWindow):
             print(f"[WARN] Tab style not applied: {e}")
         # Let dialogs and panels switch their own colors.
         try:
-            from GRIME_AI.utils import theme
+            from appcore.utils import theme
             theme.set_dark(self._is_dark_mode)
         except Exception as e:
             print(f"[WARN] Theme change not broadcast: {e}")
 
     def _show_about_dialog(self):
         try:
-            from GRIME_AI.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
+            from appcore.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
         except ImportError:
             SW_VERSION = globals().get('SW_VERSION', '0.0.0.0')
             RELEASE    = 'N/A'
@@ -1449,7 +1449,7 @@ class MainWindow(QMainWindow):
 
         # POPULATE THE MAP WITH BLUE PINS FOR SD MESONET STATIONS
         try:
-            from GRIME_AI.geomaps.SDMESONET import SDMesonet
+            from appcore.geomaps.SDMESONET import SDMesonet
             sd_df = SDMesonet().get_dataframe()
             self.osm_widget.add_sdmesonet_pins(sd_df)
         except Exception as e:
@@ -1982,7 +1982,7 @@ class MainWindow(QMainWindow):
         ROI shapes become polygon segmentations; ROIs are applied across
         every image in the folder."""
         global dailyImagesList, imageFileFolder
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import export_roi_masks
+        from appcore.dialogs.color_segmentation.color_seg_roi_coco_export import export_roi_masks
         try:
             images_list = dailyImagesList.getVisibleList()
         except Exception:
@@ -2003,7 +2003,7 @@ class MainWindow(QMainWindow):
 
     def buildFeatureFile(self):
         global dailyImagesList
-        from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+        from appcore.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
         myFeatureExport = ColorSegFeatureExport()
         imagesList = dailyImagesList.getVisibleList()
 
@@ -2040,7 +2040,7 @@ class MainWindow(QMainWindow):
             if len(self.roiList) > 0:
                 # DIAGNOSTICS
                 #if self.checkBoxColorDiagnostics.checkState():
-                from GRIME_AI.Diagnostics import Diagnostics
+                from appcore.Diagnostics import Diagnostics
                 Diagnostics.RGB3DPlot(rgb)
                 Diagnostics.plotHSVChannelsGray(hsv)
                 Diagnostics.plotHSVChannelsColor(hsv)
@@ -2742,7 +2742,7 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     def importROIMasks(self):
         global currentImage, imageFileFolder
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
+        from appcore.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
 
         parent = self.colorSegmentationDlg if self.colorSegmentationDlg is not None else self
 
@@ -3166,7 +3166,7 @@ class MainWindow(QMainWindow):
         _splash.show()
         QApplication.processEvents()
 
-        from GRIME_AI.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
+        from appcore.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
         hyperparameterDlg = ML_ImageProcessingDlg(frame)
 
         _splash.finish(hyperparameterDlg)
@@ -3277,7 +3277,7 @@ class MainWindow(QMainWindow):
             imageFilename = dailyImagesList.getVisibleList()[currentImageIndex].fullPathAndFilename
 
             if self.compositeSliceDlg is None:
-                from GRIME_AI.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
+                from appcore.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
                 self.compositeSliceDlg = CompositeSliceDlg()
                 self.compositeSliceDlg.compositeSliceGenerateSignal.connect(self.generateCompositeSlices)
                 self.compositeSliceDlg.compositeSliceCancelSignal.connect(self.closeCompositeSlices)
@@ -3295,7 +3295,7 @@ class MainWindow(QMainWindow):
 
         slice_rect = self.compositeSliceDlg.label_Image.getSliceRectInOriginal()
 
-        from GRIME_AI.CompositeSlices import CompositeSlices
+        from appcore.CompositeSlices import CompositeSlices
         compositeSlices = CompositeSlices(slice_rect)
         compositeSlices.create_composite_image(dailyImagesList.visibleList, composite_slices_folder)
 
@@ -3373,7 +3373,7 @@ class MainWindow(QMainWindow):
 
 
     def menubarExtractCOCOMasks(self):
-        from GRIME_AI.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
+        from appcore.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
         self.COCOdlg = ExportCOCOMasksDlg(self)
 
         self.COCOdlg.COCO_signal_ok.connect(self.accepted_COCODlg)
@@ -3510,7 +3510,7 @@ class MainWindow(QMainWindow):
         (root, composite slices, videos/GIFs, USGS, NEON downloads) so you can
         switch study sites without editing folder paths by hand."""
         try:
-            from GRIME_AI.recipe_manager import RecipeManagerDialog
+            from appcore.recipe_manager import RecipeManagerDialog
             dlg = RecipeManagerDialog(self._get_recipe_store(), self, dark_mode=self._is_dark_mode)
             dlg.recipeActivated.connect(self.apply_recipe)
             dlg.recipeDeactivated.connect(self.clear_recipe)
@@ -3523,7 +3523,7 @@ class MainWindow(QMainWindow):
     def menubar_site_config_editor(self):
         """Open the standalone Site Config editor (Tools -> Site Config Editor)."""
         try:
-            from GRIME_AI.utils.site_config_manager import open_editor
+            from appcore.utils.site_config_manager import open_editor
             open_editor(parent=self)
         except Exception as e:
             print(f"[ERROR] Failed to open Site Config Editor: {e}")
@@ -3533,7 +3533,7 @@ class MainWindow(QMainWindow):
     def _get_recipe_store(self):
         """Return the single shared RecipeStore instance (created lazily), so
         the Recipe Manager and the image-folder write-back use the same store."""
-        from GRIME_AI.recipe_manager import RecipeStore
+        from appcore.recipe_manager import RecipeStore
         if not hasattr(self, "recipe_store") or self.recipe_store is None:
             self.recipe_store = RecipeStore()
         return self.recipe_store
@@ -3652,7 +3652,7 @@ class MainWindow(QMainWindow):
                 JsonEditor().update_json_entry("Model_Segmentation_Output_Folder", recipe.predictions)
                 try:
                     if hyperparameterDlg is not None:
-                        from GRIME_AI.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
+                        from appcore.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
                         seg_tab = hyperparameterDlg.findChild(SegmentImagesTab)
                         if seg_tab is not None:
                             seg_tab.set_output_folder(recipe.predictions)
@@ -3749,7 +3749,7 @@ class MainWindow(QMainWindow):
         # Create and show new dialog
         try:
             print("[DEBUG] Creating new Image Organizer dialog")
-            from GRIME_AI.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
+            from appcore.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
             self.imageOrganizerDlg = ImageOrganizerDlg(self)
             print("[DEBUG] Showing Image Organizer dialog")
             self.imageOrganizerDlg.show()
@@ -3765,7 +3765,7 @@ class MainWindow(QMainWindow):
     def toolbarButtonTemporalAveraging(self):
         """Launch the Temporal Averaging dialog."""
         if not hasattr(self, "_temporalAvgDlg") or self._temporalAvgDlg is None:
-            from GRIME_AI.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
+            from appcore.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
             self._temporalAvgDlg = TemporalAveragingDlg(self)
         self._temporalAvgDlg.show()
         self._temporalAvgDlg.raise_()
@@ -3790,7 +3790,7 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def toolbarButtonReleaseNotes(self):
         global frame
-        from GRIME_AI.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
+        from appcore.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
         releaseNotesDlg = ReleaseNotesDlg(frame)
 
         releaseNotesDlg.show()
@@ -3810,7 +3810,7 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def toolbarButtonEdgeDetection(self):
         global frame
-        from GRIME_AI.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
+        from appcore.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
         self.edgeDetectionDlg = EdgeDetectionDlg(frame)
 
         self.edgeDetectionDlg.edgeDetectionSignal.connect(self.edgeDetectionMethod)
@@ -3871,7 +3871,7 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def onMyToolBarFileFolder(self):
         global frame
-        from GRIME_AI.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
+        from appcore.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
         self.fileFolderDlg = FileUtilitiesDlg(frame)
 
         self.fileFolderDlg.create_composite_slice_signal.connect(self.menubarCompositeSlices)
@@ -3917,7 +3917,7 @@ class MainWindow(QMainWindow):
             global currentImageCount
 
             if gFrameCount > 0:
-                from GRIME_AI.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
+                from appcore.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
                 self.imageNavigationDlg = ImageNavigationDlg(frame)
                 self.imageNavigationDlg.imageIndexSignal.connect(self.getImageIndex)
 
@@ -3965,7 +3965,7 @@ class MainWindow(QMainWindow):
             if self.maskEditorDlg == None:
                 self.labelOriginalImage.setDrawingMode(DrawingMode.COLOR_SEGMENTATION)
 
-                from GRIME_AI.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
+                from appcore.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
                 self.colorSegmentationDlg = ColorSegmentationDlg()
 
                 self.colorSegmentationDlg.colorSegmentation_Signal.connect(self.colorSegmentation)
@@ -4096,7 +4096,7 @@ class MainWindow(QMainWindow):
             if self.colorSegmentationDlg == None:
                 self.labelOriginalImage.setDrawingMode(DrawingMode.MASK)
 
-                from GRIME_AI.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
+                from appcore.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
                 self.maskEditorDlg = MaskEditorDlg()
 
                 self.maskEditorDlg.addMask_Signal.connect(self.addMask)
@@ -4999,7 +4999,7 @@ def processImage(self, myImage):
     # the same elif chain gated on g_edgeMethodSettings.method, so they were only reachable
     # by accident of the dialog zeroing out the edge method first.
     # ------------------------------------------------------------------------------------
-    from GRIME_AI.ProcessImage import ProcessImage
+    from appcore.ProcessImage import ProcessImage
     myProcessImage = ProcessImage()
 
     edge_method    = g_edgeMethodSettings.method
@@ -5633,7 +5633,7 @@ def run_gui():
     global frame
 
     # If Hydra is already initialized, clear it
-    from GRIME_AI.Save_Utils import Save_Utils
+    from appcore.Save_Utils import Save_Utils
 
     settings_folder = Save_Utils().get_settings_folder()
     print(settings_folder)
@@ -6031,7 +6031,7 @@ def version_action(fn):
 
 def print_version(long: bool):
     try:
-        from GRIME_AI.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
+        from appcore.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
     except ImportError:
         SW_VERSION = globals().get('SW_VERSION', '0.0.0.0')
         RELEASE    = 'N/A'
@@ -6087,7 +6087,7 @@ def run_cli(args):
 
         from PyQt5.QtCore import QRect
         from PIL import Image
-        from GRIME_AI.CompositeSlices import CompositeSlices
+        from appcore.CompositeSlices import CompositeSlices
         first_image = Image.open(filenames[0].fullPathAndFilename)
         slice_rect = QRect(
             int(args.center - args.width / 2),
@@ -6107,11 +6107,11 @@ def run_cli(args):
         import cv2
         from PyQt5.QtCore import QRect, QPoint
 
-        from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
-        from GRIME_AI.vegetation_indices import Vegetation_Indices, GreennessIndex
-        from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
+        from appcore.colorSegmentationParams import colorSegmentationParamsClass
+        from appcore.vegetation_indices import Vegetation_Indices, GreennessIndex
+        from appcore.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+        from appcore.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
+        from appcore.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
 
         def _csv_option(value, valid, label):
             """Parse a comma-separated option, allowing 'all' and 'none'."""
@@ -6260,7 +6260,7 @@ def run_cli(args):
         generator.generate_annotations()
 
     elif args.command == 'segment':
-        from GRIME_AI.cli_segment import run_sam2, run_segformer
+        from appcore.cli_segment import run_sam2, run_segformer
 
         # Validate inputs
         if not os.path.isfile(args.model):
@@ -6358,7 +6358,7 @@ def run_cli(args):
         # so the CLI, the editor, and the Training tab all agree on the
         # 'id - name' format and on train_model.TRAINING_CATEGORIES.
         # ------------------------------------------------------------------
-        from GRIME_AI.utils.site_config_manager import (
+        from appcore.utils.site_config_manager import (
             collect_training_labels, get_training_categories,
             set_training_categories, parse_label,
         )
@@ -6418,7 +6418,7 @@ def run_cli(args):
             with initialize_config_dir(config_dir=cfg_dir, version_base="1.3"):
                 cfg = compose(config_name="sam2.1_hiera_l")
 
-        from GRIME_AI.ml_core.ml_model_training import MLModelTraining
+        from appcore.ml_core.ml_model_training import MLModelTraining
         dispatcher = MLModelTraining(cfg, parent_widget=None, site_config=site_config)
         dispatcher.Model_Training_Dispatcher(cfg=cfg, mode=args.mode)
 
@@ -6442,7 +6442,7 @@ def run_cli(args):
         from openpyxl import Workbook
         from openpyxl.styles import Font
 
-        from GRIME_AI.ROI_Analyzer import ROI_Analyzer
+        from appcore.ROI_Analyzer import ROI_Analyzer
 
         # ------------------------------------------------------------------
         # Validate folder
@@ -7005,7 +7005,7 @@ def train_main(cfg: DictConfig) -> None:
 
         # BEGIN TRAINING THE MODEL
         print("Instantiate MLModelTraining class...")
-        from GRIME_AI.ml_core.ml_model_training import MLModelTraining
+        from appcore.ml_core.ml_model_training import MLModelTraining
         myML_Dispatcher = MLModelTraining(cfg, parent_widget=hyperparameterDlg)
 
         print("Execute ML training...")
@@ -7051,7 +7051,7 @@ def segment_main(cfg: DictConfig) -> None:
         except Exception:
             pass
 
-        from GRIME_AI.ml_core.ml_image_segmentation import MLImageSegmentation
+        from appcore.ml_core.ml_image_segmentation import MLImageSegmentation
         mySegmentation = MLImageSegmentation(cfg, parent_widget=hyperparameterDlg)
         mySegmentation.ML_Segmentation_Dispatcher(copy_original_image, save_masks, selected_label_categories,
                                                     mode=selected_segment_model,

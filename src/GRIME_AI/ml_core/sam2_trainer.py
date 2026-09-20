@@ -43,16 +43,16 @@ from sam2.modeling import sam2_base
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.QProgressWheel import QProgressWheel
+from appcore.Save_Utils import Save_Utils
+from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
-from GRIME_AI.utils.datasetutils import DatasetUtils
-from GRIME_AI.ml_core.ml_helpers import (build_centroid_point_prompts, sample_pooled_prompts,
+from appcore.utils.datasetutils import DatasetUtils
+from appcore.ml_core.ml_helpers import (build_centroid_point_prompts, sample_pooled_prompts,
                                          DEFAULT_MAX_POSITIVES as _DEFAULT_MAX_POSITIVES,
                                          DEFAULT_NEGATIVE_BALANCE as _DEFAULT_NEGATIVE_BALANCE)
 
@@ -381,7 +381,7 @@ class SAM2Trainer:
         season_type = self.site_config.get("season_type", "Meteorological")
 
         if holdout_seasons:
-            from GRIME_AI.ml_core.seasonal_dropout import (
+            from appcore.ml_core.seasonal_dropout import (
                 filter_seasons, extract_date_from_usgs_filename, get_season_date_range, get_season
             )
 
@@ -523,7 +523,8 @@ class SAM2Trainer:
 
         # Re‑initialize Hydra
         #with initialize(config_path=config_dir, version_base=None):
-        with initialize(config_module="GRIME_AI.sam2.sam2.configs.sam2.1", version_base=None):
+        #with initialize(config_module="GRIME_AI.sam2.sam2.configs.sam2.1", version_base=None):
+        with initialize(config_module=f"{__package__.split('.')[0]}.sam2.sam2.configs.sam2.1", version_base=None):
             cfg_intern = compose(config_name="sam2.1_hiera_l.yaml")
             raw_model_cfg = OmegaConf.to_container(cfg_intern.model, resolve=True)
 

@@ -2,8 +2,8 @@ from PyQt5 import Qt, QtCore
 from PyQt5.QtCore import QRect, QPoint, Qt
 from PyQt5.QtGui import QPen, QBrush, QPainter, QPainterPath, QPolygon, QPolygonF
 from PyQt5.QtWidgets import QLabel, QToolTip
-from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import ROIShape
-from GRIME_AI.QLabel_drawing_modes import DrawingMode
+from appcore.dialogs.color_segmentation.color_seg_roi_data import ROIShape
+from appcore.QLabel_drawing_modes import DrawingMode
 
 
 # ======================================================================================================================

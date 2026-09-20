@@ -17,14 +17,14 @@ import matplotlib.pyplot as plt
 from openpyxl import load_workbook
 from openpyxl.drawing.image import Image as ExcelImage
 
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.App_Utils import App_Utils
-from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
-from GRIME_AI.Color import Color
-from GRIME_AI.vegetation_indices import Vegetation_Indices
-from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, roi_patch_and_mask
+from appcore.QProgressWheel import QProgressWheel
+from appcore.App_Utils import App_Utils
+from appcore.TimeStamp_Utils import TimeStamp_Utils
+from appcore.Color import Color
+from appcore.vegetation_indices import Vegetation_Indices
+from appcore.dialogs.color_segmentation.color_seg_roi_data import roiData, roi_patch_and_mask
 
-from GRIME_AI.Texture import GLCMTexture, LBPTexture, GaborTexture, WaveletTexture, FourierTexture
+from appcore.Texture import GLCMTexture, LBPTexture, GaborTexture, WaveletTexture, FourierTexture
 
 # ======================================================================================================================
 # Plain-data ROI description. Qt objects stay in the main process; workers get
@@ -111,7 +111,7 @@ def _erode(mask, kh, kw):
 
 def _masked_glcm_contrast(g, m):
     import numpy as _np
-    from GRIME_AI.Texture import GLCMTexture
+    from appcore.Texture import GLCMTexture
     t = GLCMTexture()
     H, W = g.shape
     vals = []
@@ -138,7 +138,7 @@ def _masked_gabor_rms(g, m):
     for each frequency/orientation; returns the mean of those RMS values."""
     import numpy as _np
     from skimage.filters import gabor, gabor_kernel
-    from GRIME_AI.Texture import GaborTexture
+    from appcore.Texture import GaborTexture
     t = GaborTexture()
     gf = g.astype(_np.float64)   # integer input would make skimage return a truncated integer response
     rms = []
@@ -156,7 +156,7 @@ def _masked_gabor_rms(g, m):
 def _masked_lbp_entropy(g, m):
     import numpy as _np
     from skimage.feature import local_binary_pattern
-    from GRIME_AI.Texture import LBPTexture
+    from appcore.Texture import LBPTexture
     t = LBPTexture()
     lbp = local_binary_pattern(g, t.P, t.R, method=t.method)
     k = 2 * int(_np.ceil(t.R)) + 1
@@ -181,7 +181,7 @@ def _block_all(m, block):
 def _masked_wavelet_detail_var(g, m):
     import numpy as _np
     import pywt
-    from GRIME_AI.Texture import WaveletTexture
+    from appcore.Texture import WaveletTexture
     t = WaveletTexture()
     if pywt.Wavelet(t.wavelet).dec_len != 2:
         print(f'[texture] masked wavelet supports Haar-length wavelets only (got {t.wavelet}).')
@@ -228,7 +228,7 @@ def _largest_inside_rect(m):
 
 def _masked_fourier_mean(g, m):
     import numpy as _np
-    from GRIME_AI.Texture import FourierTexture
+    from appcore.Texture import FourierTexture
     r0, r1, c0, c1 = _largest_inside_rect(m)
     if (r1 - r0) < _MIN_FOURIER_SIDE or (c1 - c0) < _MIN_FOURIER_SIDE:
         return None
@@ -347,7 +347,7 @@ def _region_values(helper, color, rgb, gray, gray_tex, mask, nClusters, flags, g
     rgb/gray: the region's pixels (whole image, or an (N, 1, C) strip of inside pixels).
     gray_tex/mask: 2-D grayscale for texture and its inside-mask (None = whole patch)."""
     import cv2 as _cv2
-    from GRIME_AI.vegetation_indices import Vegetation_Indices
+    from appcore.vegetation_indices import Vegetation_Indices
     vals = {}
     if flags.get('Intensity'):
         # The range for a pixel's value in grayscale is (0-255), 127 lies midway
@@ -384,7 +384,7 @@ def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, te
                        mask_spec=None):
     """Returns (csv_row, record). record = {'path', 'date', 'time', 'cells': [(group, sheet, column, value)]}."""
     import cv2 as _cv2
-    from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
+    from appcore.TimeStamp_Utils import TimeStamp_Utils
 
     link = helper.create_hyperlink(path)
     ts = TimeStamp_Utils(); ts.detectDateTime(path)
@@ -441,8 +441,8 @@ def _build_feature_row(helper, color, path, nClusters, flags, greenness_list, te
 def _compute_image_row(args):
     (index, path, nClusters, flags, greenness_list, texture_options, roi_specs, mask_spec) = args
     import os as _os
-    from GRIME_AI.Color import Color
-    from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+    from appcore.Color import Color
+    from appcore.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
     if not _os.path.isfile(path):
         return (index, None, None)
     try:

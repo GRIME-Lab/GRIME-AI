@@ -14,7 +14,7 @@ columns, and provides the Guided accordion.
 
 Install with:
 
-    from GRIME_AI.dialogs.ML_image_processing.training_params_panel import install_guided_panel
+    from appcore.dialogs.ML_image_processing.training_params_panel import install_guided_panel
     install_guided_panel(self)   # self = TrainingTab, at the end of __init__
 
 Model-specific controls (backbone, loss function, LoRA, blob filter, YOLO
@@ -23,7 +23,7 @@ weights) intentionally stay Advanced-only to keep the guided path simple.
 
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import Qt
-from GRIME_AI.utils import theme
+from appcore.utils import theme
 from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QLabel, QLineEdit,
     QScrollArea, QSizePolicy, QSpinBox, QToolButton, QVBoxLayout, QWidget,

@@ -7,7 +7,7 @@
 # Created: Mar 6, 2022
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
-from GRIME_AI.ml_core.ML_Dependencies import *  # JES - Boy, do I have issues with this. :(
+from appcore.ml_core.ML_Dependencies import *  # JES - Boy, do I have issues with this. :(
 
 from torchvision.transforms import InterpolationMode
 _ = InterpolationMode.BILINEAR  # Ensures inclusion during PyInstaller freeze
@@ -17,11 +17,11 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 from datetime import datetime
 
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.ml_core.segformer_trainer import SegFormerConfig, SegFormerTrainer
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
-from GRIME_AI.ml_core.lora_wrapper import GeneralLoRAWrapper
+from appcore.Save_Utils import Save_Utils
+from appcore.JSON_Editor import JsonEditor
+from appcore.ml_core.segformer_trainer import SegFormerConfig, SegFormerTrainer
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.ml_core.lora_wrapper import GeneralLoRAWrapper
 
 # ----------------------------------------------------------------------------------------------------------------------
 # WARNING AND ERROR LOGGING
@@ -121,7 +121,7 @@ class MLModelTraining:
         path if it exists so training loads from disk (no HF download/auth);
         None otherwise, letting the trainer fall back to HuggingFace."""
         try:
-            from GRIME_AI import PROJECT_ROOT
+            from appcore import PROJECT_ROOT
             p = os.path.join(str(PROJECT_ROOT), "sam3.pt")
             return p if os.path.exists(p) else None
         except Exception:
@@ -158,7 +158,7 @@ class MLModelTraining:
         #      SAM2   ---   SAM2   ---   SAM2   ---   SAM2   ---   SAM2
         # --------------------------------------------------------------------
         if mode.lower() == "sam2":
-            from GRIME_AI.ml_core.sam2_trainer import SAM2Trainer
+            from appcore.ml_core.sam2_trainer import SAM2Trainer
             # Pass self.site_config (loaded at dispatch time from the user's
             # Train-click write) directly into the trainer. This eliminates
             # any race window where another code path could rewrite
@@ -187,7 +187,7 @@ class MLModelTraining:
             # SAM3 LoRA fine-tuning via the Sompote/SAM3_LoRA trainer, driven as a
             # subprocess (SAM3LoRATrainer). Uses the same COCO training data and
             # LoRA/hyperparameter fields the tab already collects.
-            from GRIME_AI.ml_core.sam3_lora_trainer import SAM3LoRATrainer
+            from appcore.ml_core.sam3_lora_trainer import SAM3LoRATrainer
 
             # Resolve the COCO data root. SAM3_LoRA expects
             # <data_dir>/train/_annotations.coco.json (and optional valid/). GRIME
@@ -343,7 +343,7 @@ class MLModelTraining:
                 )
                 return
 
-            from GRIME_AI.ml_core.yolo_trainer import YOLOTrainer
+            from appcore.ml_core.yolo_trainer import YOLOTrainer
             myYOLO_pipeline = YOLOTrainer(self.cfg, parent_widget=self.parent_widget)
             myYOLO_pipeline.run_training_pipeline()
             return

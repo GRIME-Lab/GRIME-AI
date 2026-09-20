@@ -9,19 +9,19 @@ import json
 from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtWidgets import QFileDialog, QListWidgetItem, QAbstractItemView, QSizePolicy, QListWidget, QMessageBox, QTreeWidget, QTreeWidgetItem
 
-from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_DARK_RED, BUTTON_CSS_YELLOW, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
+from appcore import PROJECT_ROOT
+from appcore.CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_DARK_RED, BUTTON_CSS_YELLOW, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
 from PyQt5.QtGui import QPalette, QColor, QIcon
 
 try:
-    from GRIME_AI.dialogs.ML_image_processing.chain_link_resources import get_icon as _get_chain_icon
+    from appcore.dialogs.ML_image_processing.chain_link_resources import get_icon as _get_chain_icon
 except Exception:
     _get_chain_icon = None
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.utils import theme
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.Save_Utils import Save_Utils
+from appcore.JSON_Editor import JsonEditor
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.utils import theme
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from ...app_identity import APP_DISPLAY_NAME
 
 # Optional: if there is a training entry point, import it. Replace with the actual path/class.
@@ -549,7 +549,7 @@ QPushButton:hover { background: rgba(128,128,128,0.15); }
         # The active recipe (if any) is authoritative for the training-images
         # root, overriding the site-config value loaded above.
         try:
-            from GRIME_AI.recipe_manager import RecipeStore
+            from appcore.recipe_manager import RecipeStore
             _active = RecipeStore().get_active()
             if _active is not None and getattr(_active, "ml_images", ""):
                 self.lineEdit_model_training_images_path.setText(_active.ml_images)

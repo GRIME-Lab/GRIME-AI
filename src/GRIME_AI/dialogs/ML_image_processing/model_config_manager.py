@@ -127,7 +127,7 @@ class ModelConfigManager:
         # CONFIG FILES IS READ, THE ASSUMPTION IS THAT THE CONFIG FILE IS OF OLDER
         # VINTAGE AND MAY NOT BE COMPATIBLE WITH THE LATEST SOFTWARE.
         try:
-            from GRIME_AI.version import SW_VERSION
+            from appcore.version import SW_VERSION
         except ImportError:
             # FALLBACK IF VERSION.PY DOES NOT EXIST. 0.0.0.0 IS AN INVALID VERSION NUMBER
             SW_VERSION = ""

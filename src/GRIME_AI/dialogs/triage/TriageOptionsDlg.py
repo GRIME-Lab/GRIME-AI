@@ -15,7 +15,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QIntValidator, QDoubleValidator
 from PyQt5.uic import loadUi
 
-from GRIME_AI.dialogs.triage.TriageCalibrateDlg import TriageCalibrateDlg
+from appcore.dialogs.triage.TriageCalibrateDlg import TriageCalibrateDlg
 from ...app_identity import APP_CONFIG_FILENAME
 
 BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;}'
@@ -208,7 +208,7 @@ class TriageOptionsDlg(QDialog):
         if not checked:
             return
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             config_path = os.path.join(
                 Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
             if not os.path.exists(config_path):
@@ -255,7 +255,7 @@ class TriageOptionsDlg(QDialog):
             print(f"[TriageOptionsDlg] Could not save color imbalance settings: {e}")
 
     def _get_settings_folder(self):
-        from GRIME_AI.Save_Utils import Save_Utils
+        from appcore.Save_Utils import Save_Utils
         return Save_Utils().get_settings_folder()
 
     def _update_focus_roi_checkbox(self):
@@ -270,7 +270,7 @@ class TriageOptionsDlg(QDialog):
     def _read_focus_roi_from_config(self):
         """Return the saved focus_roi list from GRIME-AI.json or None."""
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             config_path = os.path.join(
                 Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
             if not os.path.exists(config_path):
@@ -284,7 +284,7 @@ class TriageOptionsDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def _load_calibration_from_config(self):
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             settings_folder = Save_Utils().get_settings_folder()
             config_path     = os.path.join(settings_folder, APP_CONFIG_FILENAME)
             if not os.path.exists(config_path):
@@ -375,7 +375,7 @@ class TriageOptionsDlg(QDialog):
         roi = self._read_focus_roi_from_config()
         # Persist the checked state
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             config_path = os.path.join(
                 Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
             if os.path.exists(config_path):

@@ -37,7 +37,7 @@ import copy
 import json
 import os
 import sys
-from GRIME_AI.app_identity import APP_DISPLAY_NAME
+from appcore.app_identity import APP_DISPLAY_NAME
 
 
 # ============================================================================
@@ -244,7 +244,7 @@ def _dest(flag):
 def _default_config_path():
     """Resolve the settings-folder site_config.json. Imported lazily so the
     module stays light unless the default path is actually needed."""
-    from GRIME_AI.Save_Utils import Save_Utils
+    from appcore.Save_Utils import Save_Utils
     settings_folder = Save_Utils().get_settings_folder()
     return os.path.normpath(os.path.join(settings_folder, "site_config.json"))
 
@@ -1077,7 +1077,7 @@ def _get_editor_class():
     # matches the Training tab; falls back to equivalents when the module is run
     # standalone with the GRIME_AI package off the path.
     try:
-        from GRIME_AI.CSS_Styles import (
+        from appcore.CSS_Styles import (
             BUTTON_CSS_STEEL_BLUE as _BTN_CSS,
             BUTTON_CSS_RED_OUTLINE as _BTN_CSS_RED_OUTLINE,
         )
@@ -1093,7 +1093,7 @@ def _get_editor_class():
 
     # Light/dark theme (optional when run standalone).
     try:
-        from GRIME_AI.utils import theme as _theme
+        from appcore.utils import theme as _theme
     except Exception:
         _theme = None
 

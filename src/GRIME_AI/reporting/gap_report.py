@@ -32,7 +32,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone, date
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
-from GRIME_AI.app_identity import APP_DISPLAY_NAME
+from appcore.app_identity import APP_DISPLAY_NAME
 
 try:
     from zoneinfo import ZoneInfo

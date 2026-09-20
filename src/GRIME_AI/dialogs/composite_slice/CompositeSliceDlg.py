@@ -10,7 +10,7 @@
 import cv2
 import numpy as np
 
-from GRIME_AI.utils.resource_utils import ui_path
+from appcore.utils.resource_utils import ui_path
 
 from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QMessageBox
 from PyQt5 import QtWidgets

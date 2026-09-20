@@ -21,11 +21,11 @@ from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import QWidget, QFileDialog, QMessageBox, QSizePolicy, QTableWidget, QToolButton, QSplitter, QSplitterHandle, QVBoxLayout
 from PyQt5.uic import loadUi
 
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
-from GRIME_AI.utils.resource_utils import ui_path
-from GRIME_AI.CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
+from appcore.Save_Utils import Save_Utils
+from appcore.JSON_Editor import JsonEditor
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.utils.resource_utils import ui_path
+from appcore.CSS_Styles import BUTTON_CSS_STEEL_BLUE, BUTTON_CSS_RED_OUTLINE, BUTTON_CSS_YELLOW_OUTLINE
 from PyQt5.QtGui import QPalette, QColor, QFont
 from PyQt5.QtCore import Qt
 from ...app_identity import APP_DISPLAY_NAME
@@ -584,7 +584,7 @@ QLineEdit:focus {
         # ── Dark mode support ─────────────────────────────────────────────────
         self._apply_dark_mode_if_active()
         try:
-            from GRIME_AI.utils import theme as _theme
+            from appcore.utils import theme as _theme
             _theme.on_change(self._apply_dark_mode_if_active, owner=self)
         except Exception:
             pass
@@ -662,7 +662,7 @@ QLineEdit:focus {
             window_color = app_palette.color(QPalette.Window)
             try:
                 # qdarkstyle does not change the palette; the theme module knows.
-                from GRIME_AI.utils import theme as _theme
+                from appcore.utils import theme as _theme
                 is_dark = _theme.is_dark()
             except Exception:
                 is_dark = window_color.lightness() < 128
