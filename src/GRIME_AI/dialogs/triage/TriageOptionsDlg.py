@@ -268,7 +268,7 @@ class TriageOptionsDlg(QDialog):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _read_focus_roi_from_config(self):
-        """Return the saved focus_roi list from GRIME-AI.json or None."""
+        """Return the saved focus_roi list from <application>.json or None."""
         try:
             from appcore.Save_Utils import Save_Utils
             config_path = os.path.join(

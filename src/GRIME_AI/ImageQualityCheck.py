@@ -13,7 +13,7 @@ import numpy as np
 
 class ImageQualityAnalyzer:
     """
-    Centralised image quality analysis for GRIME AI triage and related workflows.
+    Centralised image quality analysis for triage and related workflows.
 
     All blur, brightness, contrast, and exposure metrics are computed here so that
     ImageTriage and any other callers do not contain duplicated algorithm code.

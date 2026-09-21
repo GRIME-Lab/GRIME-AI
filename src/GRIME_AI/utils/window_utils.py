@@ -7,11 +7,11 @@
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
 """
-Window placement helpers for GRIME AI.
+Window placement helpers for application.
 
 PROBLEM THIS SOLVES
 -------------------
-On Linux/X11 (notably HCC Open OnDemand and VNC desktops), the GRIME AI main
+On Linux/X11 (notably HCC Open OnDemand and VNC desktops), the application main
 window came up with its title bar tucked underneath the desktop panel/menu bar.
 The user's only recourse was right-click -> Move -> drag the window down.
 
@@ -48,11 +48,10 @@ All decisions are logged to the console so a bug report is readable without
 asking the user to run diagnostic commands.
 """
 
-import logging
-
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 
+import logging
 log = logging.getLogger(f"{__package__.split('.')[0]}.window")
 
 # Used ONLY when the window manager fails to publish _NET_WORKAREA. Minimal
@@ -139,7 +138,7 @@ def fix_window_placement(win, margin=DEFAULT_MARGIN, center=True):
     Parameters
     ----------
     win : QWidget
-        The window to place (normally the GRIME AI main window).
+        The window to place (normally the application main window).
     margin : int
         Gap to leave between the window frame and the work-area edges.
     center : bool

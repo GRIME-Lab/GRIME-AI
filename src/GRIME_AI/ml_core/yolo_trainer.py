@@ -9,11 +9,11 @@
 """
 yolo_trainer.py
 
-YOLOv11-seg trainer for GRIME AI.  Mirrors the SAM2Trainer / SegFormerTrainer
+YOLOv11-seg trainer.  Mirrors the SAM2Trainer / SegFormerTrainer
 class structure exactly:
   - Reads site_config.json for all hyperparameters (including val_split)
   - Converts COCO JSON annotations → YOLO flat-file format internally
-  - Writes all outputs (weights, YOLO run artefacts, GRIME AI graphs, PDF
+  - Writes all outputs (weights, YOLO run artefacts, graphs, PDF
     report) to  <models_root>/yolo/<timestamp>_<site>/
   - Generates the same 9 ModelTrainingVisualization plots + PDF diagnostic
     report as SAM2 and SegFormer
@@ -361,7 +361,7 @@ class YOLOTrainWorker(QThread):
 
 class YOLOTrainer:
     """
-    Fine-tunes YOLOv11-seg on GRIME AI COCO-annotated data.
+    Fine-tunes YOLOv11-seg on COCO-annotated data.
 
     Mirrors SAM2Trainer / SegFormerTrainer:
       - Reads all hyperparameters from site_config.json
@@ -652,7 +652,7 @@ class YOLOTrainer:
         run_dir = Path(self.model_output_folder) / run_name
         results_csv = run_dir / "results.csv"
 
-        # ── Parse YOLO results.csv into GRIME AI metric lists ─────────────────
+        # ── Parse YOLO results.csv into metric lists ─────────────────
         if results_csv.exists():
             self._parse_results_csv(results_csv)
         else:
@@ -668,7 +668,7 @@ class YOLOTrainer:
                 run_dir=str(run_dir),
             )
 
-        # ── Save GRIME AI .torch checkpoint embedding metadata ────────────────
+        # ── Save .torch checkpoint embedding metadata ────────────────
         if best_weights.exists():
             self._save_app_checkpoint(best_weights, lr)
 
@@ -679,9 +679,9 @@ class YOLOTrainer:
     # ─────────────────────────────────────────────────────────────────────────
     def _save_app_checkpoint(self, best_pt_path: Path, lr: float):
         """
-        Save a GRIME AI .torch file alongside best.pt.
+        Save a .torch file alongside best.pt.
 
-        The .torch file contains only GRIME AI metadata — categories, site info,
+        The .torch file contains only metadata — categories, site info,
         training stats, and the path to best.pt. The inference engine loads
         best.pt directly via YOLO() since it is the complete fine-tuned model.
         """
@@ -708,7 +708,7 @@ class YOLOTrainer:
             timestamp = _dt.utcnow().strftime("%Y%m%d_%H%M%S")
 
             ckpt = {
-                # ── GRIME AI metadata ─────────────────────────────────────────
+                # ── model metadata ─────────────────────────────────────────
                 "base_model":       "yolo",
                 "best_pt_path":     str(best_pt_path),   # inference loads this directly
                 "categories":       self.categories,
@@ -965,7 +965,7 @@ class YOLOTrainer:
     # ─────────────────────────────────────────────────────────────────────────
     def _plot_training_graphs(self, lr: float):
         """
-        Generate all 9 GRIME AI training graphs + PDF report.
+        Generate all 9 training graphs + PDF report.
         Mirrors SegFormerTrainer._plot_training_graphs exactly.
         """
         if not self.epoch_list:

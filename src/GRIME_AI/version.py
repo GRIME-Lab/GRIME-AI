@@ -1,4 +1,4 @@
-SW_VERSION = "2.1.7.4"
+SW_VERSION = "2.1.7.5"
 RELEASE = "nightly"
 SHA = "9e9a8bc1a19fd9f9f8b1b3eb35976a8e620aa8cb"
 BUILD_DATE = "2026-09-20"

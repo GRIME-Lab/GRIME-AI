@@ -1,4 +1,4 @@
-"""GRIME AI — API Key management dialog and persistence utilities."""
+"""API Key management dialog and persistence utilities."""
 
 from .api_key_manager  import APIKeyManager
 

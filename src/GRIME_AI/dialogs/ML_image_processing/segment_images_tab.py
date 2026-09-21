@@ -325,7 +325,7 @@ class SegmentImagesTab(QWidget):
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        # _____ GRIME AI ML parameters _______________________________________
+        # _____ ML parameters _______________________________________
         site_config["save_model_masks"] = self.checkBox_save_predicted_masks.isChecked()
         site_config["copy_original_model_image"] = self.checkBox_copyOriginalModelImage.isChecked()
         site_config["save_probability_maps"] = self.checkBox_save_probability_maps.isChecked()

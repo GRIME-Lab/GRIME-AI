@@ -186,7 +186,7 @@ class AnnotationAnalyzerTab(QtWidgets.QWidget):
         """
         Generate an XLSX file with dataset folder names in the first column,
         followed by id, label pairs for each category.
-        Output goes into analysis_outputs folder inside the user's GRIME AI folder.
+        Output goes into analysis_outputs folder inside the user's application folder.
         """
         # Get user's GRIME AI folder
         user_root_folder = Save_Utils().get_user_root_folder()

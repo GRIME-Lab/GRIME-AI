@@ -7,7 +7,11 @@
 # Created: Apr 2, 2026
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
-"""\ncli_segment.py\n-------------------\nCommand-line interface for segmentation using a trained GRIME AI model.\nAccepts a single image (--image) or a folder of images (--folder). Use one, not both.
+"""
+cli_segment.py
+-------------------
+Command-line interface for segmentation using a trained model.
+Accepts a single image (--image) or a folder of images (--folder). Use one, not both.
 
 Supports SAM2 and SegFormer-LoRA models.
 
@@ -75,6 +79,8 @@ def parse_args():
                         help="(Deprecated, ignored) SegFormer uses argmax over classes.")
     parser.add_argument("--no-mask",       action="store_true",
                         help="Skip saving binary mask PNG")
+    parser.add_argument("--use-tta",       action="store_true",
+                        help="Enable test-time augmentation (SegFormer only): horizontal-flip average.")
     parser.add_argument("--no-copy",       action="store_true",
                         help="Skip copying original image to output folder")
 
@@ -122,6 +128,41 @@ def validate_inputs(args):
     os.makedirs(args.output, exist_ok=True)
 
 
+def validate_sam2_category(engine, category_id):
+    """
+    Confirm the requested category exists in the checkpoint and carries centroid
+    data, before any image is processed.
+
+    Mirrors the check in SAM2InferenceEngine.run_sam2_inference(), which the CLI
+    never reaches because it drives predict_with_centroids() directly. That check
+    raises Qt dialogs; this one writes to stderr and exits, so it is safe with no
+    display attached.
+    """
+    centroids = getattr(engine, "category_centroids", {}) or {}
+    trained_on = getattr(engine, "target_category_name", None)
+
+    try:
+        requested_id = int(category_id)
+    except (TypeError, ValueError):
+        print(f"[ERROR] --category-id must be an integer, got: {category_id!r}",
+              file=sys.stderr)
+        sys.exit(1)
+
+    if requested_id not in centroids:
+        print(f"[ERROR] Category ID {requested_id} is not present in the checkpoint.",
+              file=sys.stderr)
+        if trained_on:
+            print(f"[ERROR] This model was trained on: '{trained_on}'", file=sys.stderr)
+        print(f"[ERROR] Category IDs available in this checkpoint: "
+              f"{sorted(centroids.keys())}", file=sys.stderr)
+        sys.exit(1)
+
+    if not centroids.get(requested_id):
+        print(f"[ERROR] Category ID {requested_id} exists in the checkpoint but has "
+              f"no centroid data; the model was not trained on it.", file=sys.stderr)
+        sys.exit(1)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SAM2 segmentation
 # ──────────────────────────────────────────────────────────────────────────────
@@ -151,8 +192,16 @@ def run_sam2(args, device, category, progressBar, image_list=None):
         print("[ERROR] Failed to load SAM2 model.", file=sys.stderr)
         sys.exit(1)
 
+    # category_centroids is populated by load_sam2_model(), so this must come
+    # after the load above and before any image is processed.
+    validate_sam2_category(engine, args.category_id)
+
     save_masks = not args.no_mask
     copy_original = not args.no_copy
+    # Fallbacks match save_outputs()' own defaults, so callers that do not set
+    # these attributes behave exactly as before.
+    save_prob = getattr(args, "save_probability_maps", True)
+    save_panels = getattr(args, "save_diagnostic_panels", False)
     n = len(image_list)
 
     for i, image_path in enumerate(image_list, 1):
@@ -193,6 +242,8 @@ def run_sam2(args, device, category, progressBar, image_list=None):
             copy_original_image=copy_original,
             category_id=args.category_id,
             category_name=args.category_name,
+            save_probability_maps=save_prob,
+            save_diagnostic_panels=save_panels,
         )
 
     print(f"[SAM2] Outputs saved to: {args.output}")
@@ -218,6 +269,7 @@ def run_segformer(args, device, category, progressBar, image_list=None):
         input_dir=input_dir,
         output_dir=args.output,
         class_index=args.category_id,
+        use_tta=getattr(args, "use_tta", False),
     )
 
     normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
@@ -226,6 +278,7 @@ def run_segformer(args, device, category, progressBar, image_list=None):
     os.makedirs(args.output, exist_ok=True)
     save_masks = not args.no_mask
     copy_original = not args.no_copy
+    save_prob = getattr(args, "save_probability_maps", True)
     n = len(image_list)
 
     for i, image_path in enumerate(image_list, 1):
@@ -237,9 +290,9 @@ def run_segformer(args, device, category, progressBar, image_list=None):
         x = normalize(x).unsqueeze(0).to(device)
 
         with torch.no_grad():
-            logits = engine.model(pixel_values=x).logits
-
-        probs = torch.softmax(logits, dim=1)
+            # Route through the engine's TTA-aware path so CLI matches GUI
+            # (single forward pass when use_tta is off; flip-average when on).
+            probs = engine.predict_probs(x)
         target_prob = probs[0, args.category_id]
         # argmax decision rule -- identical to segformer_trainer and the engine
         mask = (torch.argmax(probs, dim=1)[0] == args.category_id).cpu().numpy().astype(np.uint8)
@@ -255,7 +308,8 @@ def run_segformer(args, device, category, progressBar, image_list=None):
         base = os.path.splitext(os.path.basename(image_path))[0]
 
         prob_vis = (prob_map * 255).astype(np.uint8)
-        cv2.imwrite(os.path.join(args.output, f"{base}_prob.png"), prob_vis)
+        if save_prob:
+            cv2.imwrite(os.path.join(args.output, f"{base}_prob.png"), prob_vis)
 
         if save_masks:
             mask_clean = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))

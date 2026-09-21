@@ -114,7 +114,8 @@ class MLImageSegmentation:
     #
     # ------------------------------------------------------------------------------------------------------------------
     def ML_Segmentation_Dispatcher(self, copy_original_image, save_masks, selected_label_categories, mode="segformer",
-                                    save_probability_maps=True, save_diagnostic_panels=False):
+                                    save_probability_maps=True, save_diagnostic_panels=False,
+                                    use_tta=False):
         if self.missing_items:
             return
 
@@ -221,10 +222,13 @@ class MLImageSegmentation:
                     self.SEGFORMER_MODEL,
                     input_dir,
                     output_dir,
-                    class_index=1   # sandbar = class 1 in the binary (bg + target) model
+                    class_index=1,   # sandbar = class 1 in the binary (bg + target) model
+                    use_tta=use_tta,
                 )
                 result = engine.run_segformer_inference(
-                    copy_original_image, save_masks, selected_label_categories, progressBar
+                    copy_original_image, save_masks, selected_label_categories, progressBar,
+                    save_probability_maps=save_probability_maps,
+                    save_diagnostic_panels=save_diagnostic_panels,
                 )
 
             elif mode.lower() == "yolo":
