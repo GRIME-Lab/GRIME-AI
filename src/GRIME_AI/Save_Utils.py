@@ -106,7 +106,7 @@ class Save_Utils:
         # 3. Build the complete compositeSlices path
         #JES target = Path(artifacts_base) / last_folder / "CompositeSlices"
         # Prefer the active recipe's Composite Slices folder; otherwise fall
-        # back to the default under Documents/GRIME-AI (not the images folder).
+        # back to the default under Documents/<application> (not the images folder).
         target = self._recipe_override("Composite_Slices_Folder") \
             or os.path.join(self.get_user_root_folder(), "composite_slices")
 
@@ -139,7 +139,7 @@ class Save_Utils:
         # 3. Build the complete compositeSlices path
         #JES target = Path(artifacts_base) / last_folder / "Videos"
         # Prefer the active recipe's Videos folder; otherwise fall back to the
-        # default under Documents/GRIME-AI (not the images folder).
+        # default under Documents/<application> (not the images folder).
         target = self._recipe_override("Videos_Folder") \
             or os.path.join(self.get_user_root_folder(), "videos")
 
@@ -173,7 +173,7 @@ class Save_Utils:
         # 3. Build the complete compositeSlices path
         #JES target = Path(artifacts_base) / last_folder / "gif"
         # Prefer the active recipe's GIFs folder; otherwise fall back to the
-        # default under Documents/GRIME-AI (not the images folder).
+        # default under Documents/<application> (not the images folder).
         target = self._recipe_override("GIFs_Folder") \
             or os.path.join(self.get_user_root_folder(), "gifs")
 

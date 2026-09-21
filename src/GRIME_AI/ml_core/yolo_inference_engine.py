@@ -37,7 +37,7 @@ from ..app_identity import APP_DISPLAY_NAME
 # ======================================================================================================================
 class YOLOInferenceEngine:
     """
-    YOLOv11-seg inference engine for GRIME AI.
+    YOLOv11-seg inference engine.
 
     Mirrors SAM2InferenceEngine and SegFormerInferenceEngine in interface and output
     structure so ML_Segmentation_Dispatcher can use all three identically.
@@ -59,7 +59,7 @@ class YOLOInferenceEngine:
         """
         Args:
             device:               torch device (cuda/cpu)
-            yolo_model_path:      path to the GRIME AI-trained YOLO best.pt checkpoint
+            yolo_model_path:      path to the trained YOLO best.pt checkpoint
             input_dir:            directory containing input images
             output_dir:           base output directory (engine appends ' (yolo)')
             confidence_threshold: minimum confidence for accepting a detection
@@ -79,9 +79,9 @@ class YOLOInferenceEngine:
     # ------------------------------------------------------------------------------------------------------------------
     def _load_model(self):
         """
-        Load the trained YOLO model from the GRIME AI .torch checkpoint.
+        Load the trained YOLO model from the .torch checkpoint.
 
-        The .torch file contains GRIME AI metadata (categories, site_name,
+        The .torch file contains model metadata (categories, site_name,
         training stats, etc.) plus the path to best.pt which is the complete
         fine-tuned Ultralytics model. We load best.pt directly with YOLO()
         since it is already the fully trained model with the correct
@@ -112,7 +112,7 @@ class YOLOInferenceEngine:
         except Exception as e:
             print(f"[YOLOInferenceEngine] Could not apply torch_safe_load patch: {e}")
 
-        # Load GRIME AI .torch file for metadata
+        # Load .torch file for metadata
         grime_ckpt = torch.load(self.YOLO_MODEL, map_location="cpu", weights_only=False)
 
         if not isinstance(grime_ckpt, dict) or "categories" not in grime_ckpt:

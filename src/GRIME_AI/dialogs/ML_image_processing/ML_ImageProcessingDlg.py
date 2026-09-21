@@ -21,11 +21,11 @@ matplotlib.use("Qt5Agg")      # <<< FORCE Qt5Agg backend for PyQt5
 from appcore.utils.resource_utils import ui_path
 
 from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget, QApplication
+from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget
 from PyQt5.uic import loadUi
 
 from appcore.Save_Utils import Save_Utils
-from ...app_identity import PLUGINS_DIR
+from ...app_identity import APP_ID, PLUGINS_DIR
 # Tab classes are imported lazily in _add_tab_safe() so a missing or broken tab
 # module cannot stop this dialog from loading. ModelConfigManager is not a tab
 # and is imported normally.
@@ -60,19 +60,10 @@ class ML_ImageProcessingDlg(QDialog):
 
         new_width = int(default_width * 1.5)  # 50% wider
 
-        # Height is derived from the laid-out content, not hardcoded: ask the
-        # dialog how tall it needs to be for everything to fit, then clamp to
-        # the available screen height (excludes the taskbar) so it can never
-        # run off the bottom of the monitor. Scales with DPI/font/added widgets.
-        self.adjustSize()
-        needed_height = self.sizeHint().height()
-        screen = QApplication.primaryScreen().availableGeometry()
-        new_height = max(default_height, min(needed_height, screen.height()))
-
-        self.resize(new_width, new_height)
+        # Width only here; height is set below by the size-to-fit block that
+        # clamps sizeHint() to the screen, so the bottom row is never clipped.
+        self.resize(new_width, default_height)
         self.setMinimumSize(int(new_width * 0.7), int(default_height * 0.7))
-
-        print(f"Dialog resized: {default_width}x{default_height} → {new_width}x{new_height}")
 
         # --------------------------------------------------------------------------------------------------------------
         # TRAINING TAB    ---    TRAINING TAB    ---   TRAINING TAB    ---    TRAINING TAB    ---    TRAINING TAB
@@ -106,7 +97,6 @@ class ML_ImageProcessingDlg(QDialog):
         # --------------------------------------------------------------------------------------------------------------
         # SANDBAR ANALYZER TAB     ---     SANDBAR ANALYZER TAB     ---     SANDBAR ANALYZER TAB     ---     SANDBAR ANALYZER TAB
         # --------------------------------------------------------------------------------------------------------------
-        # Create the Sandbar Analyzer tab widget (internal-edge detection on the segmented ROI)
         self.sandbar_tab = self._add_tab_safe(
             "Sandbar Analyzer", _MOD + "sandbar_analyzer_tab", "SandbarAnalyzerTab",
             ui_rel="ML_image_processing/sandbar_analyzer_tab.ui",
@@ -131,7 +121,7 @@ class ML_ImageProcessingDlg(QDialog):
         self.coco_viewer_tab = self._add_tab_safe(
             "COCO Viewer", _MOD + "mask_viewer", "CocoViewerTab")
 
-        # Optional drop-in tab plugins from Documents/GRIME-AI/plugins/
+        # Optional drop-in tab plugins from <user root>/plugins/
         self._load_plugins()
 
         # --------------------------------------------------------------------------------------------------------------
@@ -169,17 +159,58 @@ class ML_ImageProcessingDlg(QDialog):
 
         self.setup_ui_properties()
 
+        # Open at a size that fits the content (clamped to the available
+        # screen) so the bottom row — Train button, Blob Filter, Training
+        # Splits — is never clipped on first show. The dialog stays
+        # user-resizable; this only sets a sensible starting size.
+        try:
+            from PyQt5.QtWidgets import QApplication
+            hint = self.sizeHint()
+            screen = QApplication.primaryScreen().availableGeometry()
+            self.resize(
+                min(max(self.width(),  hint.width()),  screen.width()  - 60),
+                min(max(self.height(), hint.height()), screen.height() - 60),
+            )
+        except Exception as e:
+            print(f"[ML] size-to-fit skipped: {e}")
+
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def _add_tab_safe(self, title, module_name, class_name, ui_rel=None, post=None):
         """Create and add a sub-tab, guarded so a missing/broken tab (absent
         .py or .ui, import error, UI-load error, wiring error) is skipped and
         logged instead of crashing the ML dialog. The tab module is imported
-        lazily here. Returns the tab instance, or None if skipped."""
+        lazily here. Returns the tab instance, or None if skipped.
+
+        Dev hot-reload: set the environment variable <APP_ID>_DEV_RELOAD=1 and
+        tab modules (plus their sibling helpers in this package) are evicted
+        from sys.modules before import, so a source file dropped into the
+        project is picked up simply by closing and reopening this dialog —
+        no application restart. .ui files always reload from disk regardless."""
         try:
             import os
+            import sys
             import importlib
             import importlib.util
+
+            if os.environ.get(f"{APP_ID}_DEV_RELOAD", "").strip() in ("1", "true", "yes"):
+                # Evict the tab module and every sibling module in this
+                # package (helpers like guided_params_panel) so the fresh
+                # import re-reads all of them from disk. The dialog's own
+                # module and model_config_manager are kept: this instance
+                # is already constructed from them.
+                _pkg_prefix = module_name.rsplit(".", 1)[0] + "."
+                _keep = {__name__, _pkg_prefix + "model_config_manager"}
+                for _m in [m for m in list(sys.modules)
+                           if (m == module_name or m.startswith(_pkg_prefix))
+                           and m not in _keep]:
+                    sys.modules.pop(_m, None)
+                # Also drop the import system's directory/bytecode finder
+                # caches — without this, a file dropped into the package
+                # after startup can be missed or served stale.
+                importlib.invalidate_caches()
+                print(f"[ML] dev reload: re-importing '{module_name}' from disk.")
+
             if importlib.util.find_spec(module_name) is None:
                 print(f"[ML] '{title}' tab skipped (module not found).")
                 return None
@@ -196,11 +227,17 @@ class ML_ImageProcessingDlg(QDialog):
             self.tabWidget.addTab(tab, title)
             return tab
         except Exception as err:
-            print(f"[ML] '{title}' tab unavailable: {err}")
+            # Full traceback, not just the message. "No module named X" alone
+            # does not say WHICH import in which file failed, which turns a
+            # one-line fix into a search.
+            import traceback
+            print(f"[ML] '{title}' tab unavailable: {type(err).__name__}: {err}",
+                  flush=True)
+            traceback.print_exc()
             return None
 
     def _load_plugins(self):
-        """Load optional tab plugins from Documents/GRIME-AI/plugins/.
+        """Load optional tab plugins from <user root>/plugins/.
 
         Each plugin is a .py file exposing a module-level PLUGIN dict:
             PLUGIN = {
@@ -227,7 +264,7 @@ class ML_ImageProcessingDlg(QDialog):
             path = os.path.join(plugin_dir, fname)
             title = fname
             try:
-                mod_name = "app_plugin_" + os.path.splitext(fname)[0]
+                mod_name = os.path.splitext(fname)[0]
                 spec = importlib.util.spec_from_file_location(mod_name, path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)       # executes the plugin file
@@ -252,7 +289,10 @@ class ML_ImageProcessingDlg(QDialog):
                 self.tabWidget.addTab(tab, "* " + title)   # asterisk marks a plugin
                 print(f"[ML] plugin loaded: {title}")
             except Exception as err:
-                print(f"[ML] plugin '{title}' unavailable: {err}")
+                import traceback
+                print(f"[ML] plugin '{title}' unavailable: "
+                      f"{type(err).__name__}: {err}", flush=True)
+                traceback.print_exc()
 
     def setup_ui_properties(self):
         """Set size policies and layout stretch factors."""
@@ -509,7 +549,8 @@ class ML_ImageProcessingDlg(QDialog):
             print("Error parsing learning rates:", e)
             site_config["learningRates"] = lr_text
         site_config["optimizer"] = self.comboBox_optimizer.currentText()
-        site_config["loss_function"] = self.comboBox_lossFunction.currentText()
+        site_config["loss_function"] = (self.comboBox_lossFunction.currentText()
+                                        if hasattr(self, "comboBox_lossFunction") else "ce_dice")
         site_config["weight_decay"] = self.doubleSpinBox_weightDecay.value()
         site_config["number_of_epochs"] = self.spinBox_epochs.value()
         site_config["batch_size"] = self.spinBox_batchSize.value()
@@ -540,11 +581,9 @@ class ML_ImageProcessingDlg(QDialog):
 
         site_config["lora_target_modules"] = lora_target_modules
 
-        # _____ GRIME AI ML parameters  _______________________________________
+        # _____ ML parameters  _______________________________________
         site_config["max_best_checkpoints"] = \
             self.training_tab.spinBox_maxBestCheckpoints.value()
-        site_config["early_stopping"] = self.checkBox_earlyStopping.isChecked()
-        site_config["patience"] = self.spinBox_patience.value()
         site_config["validation_overlay_mode"] = self.training_tab._overlay_mode_from_ui()
         site_config["validation_overlay_interval"] = \
             self.training_tab.spinBox_validationOverlayInterval.value()
@@ -556,6 +595,8 @@ class ML_ImageProcessingDlg(QDialog):
         site_config["lr_scheduler_patience"] = \
             self.training_tab.spinBox_lrSchedulerPatience.value()
         site_config["lr_scheduler_min_lr"] = self.training_tab._lr_min_from_ui()
+        site_config["early_stopping"] = self.checkBox_earlyStopping.isChecked()
+        site_config["patience"] = self.spinBox_patience.value()
         site_config["device"] = self.comboBox_device.currentText()
         site_config["folder_path"] = self.lineEdit_model_training_images_path.text()
         avail_root = self.training_tab.listWidget_availableFolders.invisibleRootItem()
@@ -737,6 +778,15 @@ class ML_ImageProcessingDlg(QDialog):
 
     def get_save_diagnostic_panels(self):
         return self.segment_tab.checkBox_save_diagnostic_panels.isChecked()
+
+    def get_use_tta(self):
+        # SegFormer-only test-time augmentation. Falls back to False if the
+        # checkbox is absent (older UI) or a non-SegFormer model is selected.
+        if not hasattr(self.segment_tab, "checkBox_use_tta"):
+            return False
+        if getattr(self.segment_tab, "selected_segment_model", "") != "segformer":
+            return False
+        return self.segment_tab.checkBox_use_tta.isChecked()
 
     def get_selected_training_labels(self):
         return self.training_tab.get_selected_training_labels()

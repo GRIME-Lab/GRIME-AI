@@ -15,10 +15,12 @@ import matplotlib.pyplot as plt
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from transformers import SegformerForSemanticSegmentation
 
 from appcore.ml_core.coco_segmentation_datasets import MultiCocoTargetDataset
-from appcore.ml_core.lora_segmentation_losses import BinaryDiceLoss, MultiClassDiceLoss
+from appcore.ml_core.lora_segmentation_losses import (BinaryDiceLoss, MultiClassDiceLoss,
+                                                          FocalLoss, TverskyLoss)
 from appcore.QProgressWheel import QProgressWheel
 from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
@@ -53,11 +55,15 @@ def apply_augmentation(image, mask, cfg):
         image = TF.vflip(image)
         mask = TF.vflip(mask.unsqueeze(0)).squeeze(0)
     
-    # Random rotation
+    # Random rotation. The mask MUST rotate with nearest-neighbor interpolation
+    # or bilinear blending corrupts the integer class labels at boundaries.
     if cfg.aug_rotation > 0:
         angle = random.uniform(-cfg.aug_rotation, cfg.aug_rotation)
-        image = TF.rotate(image, angle)
-        mask = TF.rotate(mask.unsqueeze(0), angle).squeeze(0)
+        image = TF.rotate(image, angle, interpolation=TF.InterpolationMode.BILINEAR)
+        mask = TF.rotate(
+            mask.unsqueeze(0), angle,
+            interpolation=TF.InterpolationMode.NEAREST
+        ).squeeze(0)
     
     # Color jitter (image only, not mask)
     if cfg.aug_brightness > 0 or cfg.aug_contrast > 0:
@@ -95,6 +101,11 @@ class SegFormerConfig:
     categories: Optional[List[str]] = field(default_factory=list)
     target_category_name: str = ""
     image_size: int = 512
+    backbone_size: str = "b0"   # one of b0..b5; selects segformer-{size}-finetuned-cityscapes-1024-1024
+    loss_function: str = "ce_dice"   # ce_dice | ce_focal | ce_tversky | focal | tversky | dice
+    tversky_alpha: float = 0.5       # FP penalty (Tversky/Focal-Tversky)
+    tversky_beta: float = 0.5        # FN penalty; beta>alpha favors recall
+    focal_gamma: float = 2.0
     batch_size: int = 4
     num_workers: int = 4
     lr: float = 3e-4
@@ -108,13 +119,12 @@ class SegFormerConfig:
     grad_clip_norm: float = 1.0
 
     # Early stopping
-    # Early stopping monitors validation loss (mode=min), matching the SAM2
-    # trainer so both backends stop on the same criterion.
+    # Monitors validation loss (mode=min), matching the SAM2 trainer so both
+    # backends stop on the same criterion.
     early_stopping: bool = False
     patience: int = 10
 
-    # Learning rate scheduler (ReduceLROnPlateau)
-    # Monitors the same metric as early stopping (validation loss, mode=min).
+    # Learning rate scheduler (ReduceLROnPlateau), monitoring validation loss.
     lr_scheduler_enabled: bool = field(
         default_factory=lambda: ModelConfigManager.get_default("lr_scheduler_enabled"))
     lr_scheduler_factor: float = field(
@@ -177,18 +187,19 @@ class SegFormerTrainer:
     def __init__(self, cfg: SegFormerConfig, parent_widget=None):
         self.cfg = cfg
         self.parent_widget = parent_widget
+        self.best_iou = 0.0
         self.progressBar = None
         self._last_checkpoint_path = None
         self._progress_total = 0
 
         # Early stopping tracking
         self.patience_counter = 0
+        self.best_val_loss = float("inf")
         # Set True once overlay PNGs have been written for this run.
         self._overlays_written = False
-        self.best_val_loss = float("inf")
 
         # Checkpoint management
-        self.best_checkpoints = []  # List of (val_iou, filepath) tuples
+        self.best_checkpoints = []  # List of (val_loss, filepath) tuples
 
         # Metric accumulators — mirrors SAM2 trainer structure
         self.loss_values: List[float] = []           # train loss per epoch
@@ -220,12 +231,69 @@ class SegFormerTrainer:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _build_loss_spec(self, name, ce_loss, dice_loss, focal, tversky):
+        """Map the loss_function name to the components to combine. Returns a
+        list of (kind, fn) pairs summed at compute time. 'kind' tells
+        _compute_loss which input form each fn expects."""
+        table = {
+            "ce_dice":    [("ce", ce_loss), ("dice", dice_loss)],
+            "ce_focal":   [("ce", ce_loss), ("focal", focal)],
+            "ce_tversky": [("ce", ce_loss), ("tversky", tversky)],
+            "focal":      [("focal", focal)],
+            "tversky":    [("tversky", tversky)],
+            "dice":       [("dice", dice_loss)],
+        }
+        # Normalize free-form UI text ("Cross Entropy + Dice", "CE+Focal", etc.)
+        # to canonical keys so the selector's display strings resolve regardless
+        # of exact wording.
+        key = name.lower().replace(" ", "").replace("+", "_").replace("-", "_")
+        key = key.replace("crossentropy", "ce").replace("cross_entropy", "ce")
+        aliases = {
+            "ce_dice": "ce_dice", "cedice": "ce_dice",
+            "ce_focal": "ce_focal", "cefocal": "ce_focal",
+            "ce_tversky": "ce_tversky", "cetversky": "ce_tversky",
+            "focal": "focal", "tversky": "tversky", "dice": "dice",
+        }
+        key = aliases.get(key, key)
+        if key not in table:
+            print(f"[loss] unknown loss_function {name!r} -> {key!r}; falling back to ce_dice")
+            key = "ce_dice"
+        return table[key]
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _compute_loss(self, logits, masks, num_labels):
+        """Combine the selected loss components. Centralizes the per-loss input
+        handling (logits vs probs, binary vs multi-class) so train and eval use
+        an identical loss."""
+        probs = torch.softmax(logits, dim=1)
+        total = 0.0
+        for kind, fn in self._loss_spec:
+            if kind == "ce":
+                total = total + fn(logits, masks)
+            elif kind == "focal":
+                total = total + fn(logits, masks)          # FocalLoss takes logits
+            elif kind == "tversky":
+                total = total + fn(logits, masks)          # TverskyLoss takes logits
+            elif kind == "dice":
+                if num_labels == 2:
+                    probs_dice = probs[:, 1:2]
+                    masks_bin = (masks == 1).float().unsqueeze(1)
+                    total = total + fn(probs_dice, masks_bin)
+                else:
+                    total = total + fn(probs, masks)
+        return total
+
     def build_model(self, num_labels: int) -> nn.Module:
         """
         Build base SegFormer (no LoRA). If you want LoRA, wrap the returned model externally.
         """
+        size = str(getattr(self.cfg, "backbone_size", "b0")).lower()
+        if size not in {"b0", "b1", "b2", "b3", "b4", "b5"}:
+            raise ValueError(f"backbone_size must be b0..b5, got {size!r}")
+        pretrained = f"nvidia/segformer-{size}-finetuned-cityscapes-1024-1024"
         model = SegformerForSemanticSegmentation.from_pretrained(
-            "nvidia/segformer-b0-finetuned-cityscapes-1024-1024",
+            pretrained,
             ignore_mismatched_sizes=True
         )
         model.config.num_labels = num_labels
@@ -285,17 +353,14 @@ class SegFormerTrainer:
                 logits, size=masks.shape[-2:], mode="bilinear", align_corners=False
             )
 
-            # Val loss — CE + Dice (same combo as training loss)
-            ce = ce_loss(logits, masks_long)
-            probs = torch.softmax(logits, dim=1)
-            if num_labels == 2:
-                probs_dice = probs[:, 1:2]
-                masks_bin = (masks_long == 1).float().unsqueeze(1)
-                dice_l = dice_loss(probs_dice, masks_bin)
-            else:
-                dice_l = dice_loss(probs, masks_long)
-            val_loss += float((ce + dice_l).detach().cpu())
+            # Val loss — uses the selected loss (same as training)
+            val_loss += float(self._compute_loss(logits, masks_long, num_labels).detach().cpu())
             n_batches += 1
+
+            # Probabilities for thresholded predictions / scoring below. (This was
+            # previously computed inline before the loss refactor; recomputed here
+            # since _compute_loss takes logits, not probs.)
+            probs = torch.softmax(logits, dim=1)
 
             # Threshold-based predictions
             preds = (torch.argmax(probs, dim=1) == self.cfg.target_class_id).long()
@@ -648,12 +713,14 @@ class SegFormerTrainer:
             "learning_rate": learnrate,
             "epochs": epochs,
             "num_classes": getattr(model.config, "num_labels", None),
+            "backbone_size": str(getattr(self.cfg, "backbone_size", "b0")).lower(),
+            "lora_config": getattr(self, "_lora_config", None),
+            "use_lora": bool(getattr(self, "_use_lora", False)),
             "val_loss": val_loss,
             "val_accuracy": val_accuracy,
             "miou": miou,
             "target_category_name": target_category_name,
             "base_model": "segformer",
-            "lora_config": getattr(self, "lora_config_dict", None),
             "val_best_threshold": val_best_threshold,
         }
 
@@ -733,13 +800,22 @@ class SegFormerTrainer:
     def train(self, image_dirs, ann_paths, model: Optional[nn.Module] = None,
               optimizer: Optional[torch.optim.Optimizer] = None,
               categories: Optional[List[str]] = None,
-              site_name: str = "segformer"):
+              site_name: str = "segformer",
+              lora_config: Optional[dict] = None):
         """
         Train loop that accepts an externally provided model and optimizer.
         - If model is None, builds a plain SegFormer.
         - If optimizer is None, uses AdamW on all model params (no LoRA assumption).
         This enables composition with LoRA without mixing concerns.
         """
+        # LoRA config (r/alpha/dropout/bias/target_modules/modules_to_save) is
+        # applied in the caller; stored here so it is written into every
+        # checkpoint and read back verbatim at inference — no hardcoding, no drift.
+        self._lora_config = lora_config
+        # Explicit flag so inference knows whether to LoRA-wrap or load a full
+        # fine-tuned model. Presence of lora_config alone is ambiguous for old
+        # checkpoints, so record it directly.
+        self._use_lora = lora_config is not None
         self.set_seed()
         self.ensure_dir(self.cfg.output_dir)
         import time as _time
@@ -747,7 +823,7 @@ class SegFormerTrainer:
         self.training_time_seconds = None
 
         train_ds = MultiCocoTargetDataset(image_dirs, ann_paths, self.cfg.target_category_name, self.cfg.image_size,
-                                          split="train")
+                                          split="train", cfg=self.cfg)
         val_ds = MultiCocoTargetDataset(image_dirs, ann_paths, self.cfg.target_category_name, self.cfg.image_size,
                                         split="val")
 
@@ -784,15 +860,13 @@ class SegFormerTrainer:
             weight_decay=self.cfg.weight_decay
         )
 
-        # ====================================================================
-        # LEARNING RATE SCHEDULER: REDUCE ON PLATEAU
-        # Monitors validation loss (mode='min') to match the early-stopping
-        # criterion below. Scheduler patience must stay below early-stopping
-        # patience or training halts before the LR is ever reduced.
-        # ====================================================================
+        # LR scheduler: reduce on validation-loss plateau. Mirrors SAM2Trainer's
+        # ReduceLROnPlateau (mode/factor/patience/min_lr) so both trainers decay
+        # learning rate the same way. Stepped only on validation epochs, where
+        # avg_val_loss is defined (see the val_every block below).
+        # Settings come from the site config; defaults live in the schema.
         scheduler = None
         if self.cfg.lr_scheduler_enabled:
-            from torch.optim.lr_scheduler import ReduceLROnPlateau
             sched_patience = self.cfg.lr_scheduler_patience
             if self.cfg.early_stopping and sched_patience >= self.cfg.patience:
                 sched_patience = max(1, self.cfg.patience // 3)
@@ -803,7 +877,7 @@ class SegFormerTrainer:
                 mode='min',                       # minimize validation loss
                 factor=self.cfg.lr_scheduler_factor,
                 patience=sched_patience,
-                min_lr=self.cfg.lr_scheduler_min_lr
+                min_lr=self.cfg.lr_scheduler_min_lr,
             )
             print(f"[SegFormer] ReduceLROnPlateau active: monitor=val_loss mode=min "
                   f"factor={self.cfg.lr_scheduler_factor} patience={sched_patience} "
@@ -812,6 +886,7 @@ class SegFormerTrainer:
             print("[SegFormer] LR scheduler disabled; learning rate is fixed.")
 
         self.lr_values = []
+        self._overlays_written = False
 
         ce_loss = nn.CrossEntropyLoss(ignore_index=255)
         # Use appropriate Dice loss based on number of classes
@@ -819,7 +894,14 @@ class SegFormerTrainer:
             dice_loss = BinaryDiceLoss()
         else:
             dice_loss = MultiClassDiceLoss()
-        scaler = torch.cuda.amp.GradScaler(enabled=self.cfg.amp)
+        # Selectable loss. CE stays as the base for the "ce_*" combos; Focal and
+        # Tversky are the imbalance-aware options. All work binary + multi-class.
+        loss_name = str(getattr(self.cfg, "loss_function", "ce_dice")).lower()
+        focal = FocalLoss(gamma=getattr(self.cfg, "focal_gamma", 2.0))
+        tversky = TverskyLoss(alpha=getattr(self.cfg, "tversky_alpha", 0.5),
+                              beta=getattr(self.cfg, "tversky_beta", 0.5))
+        self._loss_spec = self._build_loss_spec(loss_name, ce_loss, dice_loss, focal, tversky)
+        scaler = torch.amp.GradScaler("cuda", enabled=self.cfg.amp)
 
         metrics_log_path = os.path.join(self.cfg.output_dir, "metrics.json")
 
@@ -875,21 +957,13 @@ class SegFormerTrainer:
                             torch.use_deterministic_algorithms(True, warn_only=True)
 
                     with allow_nondeterminism():
-                        with torch.cuda.amp.autocast(enabled=self.cfg.amp):
+                        with torch.amp.autocast("cuda", enabled=self.cfg.amp):
                             outputs = model(pixel_values=imgs)
                             logits = outputs.logits
                             logits = torch.nn.functional.interpolate(
                                 logits, size=masks.shape[-2:], mode="bilinear", align_corners=False
                             )
-                            ce = ce_loss(logits, masks)
-                            probs = torch.softmax(logits, dim=1)
-                            if num_labels == 2:
-                                probs_dice = probs[:, 1:2]
-                                masks_bin = (masks == 1).float().unsqueeze(1)
-                                dice = dice_loss(probs_dice, masks_bin)
-                            else:
-                                dice = dice_loss(probs, masks)
-                            loss = ce + dice
+                            loss = self._compute_loss(logits, masks, num_labels)
 
                         scaler.scale(loss).backward()
                         scaler.unscale_(optimizer)
@@ -923,6 +997,17 @@ class SegFormerTrainer:
                     avg_val_loss, val_accuracy, mean_iou, avg_dice, avg_iou, metrics = self.evaluate(
                         model, val_loader, ce_loss, dice_loss, num_labels
                     )
+
+                    # Step LR scheduler on validation loss (plateau detection).
+                    # torch deprecated verbose, so report the change here.
+                    _lr_before = optimizer.param_groups[0]['lr']
+                    if scheduler is not None:
+                        scheduler.step(avg_val_loss)
+                    _lr_after = optimizer.param_groups[0]['lr']
+                    self.lr_values.append(_lr_after)
+                    if _lr_after < _lr_before:
+                        print(f"[SegFormer] Epoch {epoch}: validation loss plateaued - "
+                              f"learning rate reduced {_lr_before:.3e} -> {_lr_after:.3e}")
 
                     self.epoch_list.append(epoch)
                     self.val_loss_values.append(avg_val_loss)
@@ -969,17 +1054,6 @@ class SegFormerTrainer:
                     # Monitors validation loss (min), matching the SAM2 trainer.
                     current_val_iou = metrics['mean_iou']   # reported, not used for stopping
 
-                    # Step the LR scheduler before any early-stopping break so
-                    # the final epoch's result still feeds the scheduler.
-                    _lr_before = optimizer.param_groups[0]['lr']
-                    if scheduler is not None:
-                        scheduler.step(avg_val_loss)
-                    _lr_after = optimizer.param_groups[0]['lr']
-                    self.lr_values.append(_lr_after)
-                    if _lr_after < _lr_before:
-                        print(f"[SegFormer] Epoch {epoch}: validation loss plateaued — "
-                              f"learning rate reduced {_lr_before:.3e} -> {_lr_after:.3e}")
-
                     if avg_val_loss < self.best_val_loss:
                         self.best_val_loss = avg_val_loss
                         self.patience_counter = 0
@@ -1017,11 +1091,12 @@ class SegFormerTrainer:
                             **metrics
                         }) + "\n")
 
-            # Guarantee overlays even if the loop exited before the final
-            # epoch (early stopping, cancel). Mirrors the SAM2 backstop.
+            # Guarantee overlays even if the loop exited before the final epoch
+            # (early stopping, cancel), or if val_every skipped it. Mirrors the
+            # SAM2 backstop.
             if self.cfg.save_val_overlays and not self._overlays_written:
-                print("[SegFormer] Training ended before the final epoch; "
-                      "running one validation pass to write validation_overlays/.")
+                print("[SegFormer] No overlays written during training; "
+                      "running one validation pass to populate validation_overlays/.")
                 try:
                     sample_imgs, sample_masks = next(iter(val_loader))
                     sample_imgs = sample_imgs.to(self.cfg.device)
@@ -1048,4 +1123,3 @@ class SegFormerTrainer:
             self._close_progress()
 
         return model
-

@@ -1,4 +1,4 @@
-"""GRIME AI Recipe Manager subpackage.
+"""Recipe Manager subpackage.
 
 Exposes the public API so callers can simply:
 

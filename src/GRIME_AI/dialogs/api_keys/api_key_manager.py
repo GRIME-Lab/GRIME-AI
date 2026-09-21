@@ -1,7 +1,7 @@
 """
 api_key_manager.py
 ------------------
-Centralised read/write access to NEON and USGS API keys for GRIME AI.
+Centralised read/write access to NEON and USGS API keys.
 
 Keys are stored in  <settings_folder>/api_keys.ini  under section [api_keys].
 The file is created on first save and is excluded from version control by the
@@ -40,11 +40,11 @@ _DEFAULT_USGS_EP = "https://api.waterdata.usgs.gov/nims/v0"
 
 
 def _settings_folder() -> Path:
-    """Return the GRIME AI settings folder, creating it if necessary.
+    """Return the settings folder, creating it if necessary.
 
     Resolution order:
       1. Save_Utils().get_settings_folder()  — normal runtime path
-      2. ~/Documents/GRIME-AI/Settings                — mirrors PROJECT_ROOT
+      2. ~/Documents/<application>/Settings                — mirrors PROJECT_ROOT
          defined in the package __init__.py
     """
     try:

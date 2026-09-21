@@ -260,7 +260,7 @@ background-color: rgb(255, 255, 255);</string>
      </font>
     </property>
     <property name="toolTip">
-     <string extracomment="Select the folder which contains images that you want to operate on for this GRIME AI session."/>
+     <string extracomment="Select the folder which contains images that you want to operate on for this session."/>
     </property>
    </widget>
    <widget class="QPushButton" name="pushButton_CreateEXIFFile">

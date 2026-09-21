@@ -21,7 +21,7 @@ from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QMessageBox
 
-# GRIME-AI Classes
+# Application Classes
 # ----------------------------------------------------------------------------------------------------------------------
 from appcore.QProgressWheel import QProgressWheel
 from appcore.App_Utils import App_Utils
