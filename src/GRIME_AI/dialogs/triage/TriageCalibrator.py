@@ -12,7 +12,8 @@
 # Pure calibration logic — no Qt dependency.
 # Loads images from three labelled folders (good, blurry, exposure),
 # computes ImageQualityAnalyzer metrics, and grid-searches for the
-# optimal FFT, Laplacian, and brightness thresholds.
+# optimal Laplacian and brightness thresholds. The FFT blur threshold is not
+# calibrated here: triage chooses it automatically from each folder's images.
 #
 # Can be called from the GUI dialog or from a CLI script.
 
@@ -35,9 +36,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 class CalibrationResult:
 
     def __init__(self):
-        self.fft_blur_threshold   = 21.0
         self.laplacian_threshold  = 150.0
-        self.fft_shift_radius     = 40
         self.brightness_min       = 40.0
         self.brightness_max       = 215.0
         self.blur_f1              = 0.0
@@ -53,9 +52,7 @@ class CalibrationResult:
 
     def to_dict(self) -> dict:
         return {
-            "fft_blur_threshold":  self.fft_blur_threshold,
             "laplacian_threshold": self.laplacian_threshold,
-            "fft_shift_radius":    self.fft_shift_radius,
             "brightness_min":             self.brightness_min,
             "brightness_max":             self.brightness_max,
             "color_imbalance_threshold":  self.color_imbalance_threshold,
@@ -115,21 +112,15 @@ class TriageCalibrator:
 
         self._report(progress_callback, "Computing image metrics...", 5)
 
-        fft_radii = [20, 30, 40]
-
-        good_metrics     = self._compute_all_metrics(good_images,     fft_radii, focus_roi, progress_callback, 5,  35)
-        blurry_metrics   = self._compute_all_metrics(blurry_images,   fft_radii, focus_roi, progress_callback, 35, 60)
-        exposure_metrics = self._compute_all_metrics(exposure_images, fft_radii, focus_roi, progress_callback, 60, 75)
+        good_metrics     = self._compute_all_metrics(good_images,     focus_roi, progress_callback, 5,  35)
+        blurry_metrics   = self._compute_all_metrics(blurry_images,   focus_roi, progress_callback, 35, 60)
+        exposure_metrics = self._compute_all_metrics(exposure_images, focus_roi, progress_callback, 60, 75)
 
         self._report(progress_callback, "Searching blur thresholds...", 75)
 
         if result.n_blurry > 0:
-            best_fft_thr, best_lap_thr, best_radius, best_f1 = self._search_blur_thresholds(
-                good_metrics, blurry_metrics, fft_radii
-            )
-            result.fft_blur_threshold  = best_fft_thr
+            best_lap_thr, best_f1 = self._search_blur_thresholds(good_metrics, blurry_metrics)
             result.laplacian_threshold = best_lap_thr
-            result.fft_shift_radius    = best_radius
             result.blur_f1             = best_f1
 
         self._report(progress_callback, "Searching brightness thresholds...", 88)
@@ -177,12 +168,12 @@ class TriageCalibrator:
     # Metric computation
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _compute_all_metrics(self, images: list, fft_radii: list, focus_roi,
+    def _compute_all_metrics(self, images: list, focus_roi,
                               progress_callback, pct_start: int, pct_end: int) -> list:
         """
-        For each image compute FFT (all radii), Laplacian, and brightness.
+        For each image compute Laplacian and brightness.
         Blur metrics use focus_roi if provided; brightness uses the full frame.
-        Returns list of dicts: {path, brightness, laplacian, fft: {radius: value}}
+        Returns list of dicts: {path, brightness, laplacian}
         """
         results = []
         n = len(images)
@@ -211,24 +202,12 @@ class TriageCalibrator:
             gray_blur = analyzer._preprocess(img, apply_roi=True)
             laplacian = analyzer._compute_laplacian_var(gray_blur)
 
-            # FFT — compute shift once on ROI gray, apply all radii
-            fft_shift = np.fft.fftshift(np.fft.fft2(gray_blur))
-            fft_scores = {}
-            h, w = gray_blur.shape
-            cX, cY = w // 2, h // 2
-            for r in fft_radii:
-                fs = fft_shift.copy()
-                fs[cY - r:cY + r, cX - r:cX + r] = 0
-                recon = np.fft.ifft2(np.fft.ifftshift(fs))
-                fft_scores[r] = float(np.mean(20 * np.log(np.abs(recon) + 1e-8)))
-
-            del gray_full, gray_blur, fft_shift
+            del gray_full, gray_blur
 
             results.append({
                 "path":       path,
                 "brightness": brightness,
                 "laplacian":  laplacian,
-                "fft":        fft_scores,
             })
 
         return results
@@ -237,26 +216,22 @@ class TriageCalibrator:
     # Blur threshold grid search
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _search_blur_thresholds(self, good_metrics: list, blurry_metrics: list,
-                                 fft_radii: list) -> tuple:
-        fft_thresholds = np.arange(5.0, 30.0, 1.0).tolist()
+    def _search_blur_thresholds(self, good_metrics: list, blurry_metrics: list) -> tuple:
         lap_thresholds = [5, 10, 15, 20, 25, 30, 40, 50, 75, 100, 125, 150, 175, 200, 250, 300]
 
         best_f1      = -1.0
-        best_fft_thr = 21.0
         best_lap_thr = 150.0
-        best_radius  = 40
 
-        for radius, fft_thr, lap_thr in itertools.product(fft_radii, fft_thresholds, lap_thresholds):
+        for lap_thr in lap_thresholds:
             tp = fp = fn = tn = 0
 
             for m in good_metrics:
-                predicted = (m["fft"][radius] < fft_thr) or (m["laplacian"] < lap_thr)
+                predicted = m["laplacian"] < lap_thr
                 if predicted: fp += 1
                 else:         tn += 1
 
             for m in blurry_metrics:
-                predicted = (m["fft"][radius] < fft_thr) or (m["laplacian"] < lap_thr)
+                predicted = m["laplacian"] < lap_thr
                 if predicted: tp += 1
                 else:         fn += 1
 
@@ -266,11 +241,9 @@ class TriageCalibrator:
 
             if f1 > best_f1:
                 best_f1      = f1
-                best_fft_thr = round(fft_thr, 2)
                 best_lap_thr = float(lap_thr)
-                best_radius  = radius
 
-        return best_fft_thr, best_lap_thr, best_radius, best_f1
+        return best_lap_thr, best_f1
 
     # ──────────────────────────────────────────────────────────────────────────
     # Brightness threshold grid search

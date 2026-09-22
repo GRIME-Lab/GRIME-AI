@@ -32,9 +32,10 @@ class ImageTriage:
     # ==================================================================================================================
     #
     # ==================================================================================================================
-    def cleanImages(self, folder, bFetchRecursive, blurThreshhold, shiftSize, brightnessMin, brightnessMAX,
+    def cleanImages(self, folder, bFetchRecursive, brightnessMin, brightnessMAX,
                     bCreateReport, bMoveImages, bCorrectAlignment, bSavePolylines,
                     strReferenceImageFilename, rotationThreshold,
+                    use_fft_blur=True, use_laplacian=True,
                     laplacian_threshold=150.0, blur_logic="OR",
                     focus_roi=None,
                     use_color_imbalance=False,
@@ -49,6 +50,10 @@ class ImageTriage:
             Brightness is always computed over the full frame. If None, the full
             frame is used for blur scoring. Must match the region used during
             calibration for thresholds to be valid.
+
+        Runs in two passes. Pass 1 analyzes every image. The FFT blur threshold
+        is then chosen from the whole folder (ImageQualityAnalyzer.finalize_fft_blur).
+        Pass 2 moves the flagged images and writes the report.
         """
 
         badImageCount    = 0
@@ -60,8 +65,8 @@ class ImageTriage:
         myGRIMe_Color = Color()
 
         analyzer = ImageQualityAnalyzer(
-            fft_shift_radius    = shiftSize,
-            fft_blur_threshold  = blurThreshhold,
+            use_fft_blur        = use_fft_blur,
+            use_laplacian_blur  = use_laplacian,
             laplacian_threshold = laplacian_threshold,
             blur_logic          = blur_logic,
             brightness_min      = brightnessMin,
@@ -108,6 +113,10 @@ class ImageTriage:
 
         file_count, files = App_Utils().getFileList(folder, extensions, bFetchRecursive)
 
+        # ------------------------------------------------------------------
+        # PASS 1: analyze every image. Only metrics are kept, not the images.
+        # ------------------------------------------------------------------
+        records = []
         for file in files:
             if self.show_gui and progressBar._is_closed:
                 break
@@ -127,7 +136,34 @@ class ImageTriage:
 
             quality = analyzer.analyze(numpyImage)
 
-            blur_fft       = quality.get("blur_fft",      0.0)
+            rotationAngle, horizontal_shift, vertical_shift = 0.0, 0.0, 0.0
+            if refImage is not None and bCorrectAlignment:
+                rotationAngle, poly_img, warp_img = self.checkImageAlignment(refImage, numpyImage)
+
+                baseFilename = os.path.basename(file)
+
+                if bSavePolylines:
+                    cv2.imwrite(os.path.join(polyFolder, baseFilename + "_poly.jpg"), poly_img)
+
+                if bCorrectAlignment and rotationAngle > rotationThreshold:
+                    cv2.imwrite(os.path.join(warpFolder, baseFilename + "_align.jpg"), warp_img)
+
+                grayImage = cv2.cvtColor(numpyImage, cv2.COLOR_RGB2GRAY)
+                horizontal_shift, vertical_shift = self.checkImageShift(refImage, grayImage)
+
+            records.append((file, filename, quality, rotationAngle, horizontal_shift, vertical_shift))
+            del numpyImage
+
+        # ------------------------------------------------------------------
+        # FFT blur: cutoff and threshold chosen from the whole folder.
+        # ------------------------------------------------------------------
+        fft_cutoff, fft_threshold = analyzer.finalize_fft_blur([rec[2] for rec in records])
+
+        # ------------------------------------------------------------------
+        # PASS 2: move flagged images and write the report.
+        # ------------------------------------------------------------------
+        for file, filename, quality, rotationAngle, horizontal_shift, vertical_shift in records:
+            blur_fft       = quality.get("blur_fft")                  # None: FFT check not applied
             blur_laplacian = quality.get("blur_laplacian", 0.0)
             brightness     = quality.get("brightness",     0.0)
             is_blurry         = quality.get("is_blurry",          False)
@@ -156,20 +192,6 @@ class ImageTriage:
                 strColorImbalance = "Color Imbalance"
                 bBad              = True
 
-            if refImage is not None and bCorrectAlignment:
-                rotationAngle, poly_img, warp_img = self.checkImageAlignment(refImage, numpyImage)
-
-                baseFilename = os.path.basename(file)
-
-                if bSavePolylines:
-                    cv2.imwrite(os.path.join(polyFolder, baseFilename + "_poly.jpg"), poly_img)
-
-                if bCorrectAlignment and rotationAngle > rotationThreshold:
-                    cv2.imwrite(os.path.join(warpFolder, baseFilename + "_align.jpg"), warp_img)
-
-                grayImage = cv2.cvtColor(numpyImage, cv2.COLOR_RGB2GRAY)
-                horizontal_shift, vertical_shift = self.checkImageShift(refImage, grayImage)
-
             bActuallyMoved = False
             if bMoveImages and bBad:
                 filepath       = os.path.dirname(file)
@@ -190,8 +212,9 @@ class ImageTriage:
                 quotedHyperlink = f'"{formula}"'
 
                 strQuality = 'Review' if bBad else 'Nominal'
-                strOutputString = '%3.2f,%s,%3.2f,%3.2f,%s,%3.3f,%s,%s,%3.2f,%3.2f,%3.2f,%s,%s\n' % (
-                    blur_fft, strFocusMetric,
+                strBlurFft = '' if blur_fft is None else '%3.4f' % blur_fft
+                strOutputString = '%s,%s,%3.2f,%3.2f,%s,%3.3f,%s,%s,%3.2f,%3.2f,%3.2f,%s,%s\n' % (
+                    strBlurFft, strFocusMetric,
                     blur_laplacian,
                     brightness, strIntensity,
                     color_imbalance, strColorImbalance,
@@ -203,7 +226,7 @@ class ImageTriage:
                 csvFile.write(strOutputString)
 
                 reportRows.append((
-                    round(blur_fft, 2), strFocusMetric,
+                    None if blur_fft is None else round(blur_fft, 4), strFocusMetric,
                     round(blur_laplacian, 2),
                     round(brightness, 2), strIntensity,
                     round(color_imbalance, 3), strColorImbalance,
@@ -225,7 +248,8 @@ class ImageTriage:
 
             settings = self._build_settings_dict(
                 runTimestamp, folder, bFetchRecursive,
-                blurThreshhold, shiftSize, laplacian_threshold, blur_logic,
+                use_fft_blur, fft_cutoff, fft_threshold,
+                use_laplacian, laplacian_threshold, blur_logic,
                 brightnessMin, brightnessMAX,
                 focus_roi, use_color_imbalance, color_imbalance_threshold,
                 bMoveImages, bCorrectAlignment, bSavePolylines,
@@ -255,7 +279,8 @@ class ImageTriage:
     #
     # ==================================================================================================================
     def _build_settings_dict(self, runTimestamp, folder, bFetchRecursive,
-                             blurThreshhold, shiftSize, laplacian_threshold, blur_logic,
+                             use_fft_blur, fft_cutoff, fft_threshold,
+                             use_laplacian, laplacian_threshold, blur_logic,
                              brightnessMin, brightnessMAX,
                              focus_roi, use_color_imbalance, color_imbalance_threshold,
                              bMoveImages, bCorrectAlignment, bSavePolylines,
@@ -274,8 +299,10 @@ class ImageTriage:
             "run_timestamp":             runTimestamp.strftime("%Y-%m-%d %H:%M:%S"),
             "image_folder":              folder,
             "fetch_recursive":           bool(bFetchRecursive),
-            "fft_blur_threshold":        blurThreshhold,
-            "fft_shift_radius":          shiftSize,
+            "use_fft_blur":              bool(use_fft_blur),
+            "fft_blur_cutoff":           fft_cutoff,      # cycles/pixel, chosen from this folder
+            "fft_blur_threshold":        fft_threshold,   # score threshold, chosen from this folder
+            "use_laplacian":             bool(use_laplacian),
             "laplacian_threshold":       laplacian_threshold,
             "blur_logic":                blur_logic,
             "brightness_min":            brightnessMin,

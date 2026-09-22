@@ -10,6 +10,9 @@
 import cv2
 import numpy as np
 
+from appcore.utils.fft_utils import (fft_ring_power, fft_blur_score, blur_scores_at,
+                                     choose_blur_cutoff, flag_blurry, DEFAULT_BLUR_MAD_K)
+
 
 class ImageQualityAnalyzer:
     """
@@ -18,12 +21,11 @@ class ImageQualityAnalyzer:
     All blur, brightness, contrast, and exposure metrics are computed here so that
     ImageTriage and any other callers do not contain duplicated algorithm code.
 
-    Default thresholds calibrated against 966-image labelled dataset (S/F/M triplets)
-    via grid-search optimisation:
-        fft_shift_radius    = 40    (radius of DC-component mask)
-        fft_blur_threshold  = 21.0  (FFT mean below this → blurry)
-        laplacian_threshold = 150.0 (Laplacian variance below this → blurry)
-    Combined OR logic: F1=0.921, focus-blur recall=99.7%, motion-blur recall=91.3%.
+    FFT blur is judged per folder (one camera): analyze() records each image's
+    FFT ring power, then finalize_fft_blur() chooses the frequency cutoff and the
+    threshold from all the images together and sets the FFT blur flags
+    (see utils/fft_utils.py). An image is FFT-blurry when its score falls well
+    below the folder's typical score.
 
     Parameters
     ----------
@@ -38,8 +40,7 @@ class ImageQualityAnalyzer:
         # ── blur ──────────────────────────────────────────────────────────────
         use_fft_blur=True,
         use_laplacian_blur=True,
-        fft_shift_radius=40,
-        fft_blur_threshold=21.0,
+        fft_blur_mad_k=DEFAULT_BLUR_MAD_K,
         laplacian_threshold=150.0,
         blur_logic="AND",
         # ── brightness ────────────────────────────────────────────────────────
@@ -63,8 +64,7 @@ class ImageQualityAnalyzer:
     ):
         self.use_fft_blur          = use_fft_blur
         self.use_laplacian_blur    = use_laplacian_blur
-        self.fft_shift_radius      = fft_shift_radius
-        self.fft_blur_threshold    = fft_blur_threshold
+        self.fft_blur_mad_k        = fft_blur_mad_k
         self.laplacian_threshold   = laplacian_threshold
         self.blur_logic            = blur_logic.upper()
 
@@ -99,33 +99,25 @@ class ImageQualityAnalyzer:
         Returns a dict with raw metrics, boolean flags, and top-level summary:
             is_bad  (bool) – True if any enabled check fails
             reason  (str)  – comma-separated failing checks, or 'Nominal'
+
+        The FFT blur flag is not known yet: result["fft_ring_power"] holds this
+        image's FFT ring power and result["is_blurry_fft"] is None until
+        finalize_fft_blur() is called with the whole folder's results.
         """
         gray_full  = self._preprocess(image, apply_roi=False)
         gray_blur  = self._preprocess(image, apply_roi=True)
         result     = {}
-        reasons    = []
 
         # ── blur (focus ROI if defined) ────────────────────────────────────
-        fft_blurry = False
-        lap_blurry = False
-
         if self.use_fft_blur:
-            blur_fft               = self._compute_blur_fft(gray_blur)
-            result["blur_fft"]     = blur_fft
-            fft_blurry             = blur_fft < self.fft_blur_threshold
-            result["is_blurry_fft"] = fft_blurry
+            result["fft_ring_power"] = fft_ring_power(gray_blur)
+            result["blur_fft"]       = None    # set by finalize_fft_blur()
+            result["is_blurry_fft"]  = None
 
         if self.use_laplacian_blur:
             lap_var                       = self._compute_laplacian_var(gray_blur)
             result["blur_laplacian"]      = lap_var
-            lap_blurry                    = lap_var < self.laplacian_threshold
-            result["is_blurry_laplacian"] = lap_blurry
-
-        if self.use_fft_blur or self.use_laplacian_blur:
-            is_blurry = (fft_blurry and lap_blurry) if self.blur_logic == "AND" else (fft_blurry or lap_blurry)
-            result["is_blurry"] = is_blurry
-            if is_blurry:
-                reasons.append("Blurry")
+            result["is_blurry_laplacian"] = lap_var < self.laplacian_threshold
 
         # ── brightness (always full frame) ────────────────────────────────
         if self.use_brightness:
@@ -135,10 +127,6 @@ class ImageQualityAnalyzer:
             too_light               = brightness > self.brightness_max
             result["is_too_dark"]   = too_dark
             result["is_too_light"]  = too_light
-            if too_dark:
-                reasons.append("Too Dark")
-            if too_light:
-                reasons.append("Too Light")
 
         # ── contrast (always full frame) ──────────────────────────────────
         if self.use_contrast:
@@ -146,8 +134,6 @@ class ImageQualityAnalyzer:
             result["contrast"]        = contrast
             low_contrast              = contrast < self.contrast_threshold
             result["is_low_contrast"] = low_contrast
-            if low_contrast:
-                reasons.append("Low Contrast")
 
         # ── exposure clipping (always full frame) ─────────────────────────
         if self.use_exposure_clipping:
@@ -155,8 +141,6 @@ class ImageQualityAnalyzer:
             result["clip_fraction"] = clip_fraction
             clipped                 = clip_fraction > self.clip_percent
             result["is_clipped"]    = clipped
-            if clipped:
-                reasons.append("Exposure Clipped")
 
         # ── color imbalance (full frame, RGB) ────────────────────────────
         if self.use_color_imbalance:
@@ -164,12 +148,57 @@ class ImageQualityAnalyzer:
             result["color_imbalance"]    = imbalance
             is_imbalanced                = imbalance > self.color_imbalance_threshold
             result["is_color_imbalanced"] = is_imbalanced
-            if is_imbalanced:
-                reasons.append("Color Imbalance")
 
+        self._summarize(result)
+        return result
+
+    def finalize_fft_blur(self, results):
+        """
+        Set the FFT blur flags for one folder's results (a list of analyze() dicts),
+        in place. Chooses the cutoff and threshold from all the images together,
+        then recomputes is_blurry, is_bad and reason for every result.
+
+        With fewer images than fft_utils.MIN_IMAGES_FOR_AUTO_CUTOFF the FFT check
+        is skipped (is_blurry_fft stays None) and blur uses the Laplacian alone.
+        Returns (cutoff, threshold); threshold is None when nothing could be flagged.
+        """
+        scored = [r for r in results if r.get("fft_ring_power") is not None]
+        if not scored:
+            return None, None
+
+        ring_powers = np.array([r["fft_ring_power"] for r in scored])
+        cutoff, cutoff_ring, _ = choose_blur_cutoff(ring_powers)
+        threshold = None
+        if cutoff_ring is not None:
+            scores = blur_scores_at(ring_powers, cutoff_ring)
+            flags, threshold = flag_blurry(scores, k=self.fft_blur_mad_k)
+            for r, score, flag in zip(scored, scores, flags):
+                r["blur_fft"]      = float(score)
+                r["is_blurry_fft"] = bool(flag)
+
+        for r in results:
+            self._summarize(r)
+        return cutoff, threshold
+
+    def _summarize(self, result):
+        """Combine the blur flags and build is_bad / reason from all flags in result."""
+        fft = result.get("is_blurry_fft")        # None: not decided (yet)
+        lap = result.get("is_blurry_laplacian")  # None: check disabled
+        checks = [f for f in (fft, lap) if f is not None]
+        if checks:
+            if self.blur_logic == "AND" and len(checks) == 2:
+                result["is_blurry"] = fft and lap
+            else:
+                result["is_blurry"] = any(checks)
+
+        reasons = []
+        for key, label in (("is_blurry", "Blurry"), ("is_too_dark", "Too Dark"),
+                           ("is_too_light", "Too Light"), ("is_low_contrast", "Low Contrast"),
+                           ("is_clipped", "Exposure Clipped"), ("is_color_imbalanced", "Color Imbalance")):
+            if result.get(key):
+                reasons.append(label)
         result["is_bad"] = bool(reasons)
         result["reason"] = ", ".join(reasons) if reasons else "Nominal"
-        return result
 
     def is_bad_image(self, image) -> tuple:
         r = self.analyze(image)
@@ -221,16 +250,6 @@ class ImageQualityAnalyzer:
         if cropped.size == 0:
             return gray
         return cropped
-
-    def _compute_blur_fft(self, gray: np.ndarray) -> float:
-        h, w      = gray.shape
-        cX, cY    = w // 2, h // 2
-        fft_shift = np.fft.fftshift(np.fft.fft2(gray))
-        r         = self.fft_shift_radius
-        fft_shift[cY - r:cY + r, cX - r:cX + r] = 0
-        recon     = np.fft.ifft2(np.fft.ifftshift(fft_shift))
-        magnitude = 20 * np.log(np.abs(recon) + 1e-8)
-        return float(np.mean(magnitude))
 
     def _compute_laplacian_var(self, gray: np.ndarray) -> float:
         return float(cv2.Laplacian(gray, cv2.CV_64F).var())

@@ -3699,11 +3699,13 @@ class MainWindow(QMainWindow):
                         myTriage = ImageTriage()
                         myTriage.cleanImages(folder, \
                                              False, \
-                                             TriageDlg.getBlurThreshold(), TriageDlg.getShiftSize(), \
                                              TriageDlg.getBrightnessMin(), TriageDlg.getBrightnessMax(), \
                                              TriageDlg.getCreateReport(), TriageDlg.getMoveImages(), \
                                              TriageDlg.getCorrectAlignment(), TriageDlg.getSavePolylines(),
                                              TriageDlg.getReferenceImageFilename(), TriageDlg.getRotationThreshold(),
+                                             use_fft_blur=TriageDlg.getUseFftBlur(),
+                                             use_laplacian=TriageDlg.getUseLaplacian(),
+                                             laplacian_threshold=TriageDlg.getLaplacianThreshold(),
                                              focus_roi=TriageDlg.getFocusROI(),
                                              use_color_imbalance=TriageDlg.getUseColorImbalance(),
                                              color_imbalance_threshold=TriageDlg.getColorImbalanceThreshold())
@@ -6214,10 +6216,6 @@ def my_main():
                                help="Rotation tolerance for considering an image over- or under-rotated.")
     triage_parser.add_argument("-i", "--image", type=str, required=False, default=None,
                                help="Image to use as ground truth for rotation angle.")
-    triage_parser.add_argument("-b", "--blurthreshold", type=float, required=False, default=17.50,
-                               help="Blur threshold for FFT.")
-    triage_parser.add_argument("-s", "--shift", type=int, required=False, default=60,
-                               help="FFT Shift size for blur estimation.")
     triage_parser.add_argument("-f", "--folder", type=str, required=True, help="A folder must be specified.")
 
     # Slice parser
@@ -6560,8 +6558,6 @@ def run_cli(args):
         create_report = True
         move_images = True
         fetch_recursive = False
-        blur_threshold = 17.50
-        shift_size = 60
         #min_val = 65.0
         #max_val = 180.0
         correct_alignment = False
@@ -6575,7 +6571,6 @@ def run_cli(args):
         myTriage = ImageTriage(False)
         myTriage.cleanImages(args.folder, \
                              fetch_recursive, \
-                             blur_threshold, shift_size, \
                              args.min, args.max, \
                              create_report, move_images, \
                              correct_alignment, save_poly_lines,

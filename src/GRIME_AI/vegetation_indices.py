@@ -155,47 +155,24 @@ class Vegetation_Indices:
     # ------------------------------------------------------------------------------------------------------------------
     def compute_NDVI(self, red_sum, green_sum, blue_sum):
         '''
-        True NDVI:
-        NDVI is calculated using the formula: (NIR - Red) / (NIR + Red), where NIR is the near-infrared band and Red is
-        the red band.
+        False NDVI (RGB): NDVI = (G - R) / (G + R)
 
-        False NDVI (using RGB):
-        The idea is to use a similar formula but with RGB values, treating the green band as a proxy for NIR. A common
-        formula is: (Green - Red) / (Green + Red - Blue).
+        True NDVI is (NIR - Red) / (NIR + Red). With RGB imagery the green
+        band stands in for NIR. Raises ZeroDivisionError when G + R is 0;
+        get_greenness catches it and records -999.
         '''
-
-        try:
-            NDVI = (green_sum - red_sum) / (green_sum + red_sum + blue_sum)
-        except ValueError:
-            NDVI = -999
-
-        return(NDVI)
-
+        return (green_sum - red_sum) / (green_sum + red_sum)
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def compute_RGI(self, red_sum, green_sum, blue_sum):
-
         '''
-        The Relative Greenness Index (RGI) is typically used in remote sensing and vegetation studies to assess
-        the "greenness" of vegetation in a given area. The specific formula for the RGI may vary depending on the
-        application, but a common version involves the following equation:
-                𝑅𝐺𝐼 = 𝐺 / (𝑅 + 𝐵)
+        Red-Green Index (RGI): RGI = G / R
 
-        Where:
-            G: Reflectance in the green spectral band
-            R: Reflectance in the red spectral band
-            B: Reflectance in the blue spectral band
-
-            This index measures how relatively green an area is by comparing the green reflectance to the total reflectance across red, blue, and green bands. It's often used as a simple indicator of vegetation health or coverage.
+        Ratio of green to red. Raises ZeroDivisionError when R is 0;
+        get_greenness catches it and records -999.
         '''
-
-        try:
-            RGI = green_sum / (red_sum + green_sum + blue_sum)
-        except ValueError:
-            RGI = -999
-
-        return RGI
+        return green_sum / red_sum
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
