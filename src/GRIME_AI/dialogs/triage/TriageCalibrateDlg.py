@@ -32,7 +32,11 @@ from appcore.Save_Utils import Save_Utils
 from appcore.QLabel_drawing_modes import DrawingMode
 from ...app_identity import APP_CONFIG_FILENAME
 
-BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;}'
+BUTTON_CSS_STEEL_BLUE = (
+    'QPushButton {background-color: steelblue; color: white;}'
+    'QPushButton:hover {background-color: #5a93c2;}'
+    'QPushButton:disabled {background-color: gray; color: black;}'
+)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.tif', '.tiff'}
 
 
@@ -54,14 +58,23 @@ class CalibrationWorker(QThread):
         self.focus_roi              = focus_roi
 
     def run(self):
-        result = self.calibrator.calibrate(
-            good_folder            = self.good_folder,
-            blurry_folder          = self.blurry_folder,
-            exposure_folder        = self.exposure_folder,
-            color_imbalance_folder = self.color_imbalance_folder,
-            focus_roi              = self.focus_roi,
-            progress_callback = lambda msg, pct: self.progress.emit(msg, pct)
-        )
+        # An exception raised inside QThread.run() is only printed to the console;
+        # without this the dialog stays stuck with no feedback.
+        try:
+            result = self.calibrator.calibrate(
+                good_folder            = self.good_folder,
+                blurry_folder          = self.blurry_folder,
+                exposure_folder        = self.exposure_folder,
+                color_imbalance_folder = self.color_imbalance_folder,
+                focus_roi              = self.focus_roi,
+                progress_callback = lambda msg, pct: self.progress.emit(msg, pct)
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            result = CalibrationResult()
+            result.success = False
+            result.error_message = f"{type(e).__name__}: {e}"
         self.finished.emit(result)
 
 
@@ -111,6 +124,7 @@ class TriageCalibrateDlg(QDialog):
 
         self._setup_connections()
         self._apply_styles()
+        self._update_run_button_state()
         self._init_image_panel()
         self._load_focus_roi_from_config()
 
@@ -379,17 +393,51 @@ class TriageCalibrateDlg(QDialog):
     # Button state
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _missing_required_folders(self) -> list:
+        """Required folder selections that are still empty."""
+        missing = []
+        if not self.lineEdit_GoodFolder.text().strip():
+            missing.append("Good images folder.")
+        if not (self.lineEdit_BlurryFolder.text().strip() or self.lineEdit_ExposureFolder.text().strip()):
+            missing.append("A Blurry images folder or an Exposure images folder (at least one).")
+        return missing
+
+    def _invalid_selected_folders(self) -> list:
+        """Selected folders that do not exist or contain no images."""
+        problems = []
+        for label, line_edit in [("Good images",            self.lineEdit_GoodFolder),
+                                 ("Blurry images",          self.lineEdit_BlurryFolder),
+                                 ("Exposure images",        self.lineEdit_ExposureFolder),
+                                 ("Color imbalance images", self.lineEdit_ColorImbalanceFolder)]:
+            folder = line_edit.text().strip()
+            if not folder:
+                continue
+            if not os.path.isdir(folder):
+                problems.append(f"{label}: folder does not exist ({folder}).")
+            elif not any(os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS for f in os.listdir(folder)):
+                problems.append(f"{label}: folder contains no images ({folder}).")
+        return problems
+
     def _update_run_button_state(self):
-        good_set     = bool(self.lineEdit_GoodFolder.text().strip())
-        blurry_set   = bool(self.lineEdit_BlurryFolder.text().strip())
-        exposure_set = bool(self.lineEdit_ExposureFolder.text().strip())
-        self.pushButton_RunCalibration.setEnabled(good_set and (blurry_set or exposure_set))
+        missing = self._missing_required_folders()
+        self.pushButton_RunCalibration.setEnabled(not missing)
+        if missing:
+            self.pushButton_RunCalibration.setToolTip("Required before running:\n" + "\n".join(missing))
+        else:
+            self.pushButton_RunCalibration.setToolTip("Run the calibration.")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Calibration
     # ──────────────────────────────────────────────────────────────────────────
 
     def _run_calibration(self):
+        problems = self._missing_required_folders() + self._invalid_selected_folders()
+        if problems:
+            QMessageBox.warning(self, "Cannot Run Calibration",
+                                "Please fix the following before running calibration:\n\n"
+                                + "\n".join(f"\u2022 {p}" for p in problems))
+            return
+
         self.pushButton_RunCalibration.setEnabled(False)
         self.pushButton_ApplyAndClose.setEnabled(False)
         self.progressBar.setValue(0)
@@ -424,9 +472,7 @@ class TriageCalibrateDlg(QDialog):
             QMessageBox.critical(self, "Calibration Failed", result.error_message)
             return
 
-        self.lineEdit_ResultFftThreshold.setText(f"{result.fft_blur_threshold:.2f}")
         self.lineEdit_ResultLaplacianThreshold.setText(f"{result.laplacian_threshold:.1f}")
-        self.lineEdit_ResultFftRadius.setText(str(result.fft_shift_radius))
         self.lineEdit_ResultBrightnessMin.setText(f"{result.brightness_min:.1f}")
         self.lineEdit_ResultBrightnessMax.setText(f"{result.brightness_max:.1f}")
 
@@ -469,7 +515,7 @@ class TriageCalibrateDlg(QDialog):
         try:
             config = self._load_config()
             triage = config.get("triage", {})
-            return any(k in triage for k in ("laplacian_threshold", "fft_blur_threshold", "focus_roi"))
+            return any(k in triage for k in ("laplacian_threshold", "focus_roi"))
         except Exception:
             return False
 
@@ -499,6 +545,9 @@ class TriageCalibrateDlg(QDialog):
             config = self._load_config()
             config.setdefault("triage", {})
             config["triage"].update(result.to_dict())
+            # FFT blur is now chosen automatically per folder; drop the old fixed settings.
+            config["triage"].pop("fft_blur_threshold", None)
+            config["triage"].pop("fft_shift_radius", None)
             if self._triage_folder:
                 config["triage"]["calibration_folder"] = self._triage_folder
             self._write_config(config)
@@ -541,9 +590,7 @@ class TriageCalibrateDlg(QDialog):
             return 0.5
 
     def _clear_results(self):
-        for widget in [self.lineEdit_ResultFftThreshold,
-                       self.lineEdit_ResultLaplacianThreshold,
-                       self.lineEdit_ResultFftRadius,
+        for widget in [self.lineEdit_ResultLaplacianThreshold,
                        self.lineEdit_ResultBrightnessMin,
                        self.lineEdit_ResultBrightnessMax,
                        self.lineEdit_ResultColorImbalance]:

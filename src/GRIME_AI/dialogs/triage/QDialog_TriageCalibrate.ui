@@ -141,51 +141,35 @@
      <item>
       <widget class="QGroupBox" name="groupBox_Results">
        <property name="title"><string>Calibrated parameters</string></property>
-       <layout class="QGridLayout" name="gridLayoutResults" columnstretch="1,1,1,1,1">
+       <layout class="QGridLayout" name="gridLayoutResults" columnstretch="1,1,1,1">
 
-        <item row="0" column="0"><widget class="QLabel" name="labelResFftThr"><property name="text"><string>Focus sensitivity</string></property></widget></item>
-        <item row="0" column="1"><widget class="QLabel" name="labelResLapThr"><property name="text"><string>Edge sensitivity</string></property></widget></item>
-        <item row="0" column="2"><widget class="QLabel" name="labelResRadius"><property name="text"><string>Uniform area filter</string></property></widget></item>
-        <item row="0" column="3"><widget class="QLabel" name="labelResBMin"><property name="text"><string>Too dark below</string></property></widget></item>
-        <item row="0" column="4"><widget class="QLabel" name="labelResBMax"><property name="text"><string>Too bright above</string></property></widget></item>
-        <item row="0" column="5"><widget class="QLabel" name="labelResColorImbalance"><property name="text"><string>Color imbalance</string></property></widget></item>
+        <item row="0" column="0"><widget class="QLabel" name="labelResLapThr"><property name="text"><string>Edge sensitivity</string></property></widget></item>
+        <item row="0" column="1"><widget class="QLabel" name="labelResBMin"><property name="text"><string>Too dark below</string></property></widget></item>
+        <item row="0" column="2"><widget class="QLabel" name="labelResBMax"><property name="text"><string>Too bright above</string></property></widget></item>
+        <item row="0" column="3"><widget class="QLabel" name="labelResColorImbalance"><property name="text"><string>Color imbalance</string></property></widget></item>
 
         <item row="1" column="0">
-         <widget class="QLineEdit" name="lineEdit_ResultFftThreshold">
-          <property name="readOnly"><bool>true</bool></property>
-          <property name="placeholderText"><string>—</string></property>
-          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
-         </widget>
-        </item>
-        <item row="1" column="1">
          <widget class="QLineEdit" name="lineEdit_ResultLaplacianThreshold">
           <property name="readOnly"><bool>true</bool></property>
           <property name="placeholderText"><string>—</string></property>
           <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
          </widget>
         </item>
-        <item row="1" column="2">
-         <widget class="QLineEdit" name="lineEdit_ResultFftRadius">
-          <property name="readOnly"><bool>true</bool></property>
-          <property name="placeholderText"><string>—</string></property>
-          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
-         </widget>
-        </item>
-        <item row="1" column="3">
+        <item row="1" column="1">
          <widget class="QLineEdit" name="lineEdit_ResultBrightnessMin">
           <property name="readOnly"><bool>true</bool></property>
           <property name="placeholderText"><string>—</string></property>
           <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
          </widget>
         </item>
-        <item row="1" column="4">
+        <item row="1" column="2">
          <widget class="QLineEdit" name="lineEdit_ResultBrightnessMax">
           <property name="readOnly"><bool>true</bool></property>
           <property name="placeholderText"><string>—</string></property>
           <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
          </widget>
         </item>
-        <item row="1" column="5">
+        <item row="1" column="3">
          <widget class="QLineEdit" name="lineEdit_ResultColorImbalance">
           <property name="readOnly"><bool>true</bool></property>
           <property name="placeholderText"><string>—</string></property>

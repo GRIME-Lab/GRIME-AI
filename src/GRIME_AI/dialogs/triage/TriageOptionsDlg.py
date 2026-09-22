@@ -22,8 +22,6 @@ BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;
 
 SLIDER_RANGES = {
     "lap":  (0,   500, 150),
-    "fft":  (0,    30,  21),
-    "uaf":  (1,   100,  40),
     "bmin": (0,   255,  40),
     "bmax": (0,   255, 215),
 }
@@ -57,8 +55,6 @@ class TriageOptionsDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def _setup_validators(self):
         self.lineEdit_lap_value.setValidator(QIntValidator(0, 500))
-        self.lineEdit_fft_value.setValidator(QDoubleValidator(0.0, 30.0, 1))
-        self.lineEdit_uaf_value.setValidator(QIntValidator(1, 100))
         self.lineEdit_bmin_value.setValidator(QIntValidator(0, 255))
         self.lineEdit_bmax_value.setValidator(QIntValidator(0, 255))
 
@@ -67,22 +63,16 @@ class TriageOptionsDlg(QDialog):
         self.pushButton_SelectReferenceImage.clicked.connect(self.selectReferenceImage)
         self.pushButton_Calibrate.clicked.connect(self._open_calibration_dialog)
 
-        self.checkBox_UseFftBlur.toggled.connect(self._on_fft_toggled)
         self.checkBox_UseLaplacian.toggled.connect(self._on_laplacian_toggled)
 
         self.sliderLaplacian.valueChanged.connect(self._on_lap_slider_changed)
-        self.sliderFftBlur.valueChanged.connect(self._on_fft_slider_changed)
-        self.sliderUniformArea.valueChanged.connect(self._on_uaf_slider_changed)
         self.sliderBrightnessMin.valueChanged.connect(self._on_bmin_slider_changed)
         self.sliderBrightnessMax.valueChanged.connect(self._on_bmax_slider_changed)
 
         self.lineEdit_lap_value.editingFinished.connect(self._on_lap_edit_finished)
-        self.lineEdit_fft_value.editingFinished.connect(self._on_fft_edit_finished)
-        self.lineEdit_uaf_value.editingFinished.connect(self._on_uaf_edit_finished)
         self.lineEdit_bmin_value.editingFinished.connect(self._on_bmin_edit_finished)
         self.lineEdit_bmax_value.editingFinished.connect(self._on_bmax_edit_finished)
 
-        self._on_fft_toggled(self.checkBox_UseFftBlur.isChecked())
         self._on_laplacian_toggled(self.checkBox_UseLaplacian.isChecked())
         self.checkBox_UseFocusROI.toggled.connect(self._on_focus_roi_toggled)
         self.checkBox_UseColorImbalance.toggled.connect(self._on_color_imbalance_toggled)
@@ -96,20 +86,10 @@ class TriageOptionsDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def _sync_all_displays(self):
         self._on_lap_slider_changed(self.sliderLaplacian.value())
-        self._on_fft_slider_changed(self.sliderFftBlur.value())
-        self._on_uaf_slider_changed(self.sliderUniformArea.value())
         self._on_bmin_slider_changed(self.sliderBrightnessMin.value())
         self._on_bmax_slider_changed(self.sliderBrightnessMax.value())
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_fft_toggled(self, checked):
-        for w in [self.sliderFftBlur, self.sliderUniformArea,
-                  self.labelFftLeft, self.labelFftMiddle, self.labelFftRight,
-                  self.labelUniformLeft, self.labelUniformMiddle, self.labelUniformRight,
-                  self.lineEdit_fft_value, self.lineEdit_uaf_value,
-                  self.doubleSpinBoxBlurThreshhold, self.spinBoxShiftSize]:
-            w.setEnabled(checked)
-
     def _on_laplacian_toggled(self, checked):
         for w in [self.sliderLaplacian,
                   self.labelLapLeft, self.labelLapMiddle, self.labelLapRight,
@@ -121,14 +101,6 @@ class TriageOptionsDlg(QDialog):
     def _on_lap_slider_changed(self, val):
         self.lineEdit_lap_value.setText(str(val))
         self.doubleSpinBoxLaplacianThreshold.setValue(float(val))
-
-    def _on_fft_slider_changed(self, val):
-        self.lineEdit_fft_value.setText(str(val))
-        self.doubleSpinBoxBlurThreshhold.setValue(float(val))
-
-    def _on_uaf_slider_changed(self, val):
-        self.lineEdit_uaf_value.setText(str(val))
-        self.spinBoxShiftSize.setValue(val)
 
     def _on_bmin_slider_changed(self, val):
         self.lineEdit_bmin_value.setText(str(val))
@@ -148,20 +120,6 @@ class TriageOptionsDlg(QDialog):
             self.sliderLaplacian.setValue(val)
         except ValueError:
             self._on_lap_slider_changed(self.sliderLaplacian.value())
-
-    def _on_fft_edit_finished(self):
-        try:
-            val = self._clamp(int(round(float(self.lineEdit_fft_value.text()))), 0, 30)
-            self.sliderFftBlur.setValue(val)
-        except ValueError:
-            self._on_fft_slider_changed(self.sliderFftBlur.value())
-
-    def _on_uaf_edit_finished(self):
-        try:
-            val = self._clamp(int(self.lineEdit_uaf_value.text()), 1, 100)
-            self.sliderUniformArea.setValue(val)
-        except ValueError:
-            self._on_uaf_slider_changed(self.sliderUniformArea.value())
 
     def _on_bmin_edit_finished(self):
         try:
@@ -197,8 +155,6 @@ class TriageOptionsDlg(QDialog):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _apply_calibration(self, result):
-        self.sliderFftBlur.setValue(int(round(result.fft_blur_threshold)))
-        self.sliderUniformArea.setValue(int(round(result.fft_shift_radius)))
         self.sliderLaplacian.setValue(int(round(result.laplacian_threshold)))
         self.sliderBrightnessMin.setValue(int(round(result.brightness_min)))
         self.sliderBrightnessMax.setValue(int(round(result.brightness_max)))
@@ -294,10 +250,6 @@ class TriageOptionsDlg(QDialog):
             triage = config.get("triage", {})
             if not triage:
                 return
-            if "fft_blur_threshold"  in triage:
-                self.sliderFftBlur.setValue(int(round(triage["fft_blur_threshold"])))
-            if "fft_shift_radius"    in triage:
-                self.sliderUniformArea.setValue(int(round(triage["fft_shift_radius"])))
             if "laplacian_threshold" in triage:
                 self.sliderLaplacian.setValue(int(round(triage["laplacian_threshold"])))
             if "brightness_min"      in triage:
@@ -335,14 +287,8 @@ class TriageOptionsDlg(QDialog):
     def getUseLaplacian(self):
         return self.checkBox_UseLaplacian.isChecked()
 
-    def getBlurThreshold(self):
-        return self.doubleSpinBoxBlurThreshhold.value()
-
     def getLaplacianThreshold(self):
         return self.doubleSpinBoxLaplacianThreshold.value()
-
-    def getShiftSize(self):
-        return self.spinBoxShiftSize.value()
 
     def getBrightnessMin(self):
         return self.doubleSpinBoxBrightnessMin.value()
