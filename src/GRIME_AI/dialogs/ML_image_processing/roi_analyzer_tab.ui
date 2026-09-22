@@ -34,71 +34,6 @@
      <item>
       <layout class="QVBoxLayout" name="verticalLayoutLeftPanel">
 
-       <item>
-        <widget class="QGroupBox" name="groupBox_clusteringMethod">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-           <horstretch>0</horstretch><verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="title"><string>Clustering Method</string></property>
-         <layout class="QVBoxLayout" name="verticalLayoutClusteringInner">
-          <property name="spacing"><number>2</number></property>
-          <item>
-           <widget class="QRadioButton" name="radioButton_kmeans">
-            <property name="text"><string>K-Means</string></property>
-            <property name="checked"><bool>true</bool></property>
-            <attribute name="buttonGroup"><string>buttonGroup_clusteringMethod</string></attribute>
-           </widget>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayoutKmeansParams">
-            <item><spacer name="spacer_kmeans_indent"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer></item>
-            <item><widget class="QLabel" name="label_numClusters"><property name="text"><string>Clusters:</string></property></widget></item>
-            <item><widget class="QSpinBox" name="spinBox_numClusters"><property name="minimum"><number>1</number></property><property name="maximum"><number>10</number></property><property name="value"><number>3</number></property></widget></item>
-            <item><spacer name="spacer_kmeans_right"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
-           </layout>
-          </item>
-          <item>
-           <widget class="QRadioButton" name="radioButton_gmm">
-            <property name="text"><string>GMM</string></property>
-            <attribute name="buttonGroup"><string>buttonGroup_clusteringMethod</string></attribute>
-           </widget>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayoutGmmParams">
-            <item><spacer name="spacer_gmm_indent"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer></item>
-            <item><widget class="QLabel" name="label_numClusters_gmm"><property name="text"><string>Clusters:</string></property><property name="enabled"><bool>false</bool></property></widget></item>
-            <item><widget class="QSpinBox" name="spinBox_numClusters_gmm"><property name="minimum"><number>1</number></property><property name="maximum"><number>10</number></property><property name="value"><number>3</number></property><property name="enabled"><bool>false</bool></property></widget></item>
-            <item><spacer name="spacer_gmm_right"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
-           </layout>
-          </item>
-          <item>
-           <widget class="QRadioButton" name="radioButton_meanshift">
-            <property name="text"><string>Mean-Shift</string></property>
-            <attribute name="buttonGroup"><string>buttonGroup_clusteringMethod</string></attribute>
-           </widget>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayoutMeanshiftRow1">
-            <item><spacer name="spacer_ms_indent1"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer></item>
-            <item><widget class="QCheckBox" name="checkBox_autoEstimate"><property name="text"><string>Auto</string></property><property name="checked"><bool>true</bool></property><property name="enabled"><bool>false</bool></property></widget></item>
-            <item><widget class="QLabel" name="label_quantile"><property name="text"><string>Quantile:</string></property><property name="enabled"><bool>false</bool></property></widget></item>
-            <item><widget class="QDoubleSpinBox" name="doubleSpinBox_quantile"><property name="minimum"><double>0.05</double></property><property name="maximum"><double>0.95</double></property><property name="singleStep"><double>0.05</double></property><property name="value"><double>0.20</double></property><property name="enabled"><bool>false</bool></property></widget></item>
-            <item><spacer name="spacer_ms_right1"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
-           </layout>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayoutMeanshiftRow2">
-            <item><spacer name="spacer_ms_indent2"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeType"><enum>QSizePolicy::Fixed</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer></item>
-            <item><widget class="QLabel" name="label_bandwidth"><property name="text"><string>Bandwidth:</string></property><property name="enabled"><bool>false</bool></property></widget></item>
-            <item><widget class="QDoubleSpinBox" name="doubleSpinBox_bandwidth"><property name="minimum"><double>1.00</double></property><property name="maximum"><double>200.00</double></property><property name="singleStep"><double>0.5</double></property><property name="value"><double>15.00</double></property><property name="enabled"><bool>false</bool></property></widget></item>
-            <item><spacer name="spacer_ms_right2"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
-           </layout>
-          </item>
-         </layout>
-        </widget>
-       </item>
 
        <item>
         <widget class="QGroupBox" name="groupBox_metrics">
@@ -120,54 +55,16 @@
           <item row="3" column="1"><widget class="QLineEdit" name="lineEdit_GLI"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>8</number></property></widget></item>
           <item row="4" column="0"><widget class="QLabel" name="label_GCC"><property name="text"><string>GCC:</string></property></widget></item>
           <item row="4" column="1"><widget class="QLineEdit" name="lineEdit_GCC"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>8</number></property></widget></item>
+          <item row="5" column="0"><widget class="QLabel" name="label_glcm_contrast"><property name="text"><string>GLCM Contrast:</string></property></widget></item>
+          <item row="5" column="1"><widget class="QLineEdit" name="lineEdit_glcm_contrast"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>10</number></property></widget></item>
+          <item row="6" column="0"><widget class="QLabel" name="label_glcm_homogeneity"><property name="text"><string>GLCM Homogeneity:</string></property></widget></item>
+          <item row="6" column="1"><widget class="QLineEdit" name="lineEdit_glcm_homogeneity"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>10</number></property></widget></item>
+          <item row="7" column="0"><widget class="QLabel" name="label_glcm_correlation"><property name="text"><string>GLCM Correlation:</string></property></widget></item>
+          <item row="7" column="1"><widget class="QLineEdit" name="lineEdit_glcm_correlation"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>10</number></property></widget></item>
          </layout>
         </widget>
        </item>
 
-       <item>
-        <widget class="QGroupBox" name="groupBox_textureAnalysis">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-           <horstretch>0</horstretch><verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="title"><string>Texture Analysis</string></property>
-         <layout class="QVBoxLayout" name="verticalLayoutTextureAnalysis">
-          <property name="spacing"><number>4</number></property>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayoutTextureRow1">
-            <item><widget class="QCheckBox" name="checkBox_texture_GLCM"><property name="text"><string>GLCM</string></property><property name="checked"><bool>true</bool></property></widget></item>
-            <item><widget class="QCheckBox" name="checkBox_texture_Gabor"><property name="text"><string>Gabor</string></property></widget></item>
-            <item><spacer name="spacer_texture_row1"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
-           </layout>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayoutTextureRow2">
-            <item><widget class="QCheckBox" name="checkBox_texture_LBP"><property name="text"><string>LBP</string></property></widget></item>
-            <item><widget class="QCheckBox" name="checkBox_texture_Wavelet"><property name="text"><string>Wavelet</string></property></widget></item>
-            <item><spacer name="spacer_texture_row2"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
-           </layout>
-          </item>
-          <item>
-           <layout class="QHBoxLayout" name="horizontalLayoutTextureRow3">
-            <item><widget class="QCheckBox" name="checkBox_texture_Fourier"><property name="text"><string>Fourier</string></property></widget></item>
-            <item><spacer name="spacer_texture_row3"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
-           </layout>
-          </item>
-          <item>
-           <layout class="QFormLayout" name="formLayout_glcmMetrics">
-            <property name="labelAlignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
-            <item row="0" column="0"><widget class="QLabel" name="label_glcm_contrast"><property name="text"><string>Contrast:</string></property></widget></item>
-            <item row="0" column="1"><widget class="QLineEdit" name="lineEdit_glcm_contrast"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>10</number></property></widget></item>
-            <item row="1" column="0"><widget class="QLabel" name="label_glcm_homogeneity"><property name="text"><string>Homogeneity:</string></property></widget></item>
-            <item row="1" column="1"><widget class="QLineEdit" name="lineEdit_glcm_homogeneity"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>10</number></property></widget></item>
-            <item row="2" column="0"><widget class="QLabel" name="label_glcm_correlation"><property name="text"><string>Correlation:</string></property></widget></item>
-            <item row="2" column="1"><widget class="QLineEdit" name="lineEdit_glcm_correlation"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>10</number></property></widget></item>
-           </layout>
-          </item>
-         </layout>
-        </widget>
-       </item>
 
        <!-- Spacer pushes group boxes to top -->
        <item>
@@ -270,6 +167,26 @@
         <layout class="QHBoxLayout" name="horizontalLayoutROIButtons">
          <item><spacer name="leftSpacerROI"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property></spacer></item>
          <item>
+          <widget class="QCheckBox" name="checkBox_correlate_sensor_data">
+           <property name="toolTip"><string>Match each image to the nearest NWIS sensor reading and add the sensor columns to the exported features.</string></property>
+           <property name="text"><string>Correlate Sensor Data</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="pushButton_sensor_options">
+           <property name="minimumSize"><size><width>150</width><height>40</height></size></property>
+           <property name="toolTip"><string>Where the NWIS sensor file comes from, and how close in time a reading must be to an image.</string></property>
+           <property name="text"><string>Sensor Data Options</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="pushButton_feature_options">
+           <property name="minimumSize"><size><width>150</width><height>40</height></size></property>
+           <property name="toolTip"><string>Clustering and texture options, shared with the Segment Images tab.</string></property>
+           <property name="text"><string>Feature Extraction Options</string></property>
+          </widget>
+         </item>
+         <item>
           <widget class="QPushButton" name="pushButton_analyze">
            <property name="minimumSize"><size><width>150</width><height>40</height></size></property>
            <property name="styleSheet"><string notr="true">font: bold 11pt Arial;</string></property>
@@ -297,9 +214,4 @@
  </widget>
  <resources/>
  <connections/>
- <buttongroups>
-  <buttongroup name="buttonGroup_clusteringMethod">
-   <property name="exclusive"><bool>true</bool></property>
-  </buttongroup>
- </buttongroups>
 </ui>

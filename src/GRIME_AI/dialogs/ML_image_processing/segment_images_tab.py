@@ -255,6 +255,7 @@ class SegmentImagesTab(QWidget):
         self.checkBox_copyOriginalModelImage.setChecked(load_model_conf.get("copy_original_model_image", True))
         self.checkBox_save_probability_maps.setChecked(load_model_conf.get("save_probability_maps", True))
         self.checkBox_save_diagnostic_panels.setChecked(load_model_conf.get("save_diagnostic_panels", False))
+        self.checkBox_export_roi_features.setChecked(load_model_conf.get("export_roi_features", False))
 
         # Season filter
         # Segment seasons — restore from config
@@ -336,6 +337,7 @@ class SegmentImagesTab(QWidget):
                                   if hasattr(self, "checkBox_use_tta") else False)
 
         site_config.setdefault("load_model", {})
+        site_config["load_model"]["export_roi_features"] = self.checkBox_export_roi_features.isChecked()
 
         # Save the full folder list
         site_config["load_model"]["segmentation_image_folders"] = self.image_folders
@@ -636,6 +638,13 @@ QLineEdit:focus {
 
         self.checkBox_save_diagnostic_panels.toggled.connect(self.on_save_diagnostic_panels_toggled)
         self.checkBox_save_diagnostic_panels.toggled.connect(self.update_model_config)
+
+        # ROI feature export (second pass after segmentation) and its shared options
+        self.checkBox_export_roi_features.toggled.connect(self.on_export_roi_features_toggled)
+        self.checkBox_export_roi_features.toggled.connect(self.update_model_config)
+        self.pushButton_feature_options_segment.clicked.connect(self._open_feature_options)
+        self.pushButton_feature_options_segment.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
+        self.on_export_roi_features_toggled(self.checkBox_export_roi_features.isChecked())
 
         # Segment seasons dual listbox — double-click to move items between lists.
         self.listWidget_availableSegmentSeasons.itemDoubleClicked.connect(
@@ -1100,6 +1109,22 @@ QLineEdit:focus {
     # ------------------------------------------------------------------------------------------------------------------
     def on_save_diagnostic_panels_toggled(self, checked: bool):
         print(f"Save Diagnostic Panels checkbox toggled: {checked}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def on_export_roi_features_toggled(self, checked: bool):
+        """Feature export reads the saved masks, so masks must be saved while it is on."""
+        if checked:
+            self.checkBox_save_predicted_masks.setChecked(True)
+        self.checkBox_save_predicted_masks.setEnabled(not checked)
+        self.checkBox_save_predicted_masks.setToolTip(
+            "Required by Export ROI Features." if checked else "")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _open_feature_options(self):
+        from appcore.dialogs.ML_image_processing.FeatureExtractionOptionsDlg import FeatureExtractionOptionsDlg
+        FeatureExtractionOptionsDlg(self).exec_()
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

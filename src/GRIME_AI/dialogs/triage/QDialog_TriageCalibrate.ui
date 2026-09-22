@@ -224,7 +224,7 @@
 
       <!-- App_QLabel promoted widget -->
       <item>
-       <widget class="App_QLabel" name="label_FocusImage">
+       <widget class="RoiEditorLabel" name="label_FocusImage">
         <property name="text"><string></string></property>
         <property name="alignment"><set>Qt::AlignCenter</set></property>
         <property name="scaledContents"><bool>false</bool></property>
@@ -292,9 +292,9 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>App_QLabel</class>
+   <class>RoiEditorLabel</class>
    <extends>QLabel</extends>
-   <header location="global">appcore.App_QLabel</header>
+   <header location="global">appcore.dialogs.triage.RoiEditorLabel</header>
   </customwidget>
  </customwidgets>
  <resources/>

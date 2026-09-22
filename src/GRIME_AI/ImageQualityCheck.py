@@ -11,7 +11,8 @@ import cv2
 import numpy as np
 
 from appcore.utils.fft_utils import (fft_ring_power, fft_blur_score, blur_scores_at,
-                                     choose_blur_cutoff, flag_blurry, DEFAULT_BLUR_MAD_K)
+                                     choose_blur_cutoff, flag_blurry, calibrated_blur_threshold,
+                                     DEFAULT_BLUR_MAD_K)
 
 
 class ImageQualityAnalyzer:
@@ -26,6 +27,11 @@ class ImageQualityAnalyzer:
     threshold from all the images together and sets the FFT blur flags
     (see utils/fft_utils.py). An image is FFT-blurry when its score falls well
     below the folder's typical score.
+
+    If fft_calibration (from TriageCalibrator) is given and was made with the same
+    focus region and resize, its cutoff is used and the folder threshold is kept
+    between its Good and Blurry bounds (fft_utils.calibrated_blur_threshold).
+    Otherwise the cutoff and threshold come from the folder alone.
 
     Parameters
     ----------
@@ -58,6 +64,7 @@ class ImageQualityAnalyzer:
         # ── preprocessing ─────────────────────────────────────────────────────
         resize_percent=50.0,
         focus_roi=None,             # normalised [x, y, w, h] or None
+        fft_calibration=None,       # dict from TriageCalibrator, or None
         # ── color imbalance ───────────────────────────────────────────────
         use_color_imbalance=False,
         color_imbalance_threshold=0.5,  # flag if max channel fraction exceeds this
@@ -82,6 +89,8 @@ class ImageQualityAnalyzer:
 
         self.resize_percent             = resize_percent
         self.focus_roi                  = focus_roi
+        self.fft_calibration            = fft_calibration
+        self.fft_blur_mode              = None   # how the last finalize_fft_blur() decided
         self.use_color_imbalance        = use_color_imbalance
         self.color_imbalance_threshold  = color_imbalance_threshold
 
@@ -158,8 +167,10 @@ class ImageQualityAnalyzer:
         in place. Chooses the cutoff and threshold from all the images together,
         then recomputes is_blurry, is_bad and reason for every result.
 
-        With fewer images than fft_utils.MIN_IMAGES_FOR_AUTO_CUTOFF the FFT check
-        is skipped (is_blurry_fft stays None) and blur uses the Laplacian alone.
+        Without a usable calibration and with fewer images than
+        fft_utils.MIN_IMAGES_FOR_AUTO_CUTOFF the FFT check is skipped (is_blurry_fft
+        stays None) and blur uses the Laplacian alone. self.fft_blur_mode records
+        which method decided.
         Returns (cutoff, threshold); threshold is None when nothing could be flagged.
         """
         scored = [r for r in results if r.get("fft_ring_power") is not None]
@@ -167,11 +178,29 @@ class ImageQualityAnalyzer:
             return None, None
 
         ring_powers = np.array([r["fft_ring_power"] for r in scored])
-        cutoff, cutoff_ring, _ = choose_blur_cutoff(ring_powers)
+        calibration, mismatch = self._usable_fft_calibration(ring_powers.shape[1])
         threshold = None
-        if cutoff_ring is not None:
-            scores = blur_scores_at(ring_powers, cutoff_ring)
-            flags, threshold = flag_blurry(scores, k=self.fft_blur_mad_k)
+        flags = None
+
+        if calibration is not None:
+            cutoff_ring = calibration["cutoff_ring"]
+            cutoff      = calibration["cutoff"]
+            scores      = blur_scores_at(ring_powers, cutoff_ring)
+            threshold, self.fft_blur_mode = calibrated_blur_threshold(
+                scores, calibration, k=self.fft_blur_mad_k)
+            flags = scores < threshold
+        else:
+            cutoff, cutoff_ring, _ = choose_blur_cutoff(ring_powers)
+            self.fft_blur_mode = "automatic (from this folder)"
+            if mismatch:
+                self.fft_blur_mode += f"; calibration not used: {mismatch}"
+            if cutoff_ring is not None:
+                scores = blur_scores_at(ring_powers, cutoff_ring)
+                flags, threshold = flag_blurry(scores, k=self.fft_blur_mad_k)
+            else:
+                self.fft_blur_mode += "; skipped, too few images"
+
+        if flags is not None:
             for r, score, flag in zip(scored, scores, flags):
                 r["blur_fft"]      = float(score)
                 r["is_blurry_fft"] = bool(flag)
@@ -179,6 +208,29 @@ class ImageQualityAnalyzer:
         for r in results:
             self._summarize(r)
         return cutoff, threshold
+
+    def _usable_fft_calibration(self, num_bins):
+        """
+        Return (calibration, reason). calibration is None when there is none or it
+        was made under different conditions; reason then says why (or is "" when
+        there is no calibration at all).
+        """
+        cal = self.fft_calibration
+        if not cal:
+            return None, ""
+        if cal.get("num_bins") != num_bins:
+            return None, "different FFT ring count"
+        if abs(float(cal.get("resize_percent", -1)) - float(self.resize_percent)) > 1e-6:
+            return None, "different image resize"
+        if not self._same_roi(cal.get("focus_roi"), self.focus_roi):
+            return None, "different focus region"
+        return cal, ""
+
+    @staticmethod
+    def _same_roi(a, b):
+        if a is None or b is None:
+            return a is None and b is None
+        return len(a) == len(b) and all(abs(float(p) - float(q)) < 1e-4 for p, q in zip(a, b))
 
     def _summarize(self, result):
         """Combine the blur flags and build is_bad / reason from all flags in result."""

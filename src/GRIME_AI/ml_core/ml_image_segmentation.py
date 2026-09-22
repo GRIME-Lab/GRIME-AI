@@ -136,6 +136,7 @@ class MLImageSegmentation:
         target_category_name = "unknown"
         final_predictor = None
         user_cancelled = False
+        segmented_folders = []    # (input_dir, output_dir, image_filter) for the ROI feature pass
 
         # Single progress bar for the entire run
         self.progress_bar_closed = False
@@ -206,6 +207,7 @@ class MLImageSegmentation:
                       f"({', '.join(segment_seasons)}), {len(excluded)} excluded")
 
             result = None
+            segmented_folders.append((input_dir, output_dir, image_filter))
 
             if mode.lower() == "sam2":
                 result = engine.run_inference_on_folder(
@@ -310,6 +312,12 @@ class MLImageSegmentation:
         except Exception:
             pass
 
+        # ROI feature export: a second pass over the saved image/mask pairs, after
+        # segmentation has finished and the model has been released.
+        feature_export_note = ""
+        if self.config.get("export_roi_features", False) and total_processed > 0:
+            feature_export_note = self._export_roi_features(segmented_folders, save_masks, user_cancelled)
+
         # Show one combined summary dialog
         if user_cancelled:
             QMessageBox.warning(
@@ -342,7 +350,64 @@ class MLImageSegmentation:
                 f"- Total processed: {total_processed} images"
             )
 
+        if feature_export_note:
+            QMessageBox.information(None, "ROI Feature Export", feature_export_note)
+
         return final_predictor
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _export_roi_features(self, segmented_folders, save_masks, user_cancelled):
+        """
+        Second pass after segmentation: extract ROI features for every segmented image
+        and its saved mask into <run date/time>_roi_metrics.csv (and .xlsx) in the
+        predictions output folder. Returns a message for the user.
+        """
+        from appcore.dialogs.ML_image_processing.roi_feature_extraction import (
+            export_pairs, segmentation_pairs, load_settings, run_prefix)
+
+        if not save_masks:
+            return "ROI features were not exported because predicted masks were not saved."
+
+        pairs = []
+        for input_dir, output_dir, image_filter in segmented_folders:
+            # Engines write masks to the folder's output dir; some write to the
+            # predictions root instead, so both are searched.
+            search = [d for d in (output_dir, self.predictions_output_path) if os.path.isdir(d)]
+            if search:
+                # After a cancelled run, only the images that were segmented are listed.
+                pairs += segmentation_pairs(input_dir, search, image_filter,
+                                            include_missing=not user_cancelled)
+        if not pairs:
+            return "ROI features were not exported: no segmented images were found."
+
+        self.progress_bar_closed = False
+        progressBar = QProgressWheel(
+            title="Extracting ROI features...", total=len(pairs),
+            on_close=lambda: setattr(self, "progress_bar_closed", True),
+            parent=self.parent_widget
+        )
+        try:
+            result = export_pairs(
+                pairs, self.predictions_output_path, load_settings(), prefix=run_prefix(),
+                progress_callback=lambda done, total: progressBar.setValue(done),
+                cancel_callback=lambda: self.progress_bar_closed)
+        except Exception as e:
+            return f"ROI feature export failed:\n{e}"
+        finally:
+            try:
+                progressBar.close()
+            except Exception:
+                pass
+
+        msg = (f"ROI features written to:\n{result['csv_path']}"
+               + (f"\n{result['xlsx_path']}" if result["xlsx_path"] else "")
+               + f"\n\nImages exported: {result['rows_ok']}")
+        if result["rows_failed"]:
+            msg += f"\nImages that could not be analyzed: {result['rows_failed']} (see the Status column)"
+        if result["cancelled"]:
+            msg += "\nFeature export was stopped before all images were processed."
+        return msg
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

@@ -202,6 +202,87 @@ def choose_blur_cutoff(ring_powers):
     return best / num_bins * NYQUIST, best, separations
 
 
+def calibrate_blur_bounds(good_ring_powers, blurry_ring_powers, k=DEFAULT_BLUR_MAD_K):
+    """
+    Choose the blur cutoff and score bounds from labeled Good and Blurry images.
+
+    Every inner ring boundary is tried. At each, the separation of the two sets is
+    (Good median - Blurry median) / (Good MAD + Blurry MAD); the boundary with the
+    largest separation wins. At that boundary:
+
+        good_bound   = Good median   - k * Good MAD     (sharp images score above this)
+        blurry_bound = Blurry median + k * Blurry MAD   (blurry images score below this)
+
+    Medians and MADs keep a single unusual or mislabeled image from moving the bounds.
+    When blurry_bound >= good_bound the sets overlap and triage uses a fixed threshold
+    halfway between the two medians.
+
+    Returns a dict, or None when the labeled sets cannot be separated at all
+    (Blurry scores are not lower than Good scores at any cutoff).
+    """
+    g = np.asarray(good_ring_powers, dtype=np.float64)
+    b = np.asarray(blurry_ring_powers, dtype=np.float64)
+    if g.ndim != 2 or b.ndim != 2 or len(g) == 0 or len(b) == 0 or g.shape[1] != b.shape[1]:
+        return None
+
+    num_bins = g.shape[1]
+    best = None
+    for i in range(1, num_bins):
+        g_med, g_mad = _median_mad(blur_scores_at(g, i))
+        b_med, b_mad = _median_mad(blur_scores_at(b, i))
+        gap = g_med - b_med
+        spread = g_mad + b_mad
+        if spread > 0.0:
+            separation = gap / spread
+        else:
+            separation = np.inf if gap > 0.0 else -np.inf
+        key = (separation, gap)     # ties (e.g. no spread) go to the larger gap
+        if best is None or key > best[0]:
+            best = (key, i, g_med, g_mad, b_med, b_mad)
+
+    (_, gap), ring, g_med, g_mad, b_med, b_mad = best
+    if gap <= 0.0:
+        return None
+
+    good_bound = g_med - k * g_mad
+    blurry_bound = b_med + k * b_mad
+    return {
+        "num_bins":      int(num_bins),
+        "cutoff_ring":   int(ring),
+        "cutoff":        float(ring / num_bins * NYQUIST),
+        "good_median":   float(g_med),
+        "blurry_median": float(b_med),
+        "good_bound":    float(good_bound),
+        "blurry_bound":  float(blurry_bound),
+        "overlap":       bool(blurry_bound >= good_bound),
+    }
+
+
+def calibrated_blur_threshold(scores, calibration, k=DEFAULT_BLUR_MAD_K):
+    """
+    Threshold for one folder's scores (at the calibrated cutoff) using the bounds
+    from calibrate_blur_bounds(). Returns (threshold, description).
+
+    The folder's own threshold (median - k * MAD, as flag_blurry) adapts to the
+    scene; it is kept between blurry_bound and good_bound so it can never flag the
+    kind of image labeled Good or pass the kind labeled Blurry. With too few images
+    for reliable folder statistics, the midpoint of the bounds is used. When the
+    labeled sets overlapped, the fixed midpoint of the two medians is used.
+    """
+    if calibration["overlap"]:
+        return ((calibration["good_median"] + calibration["blurry_median"]) / 2.0,
+                "calibrated, fixed threshold (labeled Good and Blurry scores overlap)")
+
+    low, high = calibration["blurry_bound"], calibration["good_bound"]
+    scores = np.asarray(scores, dtype=np.float64)
+    if len(scores) >= MIN_IMAGES_FOR_AUTO_CUTOFF:
+        _, folder_threshold = flag_blurry(scores, k=k)
+        if folder_threshold is not None:
+            return (float(min(max(folder_threshold, low), high)),
+                    "calibrated, folder threshold kept within calibrated bounds")
+    return (low + high) / 2.0, "calibrated, midpoint of calibrated bounds (too few images for folder statistics)"
+
+
 def flag_blurry(scores, k=DEFAULT_BLUR_MAD_K):
     """
     Flag scores below median - k * MAD. Returns (flags, threshold).
