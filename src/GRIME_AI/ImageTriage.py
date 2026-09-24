@@ -39,7 +39,8 @@ class ImageTriage:
                     laplacian_threshold=150.0, blur_logic="OR",
                     focus_roi=None,
                     use_color_imbalance=False,
-                    color_imbalance_threshold=0.5):
+                    color_imbalance_threshold=0.5,
+                    fft_calibration=None):
         """
         Triage images in folder, flagging those that are blurry, too dark, or too light.
 
@@ -50,6 +51,10 @@ class ImageTriage:
             Brightness is always computed over the full frame. If None, the full
             frame is used for blur scoring. Must match the region used during
             calibration for thresholds to be valid.
+        fft_calibration : dict or None
+            FFT blur calibration saved by the calibration dialog. Used only if it
+            was made with the same focus region; otherwise FFT blur is judged from
+            this folder alone.
 
         Runs in two passes. Pass 1 analyzes every image. The FFT blur threshold
         is then chosen from the whole folder (ImageQualityAnalyzer.finalize_fft_blur).
@@ -75,6 +80,7 @@ class ImageTriage:
             use_exposure_clipping = False,
             resize_percent               = 50.0,
             focus_roi                    = focus_roi,
+            fft_calibration              = fft_calibration,
             use_color_imbalance          = use_color_imbalance,
             color_imbalance_threshold    = color_imbalance_threshold,
         )
@@ -155,7 +161,8 @@ class ImageTriage:
             del numpyImage
 
         # ------------------------------------------------------------------
-        # FFT blur: cutoff and threshold chosen from the whole folder.
+        # FFT blur: cutoff and threshold from the calibration (bounded by it)
+        # or, without a usable calibration, from the whole folder.
         # ------------------------------------------------------------------
         fft_cutoff, fft_threshold = analyzer.finalize_fft_blur([rec[2] for rec in records])
 
@@ -254,7 +261,8 @@ class ImageTriage:
                 focus_roi, use_color_imbalance, color_imbalance_threshold,
                 bMoveImages, bCorrectAlignment, bSavePolylines,
                 strReferenceImageFilename, rotationThreshold,
-                images_processed=len(reportRows), images_flagged=badImageCount)
+                images_processed=len(reportRows), images_flagged=badImageCount,
+                fft_blur_mode=analyzer.fft_blur_mode)
 
             # JSON sidecar: same stem as the CSV, '_settings.json' suffix
             try:
@@ -285,7 +293,7 @@ class ImageTriage:
                              focus_roi, use_color_imbalance, color_imbalance_threshold,
                              bMoveImages, bCorrectAlignment, bSavePolylines,
                              strReferenceImageFilename, rotationThreshold,
-                             images_processed=0, images_flagged=0):
+                             images_processed=0, images_flagged=0, fft_blur_mode=None):
         """Assemble the complete run configuration for the settings sidecar
         and the xlsx Triage Settings worksheet."""
         try:
@@ -300,8 +308,9 @@ class ImageTriage:
             "image_folder":              folder,
             "fetch_recursive":           bool(bFetchRecursive),
             "use_fft_blur":              bool(use_fft_blur),
-            "fft_blur_cutoff":           fft_cutoff,      # cycles/pixel, chosen from this folder
-            "fft_blur_threshold":        fft_threshold,   # score threshold, chosen from this folder
+            "fft_blur_cutoff":           fft_cutoff,      # cycles/pixel
+            "fft_blur_threshold":        fft_threshold,   # score threshold
+            "fft_blur_mode":             fft_blur_mode,   # calibrated or automatic, and why
             "use_laplacian":             bool(use_laplacian),
             "laplacian_threshold":       laplacian_threshold,
             "blur_logic":                blur_logic,

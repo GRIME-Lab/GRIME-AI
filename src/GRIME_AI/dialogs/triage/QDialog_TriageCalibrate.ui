@@ -141,12 +141,13 @@
      <item>
       <widget class="QGroupBox" name="groupBox_Results">
        <property name="title"><string>Calibrated parameters</string></property>
-       <layout class="QGridLayout" name="gridLayoutResults" columnstretch="1,1,1,1">
+       <layout class="QGridLayout" name="gridLayoutResults" columnstretch="1,1,1,1,1">
 
-        <item row="0" column="0"><widget class="QLabel" name="labelResLapThr"><property name="text"><string>Edge sensitivity</string></property></widget></item>
+        <item row="0" column="0"><widget class="QLabel" name="labelResLapThr"><property name="text"><string>Edge threshold</string></property><property name="toolTip"><string>Edge-sharpness threshold: images scoring below this are flagged as blurry.</string></property></widget></item>
         <item row="0" column="1"><widget class="QLabel" name="labelResBMin"><property name="text"><string>Too dark below</string></property></widget></item>
         <item row="0" column="2"><widget class="QLabel" name="labelResBMax"><property name="text"><string>Too bright above</string></property></widget></item>
         <item row="0" column="3"><widget class="QLabel" name="labelResColorImbalance"><property name="text"><string>Color imbalance</string></property></widget></item>
+        <item row="0" column="4"><widget class="QLabel" name="labelResFftBlur"><property name="text"><string>Frequency blur</string></property><property name="toolTip"><string>Whether the frequency-based detector was taught what sharp and blurry look like for this camera.</string></property></widget></item>
 
         <item row="1" column="0">
          <widget class="QLineEdit" name="lineEdit_ResultLaplacianThreshold">
@@ -164,6 +165,13 @@
         </item>
         <item row="1" column="2">
          <widget class="QLineEdit" name="lineEdit_ResultBrightnessMax">
+          <property name="readOnly"><bool>true</bool></property>
+          <property name="placeholderText"><string>—</string></property>
+          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
+         </widget>
+        </item>
+        <item row="1" column="4">
+         <widget class="QLineEdit" name="lineEdit_ResultFftBlur">
           <property name="readOnly"><bool>true</bool></property>
           <property name="placeholderText"><string>—</string></property>
           <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
@@ -224,7 +232,7 @@
 
       <!-- App_QLabel promoted widget -->
       <item>
-       <widget class="App_QLabel" name="label_FocusImage">
+       <widget class="RoiEditorLabel" name="label_FocusImage">
         <property name="text"><string></string></property>
         <property name="alignment"><set>Qt::AlignCenter</set></property>
         <property name="scaledContents"><bool>false</bool></property>
@@ -292,9 +300,9 @@
  </widget>
  <customwidgets>
   <customwidget>
-   <class>App_QLabel</class>
+   <class>RoiEditorLabel</class>
    <extends>QLabel</extends>
-   <header location="global">appcore.App_QLabel</header>
+   <header location="global">appcore.dialogs.triage.RoiEditorLabel</header>
   </customwidget>
  </customwidgets>
  <resources/>

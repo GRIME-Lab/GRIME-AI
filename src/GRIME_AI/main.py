@@ -3708,7 +3708,8 @@ class MainWindow(QMainWindow):
                                              laplacian_threshold=TriageDlg.getLaplacianThreshold(),
                                              focus_roi=TriageDlg.getFocusROI(),
                                              use_color_imbalance=TriageDlg.getUseColorImbalance(),
-                                             color_imbalance_threshold=TriageDlg.getColorImbalanceThreshold())
+                                             color_imbalance_threshold=TriageDlg.getColorImbalanceThreshold(),
+                                             fft_calibration=TriageDlg.getFftCalibration())
 
                         strMessage = 'Image triage is complete!'
                         msgBox = App_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)

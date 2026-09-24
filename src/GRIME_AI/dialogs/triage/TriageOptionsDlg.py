@@ -314,6 +314,21 @@ class TriageOptionsDlg(QDialog):
     def getColorImbalanceThreshold(self):
         return self.doubleSpinBox_ColorImbalanceThreshold.value()
 
+    def getFftCalibration(self):
+        """Return the saved FFT blur calibration dict, or None. ImageQualityAnalyzer
+        uses it only if it matches the current focus region."""
+        try:
+            from appcore.Save_Utils import Save_Utils
+            config_path = os.path.join(
+                Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
+            if not os.path.exists(config_path):
+                return None
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            return config.get("triage", {}).get("fft_calibration")
+        except Exception:
+            return None
+
     def getFocusROI(self):
         """Return normalised [x, y, w, h] if Use Focus Region is checked, else None."""
         if not self.checkBox_UseFocusROI.isChecked():

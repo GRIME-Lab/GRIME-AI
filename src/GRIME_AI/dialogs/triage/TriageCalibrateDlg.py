@@ -14,7 +14,8 @@
 # Saves results to application json and emit calibrated params to caller.
 #
 # The right-hand panel lets the user browse images from the triage source
-# folder and draw a rubber-band rectangle to define the focus scoring ROI.
+# folder and draw, move or resize a rectangle (RoiEditorLabel) to define the
+# focus scoring ROI.
 # The ROI is stored as normalised [x, y, w, h] floats in the application json.
 
 import os
@@ -23,13 +24,12 @@ import json
 import cv2
 from PyQt5.QtWidgets import (QDialog, QWidget, QFileDialog, QApplication,
                               QMessageBox)
-from PyQt5.QtCore import Qt, QThread, QRect, QEvent, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QPixmap, QImage
 from PyQt5.uic import loadUi
 
 from appcore.dialogs.triage.TriageCalibrator import TriageCalibrator, CalibrationResult
 from appcore.Save_Utils import Save_Utils
-from appcore.QLabel_drawing_modes import DrawingMode
 from ...app_identity import APP_CONFIG_FILENAME
 
 BUTTON_CSS_STEEL_BLUE = (
@@ -170,8 +170,8 @@ class TriageCalibrateDlg(QDialog):
         self.pushButton_NextImage.clicked.connect(self._next_image)
         self.pushButton_ClearROI.clicked.connect(self._clear_roi)
 
-        # Event filter to capture ROI after mouse release on the label
-        self.label_FocusImage.installEventFilter(self)
+        # ROI drawn, moved or resized on the image
+        self.label_FocusImage.roiChanged.connect(self._on_roi_changed)
 
     def _apply_styles(self):
         self.pushButton_BrowseGood.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
@@ -182,87 +182,20 @@ class TriageCalibrateDlg(QDialog):
         self.pushButton_ApplyAndClose.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
 
     # ──────────────────────────────────────────────────────────────────────────
-    # Event filter — capture ROI after mouse release on label
+    # Focus ROI edits
     # ──────────────────────────────────────────────────────────────────────────
 
-    def eventFilter(self, obj, event):
-        if obj is self.label_FocusImage and event.type() == QEvent.MouseButtonRelease:
-            # Let App_QLabel process the event first
-            result = super().eventFilter(obj, event)
-            self._capture_roi_from_label()
-            return result
-        return super().eventFilter(obj, event)
-
-    def _capture_roi_from_label(self):
-        """Read drawn ROI from App_QLabel and convert to normalised coords."""
-        label_rect = self.label_FocusImage.getROI()
-        if label_rect is None or not label_rect.isValid():
-            return
-        if label_rect.width() < 5 or label_rect.height() < 5:
-            return
-
-        norm = self._label_rect_to_normalised(label_rect)
-        if norm is None:
-            return
-
-        self._focus_roi = norm
-        self.pushButton_ClearROI.setEnabled(True)
+    def _on_roi_changed(self, roi):
+        """ROI drawn, moved, resized (normalised [x, y, w, h]) or cleared (None)."""
+        self._focus_roi = roi
+        self.pushButton_ClearROI.setEnabled(roi is not None)
         self._save_focus_roi_to_config()
-
-    def _label_rect_to_normalised(self, label_rect: QRect):
-        """
-        Convert a QRect in label-widget space to normalised [x, y, w, h].
-        Accounts for aspect-ratio-preserving pixmap placement inside the label.
-        """
-        pm = self.label_FocusImage.pixmap()
-        if pm is None or pm.isNull():
-            return None
-
-        lw, lh = self.label_FocusImage.width(), self.label_FocusImage.height()
-        pw, ph = pm.width(), pm.height()
-
-        # Pixmap is centred inside the label
-        x_off = (lw - pw) // 2
-        y_off = (lh - ph) // 2
-
-        # Convert label coords → pixmap coords
-        rx = label_rect.x() - x_off
-        ry = label_rect.y() - y_off
-        rw = label_rect.width()
-        rh = label_rect.height()
-
-        # Clamp to pixmap bounds
-        rx = max(0, min(pw - 1, rx))
-        ry = max(0, min(ph - 1, ry))
-        rw = max(1, min(pw - rx, rw))
-        rh = max(1, min(ph - ry, rh))
-
-        # Scale from pixmap coords to original image coords, then normalise
-        if self._current_image_path:
-            orig = cv2.imread(self._current_image_path)
-            if orig is not None:
-                ih_orig, iw_orig = orig.shape[:2]
-                scale_x = iw_orig / pw
-                scale_y = ih_orig / ph
-                x  = (rx * scale_x) / iw_orig
-                y  = (ry * scale_y) / ih_orig
-                nw = (rw * scale_x) / iw_orig
-                nh = (rh * scale_y) / ih_orig
-                x  = max(0.0, min(1.0, x))
-                y  = max(0.0, min(1.0, y))
-                nw = max(0.0, min(1.0 - x, nw))
-                nh = max(0.0, min(1.0 - y, nh))
-                if nw > 0.01 and nh > 0.01:
-                    return [x, y, nw, nh]
-        return None
 
     # ──────────────────────────────────────────────────────────────────────────
     # Image panel
     # ──────────────────────────────────────────────────────────────────────────
 
     def _init_image_panel(self):
-        self.label_FocusImage.setDrawingMode(DrawingMode.COLOR_SEGMENTATION)
-
         if not self._triage_folder or not os.path.isdir(self._triage_folder):
             self.label_FocusImage.setText("No triage folder selected")
             return
@@ -296,24 +229,14 @@ class TriageCalibrateDlg(QDialog):
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w, ch = img_rgb.shape
         qimg = QImage(img_rgb.data, w, h, ch * w, QImage.Format_RGB888)
-        self.label_FocusImage.setPixmap(
-            QPixmap.fromImage(qimg).scaled(
-                self.label_FocusImage.width(),
-                self.label_FocusImage.height(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation
-            )
-        )
-        self.label_FocusImage.setAlignment(Qt.AlignCenter)
-        self.label_FocusImage.clearROIs()
+        self.label_FocusImage.setImage(QPixmap.fromImage(qimg))     # label scales to fit
 
         self.label_FocusImageName.setText(os.path.basename(path))
         self.label_ImageIndex.setText(
             f"{self._image_index + 1} / {len(self._image_files)}"
         )
 
-        if self._focus_roi is not None:
-            self._restore_roi_overlay()
+        self.label_FocusImage.setNormalizedRoi(self._focus_roi)
 
     def _update_nav_buttons(self):
         n = len(self._image_files)
@@ -337,41 +260,11 @@ class TriageCalibrateDlg(QDialog):
             self._update_nav_buttons()
 
     # ──────────────────────────────────────────────────────────────────────────
-    # ROI overlay restore
-    # ──────────────────────────────────────────────────────────────────────────
-
-    def _restore_roi_overlay(self):
-        """Convert saved normalised ROI back to label-space and push into savedROIs."""
-        if self._focus_roi is None:
-            return
-
-        pm = self.label_FocusImage.pixmap()
-        if pm is None or pm.isNull():
-            return
-
-        lw, lh = self.label_FocusImage.width(), self.label_FocusImage.height()
-        pw, ph = pm.width(), pm.height()
-        x_off  = (lw - pw) // 2
-        y_off  = (lh - ph) // 2
-
-        x, y, nw, nh = self._focus_roi
-        lx  = int(x  * pw) + x_off
-        ly  = int(y  * ph) + y_off
-        lrw = int(nw * pw)
-        lrh = int(nh * ph)
-
-        self.label_FocusImage.savedROIs = [QRect(lx, ly, lrw, lrh)]
-        self.label_FocusImage.update()
-
-    # ──────────────────────────────────────────────────────────────────────────
     # ROI clear
     # ──────────────────────────────────────────────────────────────────────────
 
     def _clear_roi(self):
-        self._focus_roi = None
-        self.label_FocusImage.clearROIs()
-        self.pushButton_ClearROI.setEnabled(False)
-        self._save_focus_roi_to_config()
+        self.label_FocusImage.clearRoi()    # emits roiChanged(None) -> _on_roi_changed
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public accessor
@@ -488,10 +381,26 @@ class TriageCalibrateDlg(QDialog):
                 result.color_imbalance_threshold = current_thr
         self.lineEdit_ResultColorImbalance.setText(f"{result.color_imbalance_threshold:.3f}")
 
+        if result.n_blurry == 0:
+            self.lineEdit_ResultFftBlur.setText("Not run")
+        elif result.fft_calibration is None:
+            self.lineEdit_ResultFftBlur.setText("Not calibrated")
+        elif result.fft_calibration["overlap"]:
+            self.lineEdit_ResultFftBlur.setText("Overlap")
+        else:
+            self.lineEdit_ResultFftBlur.setText("Calibrated")
+
         summary = (f"Done. Images: {result.n_good} good, {result.n_blurry} blurry, "
                    f"{result.n_exposure} exposure.")
         if result.n_blurry > 0:
             summary += f"  Blur F1: {result.blur_f1:.3f}."
+            if result.fft_calibration is None:
+                summary += f"\n{result.fft_note}"
+            elif result.fft_calibration["overlap"]:
+                summary += ("\nFFT blur: the Good and Blurry scores overlap, so triage will use "
+                            "one fixed threshold halfway between them.")
+            else:
+                summary += "\nFFT blur calibrated."
         self.labelStatus.setText(summary)
 
         self.pushButton_ApplyAndClose.setEnabled(True)
@@ -545,6 +454,11 @@ class TriageCalibrateDlg(QDialog):
             config = self._load_config()
             config.setdefault("triage", {})
             config["triage"].update(result.to_dict())
+            if result.fft_calibration is not None:
+                config["triage"]["fft_calibration"] = result.fft_calibration
+            elif result.n_blurry > 0:
+                # Blurry images were given but could not be separated: drop any old calibration.
+                config["triage"].pop("fft_calibration", None)
             # FFT blur is now chosen automatically per folder; drop the old fixed settings.
             config["triage"].pop("fft_blur_threshold", None)
             config["triage"].pop("fft_shift_radius", None)
@@ -572,8 +486,7 @@ class TriageCalibrateDlg(QDialog):
             if roi and len(roi) == 4:
                 self._focus_roi = roi
                 self.pushButton_ClearROI.setEnabled(True)
-                if self._image_files:
-                    self._restore_roi_overlay()
+                self.label_FocusImage.setNormalizedRoi(roi)
         except Exception as e:
             print(f"[TriageCalibrateDlg] Could not load focus ROI: {e}")
 
@@ -593,5 +506,6 @@ class TriageCalibrateDlg(QDialog):
         for widget in [self.lineEdit_ResultLaplacianThreshold,
                        self.lineEdit_ResultBrightnessMin,
                        self.lineEdit_ResultBrightnessMax,
-                       self.lineEdit_ResultColorImbalance]:
+                       self.lineEdit_ResultColorImbalance,
+                       self.lineEdit_ResultFftBlur]:
             widget.clear()

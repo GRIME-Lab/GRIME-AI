@@ -136,6 +136,7 @@ class MLImageSegmentation:
         target_category_name = "unknown"
         final_predictor = None
         user_cancelled = False
+        segmented_folders = []    # (input_dir, output_dir, image_filter) for the ROI feature pass
 
         # Single progress bar for the entire run
         self.progress_bar_closed = False
@@ -206,6 +207,7 @@ class MLImageSegmentation:
                       f"({', '.join(segment_seasons)}), {len(excluded)} excluded")
 
             result = None
+            segmented_folders.append((input_dir, output_dir, image_filter))
 
             if mode.lower() == "sam2":
                 result = engine.run_inference_on_folder(
@@ -310,6 +312,12 @@ class MLImageSegmentation:
         except Exception:
             pass
 
+        # ROI feature export: a second pass over the saved image/mask pairs, after
+        # segmentation has finished and the model has been released.
+        feature_export_note = ""
+        if self.config.get("export_roi_features", False) and total_processed > 0:
+            feature_export_note = self._export_roi_features(segmented_folders, save_masks, user_cancelled)
+
         # Show one combined summary dialog
         if user_cancelled:
             QMessageBox.warning(
@@ -342,7 +350,130 @@ class MLImageSegmentation:
                 f"- Total processed: {total_processed} images"
             )
 
+        if feature_export_note:
+            QMessageBox.information(None, "ROI Feature Export", feature_export_note)
+
         return final_predictor
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _export_roi_features(self, segmented_folders, save_masks, user_cancelled):
+        """
+        Second pass after segmentation: extract ROI features for every segmented image
+        and its saved mask into <run date/time>_roi_metrics.csv (and .xlsx) in the
+        predictions output folder. Returns a message for the user.
+        """
+        from appcore.dialogs.ML_image_processing.roi_feature_extraction import (
+            export_datasets, segmentation_pairs, load_settings, run_prefix)
+
+        if not save_masks:
+            return "ROI features were not exported because predicted masks were not saved."
+
+        settings = load_settings()
+        datasets = []
+        for input_dir, output_dir, image_filter in segmented_folders:
+            # Engines write masks to the folder's output dir; some write to the
+            # predictions root instead, so both are searched.
+            search = [d for d in (output_dir, self.predictions_output_path) if os.path.isdir(d)]
+            if not search:
+                continue
+            # After a cancelled run, only the images that were segmented are listed.
+            pairs = segmentation_pairs(input_dir, search, image_filter,
+                                       include_missing=not user_cancelled)
+            if pairs:
+                # Each dataset carries its own sensor data in its sister data folder.
+                datasets.append((pairs, self._sensor_file_for(input_dir, settings)))
+
+        if not datasets:
+            return "ROI features were not exported: no segmented images were found."
+
+        # One file for the whole run, in the root of the first dataset (the folder
+        # holding its images and data folders).
+        output_folder = os.path.dirname(os.path.normpath(segmented_folders[0][0]))
+        total_pairs = sum(len(pairs) for pairs, _ in datasets)
+
+        self.progress_bar_closed = False
+        progressBar = QProgressWheel(
+            title="Extracting ROI features...", total=total_pairs,
+            on_close=lambda: setattr(self, "progress_bar_closed", True),
+            parent=self.parent_widget
+        )
+        try:
+            result = export_datasets(
+                datasets, output_folder, settings, prefix=run_prefix(),
+                progress_callback=lambda done, total: progressBar.setValue(done),
+                cancel_callback=lambda: self.progress_bar_closed)
+        except Exception as e:
+            return f"ROI feature export failed:\n{e}"
+        finally:
+            try:
+                progressBar.close()
+            except Exception:
+                pass
+
+        analysis_path = self._write_sensor_analysis(result, output_folder, run_prefix())
+
+        msg = (f"ROI features written to:\n{result['csv_path']}"
+               + (f"\n{result['xlsx_path']}" if result["xlsx_path"] else "")
+               + (f"\nSensor analysis report:\n{analysis_path}" if analysis_path else "")
+               + f"\n\nImages exported: {result['rows_ok']}")
+        if result["rows_failed"]:
+            msg += f"\nImages that could not be analyzed: {result['rows_failed']} (see the Status column)"
+        if result["cancelled"]:
+            msg += "\nFeature export was stopped before all images were processed."
+        return msg
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _sensor_file_for(self, input_dir, settings):
+        """
+        The NWIS file for one segmented folder, or None. Auto-detect uses the data
+        folder beside the images and asks only when several files are there; with
+        auto-detect off, the file from the sensor options is used for every folder.
+        """
+        from appcore.dialogs.ML_image_processing.roi_feature_extraction import (
+            sister_data_folder, sensor_files_in)
+
+        if not settings["sensor"]["enabled"]:
+            return None
+        if not settings["sensor"]["auto_detect"]:
+            path = settings["sensor"]["sensor_file"]
+            return path if path and os.path.isfile(path) else None
+
+        folder = sister_data_folder(input_dir)
+        files = sensor_files_in(folder)
+        if not files:
+            # The user asked for correlation, so ask where the sensor file is
+            # rather than exporting without it. Cancel skips this folder.
+            from PyQt5.QtWidgets import QFileDialog
+            print(f"[{self.className}] No sensor data folder for {input_dir}; asking the user.")
+            path, _ = QFileDialog.getOpenFileName(
+                self.parent_widget,
+                f"Select the NWIS sensor file for {os.path.basename(os.path.normpath(input_dir))}",
+                input_dir, "NWIS sensor data (*.txt *.csv);;All files (*.*)")
+            return path or None
+        if len(files) == 1:
+            return files[0]
+
+        from appcore.dialogs.ML_image_processing.SensorDataOptionsDlg import SensorFileChooserDlg
+        chooser = SensorFileChooserDlg(self.parent_widget, files, folder)
+        return chooser.selected_file() if chooser.exec_() else None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _write_sensor_analysis(self, result, output_folder, prefix):
+        """Sensor-vs-ROI report for the combined table, when sensor columns are present."""
+        if not result.get("sensor_columns") or "dataframe" not in result:
+            return None
+        try:
+            from appcore.SensorROIAnalysis import SensorROIAnalysis
+            xlsx_path = os.path.join(output_folder, f"{prefix}_sensor_analysis.xlsx")
+            png_dir = os.path.join(output_folder, f"{prefix}_figures")
+            SensorROIAnalysis().write_report(result["dataframe"], xlsx_path, png_dir=png_dir)
+            return xlsx_path
+        except Exception as e:
+            print(f"[{self.className}] Could not write the sensor analysis report: {e}")
+            return None
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

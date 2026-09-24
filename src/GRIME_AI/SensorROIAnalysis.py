@@ -18,6 +18,8 @@ Output workbook:
     the sensor value (y) against ROI Area Percentage (x)
   - an Assessment tab: correlation statistics for every parameter and a
     rule-based narrative interpreting what the numbers suggest at the site
+  - an ROI Features tab: how every other ROI feature (dominant cluster colors,
+    intensity, greenness, texture) tracks each sensor parameter
 
 The narrative is heuristic. It states what the statistics are consistent
 with; it does not claim to establish physical causation.
@@ -32,6 +34,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 PARAM_COL_RE = re.compile(r"\[(\d+)_(\d{5})\]$")
+
+# Feature columns that are bookkeeping, not measurements, so they are never
+# correlated against the sensor parameters.
+NON_FEATURE_COLUMNS = {
+    "Image Path", "Mask Path", "Capture Date", "Capture Time",
+    "Clustering Method", "Clustering Params", "Status",
+    "Image Height", "Image Width", "Image Total Pixels",
+    "Sensor Time (UTC)", "Sensor Offset (s)", "Sensor Match",
+}
+MIN_PAIRS_FOR_STATS = 3
 
 # NWIS parameter codes with known physical relationships to water surface area
 # Analysis technique declared per parameter class (agreed methodology):
@@ -67,7 +79,7 @@ class SensorROIAnalysis:
     # ==================================================================================================================
     def write_report(self, df: pd.DataFrame, xlsx_path: str,
                      roi_col: str = "ROI Area Percentage",
-                     png_dir: str = None) -> str:
+                     png_dir: str = None, feature_cols=None) -> str:
         """Write the sensor-vs-ROI analysis workbook. Returns xlsx_path."""
         if roi_col not in df.columns:
             candidates = [c for c in df.columns if "Area Percentage" in str(c)]
@@ -103,7 +115,10 @@ class SensorROIAnalysis:
                                         f"discharge adds no independent information beyond stage "
                                         f"at this site.")
 
-        self._write_workbook(xlsx_path, work, roi_col, param_cols, all_stats)
+        if feature_cols is None:
+            feature_cols = self.feature_columns(df, roi_col)
+
+        self._write_workbook(xlsx_path, work, roi_col, param_cols, all_stats, feature_cols)
 
         if png_dir:
             try:
@@ -394,7 +409,73 @@ class SensorROIAnalysis:
     # ==================================================================================================================
     #
     # ==================================================================================================================
-    def _write_workbook(self, xlsx_path, work, roi_col, param_cols, all_stats) -> None:
+    @staticmethod
+    def feature_columns(df: pd.DataFrame, roi_col: str) -> list:
+        """ROI feature columns to correlate against the sensors: every numeric column
+        that is not a sensor parameter, the ROI area itself, or bookkeeping."""
+        cols = []
+        for c in df.columns:
+            name = str(c)
+            if name == roi_col or name in NON_FEATURE_COLUMNS or PARAM_COL_RE.search(name):
+                continue
+            if pd.to_numeric(df[c], errors="coerce").notna().sum() >= MIN_PAIRS_FOR_STATS:
+                cols.append(c)
+        return cols
+
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
+    def _feature_sensor_stats(self, work, param_cols, feature_cols) -> list:
+        """Pearson and Spearman of every ROI feature against every sensor parameter."""
+        rows = []
+        for param in param_cols:
+            values = pd.to_numeric(work[param], errors="coerce")
+            for feature in feature_cols:
+                f = pd.to_numeric(work[feature], errors="coerce")
+                mask = f.notna() & values.notna()
+                n = int(mask.sum())
+                if n < MIN_PAIRS_FOR_STATS or f[mask].nunique() < 2 or values[mask].nunique() < 2:
+                    rows.append((param, feature, n, np.nan, np.nan))
+                    continue
+                rows.append((param, feature, n,
+                             float(f[mask].corr(values[mask], method="pearson")),
+                             float(f[mask].corr(values[mask], method="spearman"))))
+        return rows
+
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
+    def _write_feature_tab(self, wb, work, param_cols, feature_cols) -> None:
+        """ROI Features tab: correlation of each ROI feature with each sensor parameter,
+        strongest first, so color-versus-stage relationships are visible at a glance."""
+        from openpyxl.styles import Font, Alignment
+
+        ws = wb.create_sheet("ROI Features")
+        ws.append(["Every ROI feature against every sensor parameter, strongest |Spearman| first. "
+                   "Correlation is association, not causation."])
+        ws.cell(row=1, column=1).alignment = Alignment(wrap_text=True, vertical="top")
+        ws.append([])
+        ws.append(["Sensor Parameter", "ROI Feature", "N pairs", "Pearson r", "Spearman rho"])
+        for cell in ws[3]:
+            cell.font = Font(bold=True)
+
+        stats = self._feature_sensor_stats(work, param_cols, feature_cols)
+        stats.sort(key=lambda r: (str(r[0]), -abs(r[4]) if not np.isnan(r[4]) else 1.0))
+        for param, feature, n, r, rho in stats:
+            ws.append([param, feature, n,
+                       None if np.isnan(r) else round(r, 3),
+                       None if np.isnan(rho) else round(rho, 3)])
+
+        ws.column_dimensions["A"].width = 46
+        ws.column_dimensions["B"].width = 34
+        for col_letter in "CDE":
+            ws.column_dimensions[col_letter].width = 13
+        ws.freeze_panes = "A4"
+
+    # ==================================================================================================================
+    #
+    # ==================================================================================================================
+    def _write_workbook(self, xlsx_path, work, roi_col, param_cols, all_stats, feature_cols=None) -> None:
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment
         from openpyxl.chart import ScatterChart, Reference, Series
@@ -674,6 +755,12 @@ class SensorROIAnalysis:
             pws.column_dimensions["D"].width = 18
             pws.column_dimensions["E"].width = 55
             pws.freeze_panes = "A2"
+
+        if feature_cols:
+            try:
+                self._write_feature_tab(wb, work, param_cols, feature_cols)
+            except Exception as e:
+                print(f"[{self.className}] Could not write the ROI Features tab: {e}")
 
         wb.save(xlsx_path)
 
