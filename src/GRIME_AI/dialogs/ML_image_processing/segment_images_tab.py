@@ -644,6 +644,14 @@ QLineEdit:focus {
         self.checkBox_export_roi_features.toggled.connect(self.update_model_config)
         self.pushButton_feature_options_segment.clicked.connect(self._open_feature_options)
         self.pushButton_feature_options_segment.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
+
+        # Sensor correlation for the exported features. The same setting is used by the
+        # ROI Analyzer tab, so checking it in either place turns it on for both.
+        from appcore.dialogs.ML_image_processing.roi_feature_extraction import load_settings
+        self.checkBox_correlate_sensor_data.setChecked(load_settings()["sensor"]["enabled"])
+        self.checkBox_correlate_sensor_data.toggled.connect(self.on_correlate_sensor_data_toggled)
+        self.pushButton_sensor_options_segment.clicked.connect(self._open_sensor_options)
+        self.pushButton_sensor_options_segment.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
         self.on_export_roi_features_toggled(self.checkBox_export_roi_features.isChecked())
 
         # Segment seasons dual listbox — double-click to move items between lists.
@@ -1119,12 +1127,36 @@ QLineEdit:focus {
         self.checkBox_save_predicted_masks.setEnabled(not checked)
         self.checkBox_save_predicted_masks.setToolTip(
             "Required by Export ROI Features." if checked else "")
+        # Sensor correlation only applies to the exported features
+        self.checkBox_correlate_sensor_data.setEnabled(checked)
+        self.pushButton_sensor_options_segment.setEnabled(
+            checked and self.checkBox_correlate_sensor_data.isChecked())
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def _open_feature_options(self):
         from appcore.dialogs.ML_image_processing.FeatureExtractionOptionsDlg import FeatureExtractionOptionsDlg
         FeatureExtractionOptionsDlg(self).exec_()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def on_correlate_sensor_data_toggled(self, checked: bool):
+        """Save the shared sensor setting so both tabs and the export agree."""
+        from appcore.dialogs.ML_image_processing.roi_feature_extraction import load_settings, save_settings
+        self.pushButton_sensor_options_segment.setEnabled(checked)
+        try:
+            settings = load_settings()
+            if settings["sensor"]["enabled"] != bool(checked):
+                settings["sensor"]["enabled"] = bool(checked)
+                save_settings(settings)
+        except Exception as e:
+            print(f"[SegmentImagesTab] Could not save the sensor setting: {e}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _open_sensor_options(self):
+        from appcore.dialogs.ML_image_processing.SensorDataOptionsDlg import SensorDataOptionsDlg
+        SensorDataOptionsDlg(self, images_folder=self.lineEdit_segmentation_images_folder.text().strip()).exec_()
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
@@ -1185,12 +1217,18 @@ QLineEdit:focus {
 
         labels = _normalize_labels(labels)
 
-        try:
-            target_label = ckpt.get("target_label")
-            if not target_label:
-                print("No target label found in checkpoint")
-        except Exception:
-            target_label = None
+        # The model records what it was trained to segment; different vintages use
+        # different keys, so take whichever the checkpoint has.
+        target_label = None
+        if isinstance(ckpt, dict):
+            for key in ("target_label", "target_category_name", "target_category_names",
+                        "target_categories", "target_category", "target_category_id",
+                        "target_category_ids"):
+                if ckpt.get(key):
+                    target_label = ckpt[key]
+                    break
+        if not target_label:
+            print("No target category found in checkpoint")
 
         # Clear previous entries
         self.listWidget_labels.clear()
@@ -1370,31 +1408,68 @@ QLineEdit:focus {
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def select_label(self, target_label):
-        target_text = ""
+        """
+        Select the category or categories the model was trained on, so the user does
+        not have to pick them by hand. Accepts a name, an ID, a dict, or a list of
+        any of those; names match regardless of case, IDs match the category ID
+        stored on each item.
+        """
+        names, ids = self._target_names_and_ids(target_label)
+        if not names and not ids:
+            return
 
-        # Case 1: dict
-        if isinstance(target_label, dict):
-            target_text = target_label.get("label_name", "")
+        self.listWidget_labels.clearSelection()
+        first = None
+        for idx in range(self.listWidget_labels.count()):
+            item = self.listWidget_labels.item(idx)
+            item_id = item.data(QtCore.Qt.UserRole)
+            if item.text().strip().lower() in names or (item_id is not None and int(item_id) in ids):
+                item.setSelected(True)
+                first = first or item
 
-        # Case 2: list of dicts
-        elif isinstance(target_label, list) and target_label:
-            if isinstance(target_label[0], dict):
-                target_text = target_label[0].get("label_name", "")
-            elif isinstance(target_label[0], str):
-                target_text = target_label[0]
+        if first is not None:
+            # NoUpdate keeps the other selected categories; the plain call clears them.
+            self.listWidget_labels.setCurrentItem(first, QtCore.QItemSelectionModel.NoUpdate)
+            self.listWidget_labels.scrollToItem(first)
 
-        # Case 3: plain string
-        elif isinstance(target_label, str):
-            target_text = target_label
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _target_names_and_ids(target_label):
+        """Names (lower case) and category IDs named by the checkpoint's target entry."""
+        names, ids = set(), set()
 
-        if target_text:
-            items = self.listWidget_labels.findItems(target_text, QtCore.Qt.MatchExactly)
-            if items:
-                item = items[0]
-                self.listWidget_labels.clearSelection()  # optional, ensures only one selected
-                item.setSelected(True)  # mark as selected
-                self.listWidget_labels.setCurrentItem(item)  # make it active
-                self.listWidget_labels.scrollToItem(item)  # ensure visible
+        def take(value):
+            if value is None:
+                return
+            if isinstance(value, dict):
+                for key in ("label_name", "name", "label", "class", "title"):
+                    if value.get(key):
+                        names.add(str(value[key]).strip().lower())
+                        break
+                for key in ("id", "category_id", "label_id"):
+                    if value.get(key) is not None:
+                        try:
+                            ids.add(int(value[key]))
+                        except (TypeError, ValueError):
+                            pass
+                        break
+            elif isinstance(value, (list, tuple, set)):
+                for entry in value:
+                    take(entry)
+            elif isinstance(value, bool):
+                return
+            elif isinstance(value, int):
+                ids.add(int(value))
+            else:
+                text = str(value).strip()
+                if text.isdigit():
+                    ids.add(int(text))
+                elif text:
+                    names.add(text.lower())
+
+        take(target_label)
+        return names, ids
 
     # ── Season filter helpers (mirrors training_tab pattern) ──────────────────
 

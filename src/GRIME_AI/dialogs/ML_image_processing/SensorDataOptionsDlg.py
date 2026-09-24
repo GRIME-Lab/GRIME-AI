@@ -27,9 +27,10 @@ from appcore.dialogs.ML_image_processing.roi_feature_extraction import (
 HELP_TEXT = (
     "Each image's timestamp is matched to the nearest reading in the NWIS file, and every "
     "sensor parameter in that file is added to the feature table.\n\n"
-    "Auto-detect: the NWIS file is taken from the \"data\" folder beside the images folder, "
-    "where downloads put it. If that folder holds more than one file you are asked which to "
-    "use, newest first. If the folder is missing you are asked for it, and cancelling skips "
+    "Auto-detect: the NWIS data is taken from the \"data\" folder beside the images folder, "
+    "where downloads put it. Downloads arrive as USGS text and are converted to CSV, and only "
+    "the CSV is used. If repeated downloads left more than one CSV you are asked which to use, "
+    "newest first. If the folder is missing you are asked for the file, and cancelling skips "
     "the correlation.\n\n"
     "With auto-detect off, the file below is used, for a file downloaded or moved elsewhere.\n\n"
     "Maximum time difference: how far from an image's time a reading may be and still count "
@@ -51,7 +52,7 @@ class SensorDataOptionsDlg(QDialog):
         self.check_auto.toggled.connect(self._update_enabled)
 
         self.edit_file = QLineEdit()
-        self.edit_file.setPlaceholderText("NWIS sensor file (.txt or .csv)")
+        self.edit_file.setPlaceholderText("NWIS sensor file (.csv, or the USGS .txt)")
         self.button_browse = QPushButton("Browse")
         self.button_browse.clicked.connect(self._browse)
 
@@ -118,10 +119,10 @@ class SensorDataOptionsDlg(QDialog):
             return f"Not found yet: {folder}\nYou will be asked for it when features are extracted."
         files = sensor_files_in(folder)
         if not files:
-            return f"No .txt or .csv files in {folder}"
+            return f"No sensor CSV in {folder}"
         if len(files) == 1:
             return f"Found: {files[0]}"
-        return f"Found {len(files)} files in {folder}; you will be asked which to use."
+        return f"Found {len(files)} sensor CSVs in {folder}; you will be asked which to use."
 
     def _browse(self):
         start = os.path.dirname(self.edit_file.text()) or self._images_folder
@@ -175,7 +176,7 @@ class SensorFileChooserDlg(QDialog):
         box.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"More than one sensor file in {folder}.\nNewest first:"))
+        layout.addWidget(QLabel(f"More than one sensor CSV in {folder}.\nNewest first:"))
         layout.addWidget(self.list)
         layout.addWidget(box)
         self.resize(520, 260)

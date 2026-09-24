@@ -49,7 +49,7 @@
           <item row="0" column="1"><widget class="QLineEdit" name="lineEdit_intensity"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>8</number></property></widget></item>
           <item row="1" column="0"><widget class="QLabel" name="label_entropy"><property name="text"><string>Entropy (E):</string></property></widget></item>
           <item row="1" column="1"><widget class="QLineEdit" name="lineEdit_entropy"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>8</number></property></widget></item>
-          <item row="2" column="0"><widget class="QLabel" name="label_T"><property name="text"><string>T:</string></property></widget></item>
+          <item row="2" column="0"><widget class="QLabel" name="label_T"><property name="text"><string>Texture (T):</string></property></widget></item>
           <item row="2" column="1"><widget class="QLineEdit" name="lineEdit_Texture"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>8</number></property></widget></item>
           <item row="3" column="0"><widget class="QLabel" name="label_GLI"><property name="text"><string>GLI:</string></property></widget></item>
           <item row="3" column="1"><widget class="QLineEdit" name="lineEdit_GLI"><property name="readOnly"><bool>true</bool></property><property name="maxLength"><number>8</number></property></widget></item>

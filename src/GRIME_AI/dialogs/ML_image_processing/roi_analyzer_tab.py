@@ -303,7 +303,7 @@ class ROIAnalyzerTab(QWidget):
             files = sensor_files_in(folder)
             if not files:
                 QMessageBox.warning(self, "Sensor Data",
-                                    f"No .txt or .csv sensor files in:\n{folder}")
+                                    f"No sensor CSV files in:\n{folder}")
                 return None
         if len(files) == 1:
             return files[0]

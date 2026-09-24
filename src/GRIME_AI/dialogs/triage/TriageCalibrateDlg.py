@@ -381,6 +381,15 @@ class TriageCalibrateDlg(QDialog):
                 result.color_imbalance_threshold = current_thr
         self.lineEdit_ResultColorImbalance.setText(f"{result.color_imbalance_threshold:.3f}")
 
+        if result.n_blurry == 0:
+            self.lineEdit_ResultFftBlur.setText("Not run")
+        elif result.fft_calibration is None:
+            self.lineEdit_ResultFftBlur.setText("Not calibrated")
+        elif result.fft_calibration["overlap"]:
+            self.lineEdit_ResultFftBlur.setText("Overlap")
+        else:
+            self.lineEdit_ResultFftBlur.setText("Calibrated")
+
         summary = (f"Done. Images: {result.n_good} good, {result.n_blurry} blurry, "
                    f"{result.n_exposure} exposure.")
         if result.n_blurry > 0:
@@ -497,5 +506,6 @@ class TriageCalibrateDlg(QDialog):
         for widget in [self.lineEdit_ResultLaplacianThreshold,
                        self.lineEdit_ResultBrightnessMin,
                        self.lineEdit_ResultBrightnessMax,
-                       self.lineEdit_ResultColorImbalance]:
+                       self.lineEdit_ResultColorImbalance,
+                       self.lineEdit_ResultFftBlur]:
             widget.clear()

@@ -192,6 +192,45 @@
                </property>
               </widget>
              </item>
+             <item row="3" column="1">
+              <layout class="QHBoxLayout" name="horizontalLayout_correlateSensorData">
+               <item>
+                <widget class="QCheckBox" name="checkBox_correlate_sensor_data">
+                 <property name="font">
+                  <font>
+                   <family>Arial</family>
+                   <pointsize>11</pointsize>
+                  <bold>false</bold></font>
+                 </property>
+                 <property name="toolTip">
+                  <string>Add the nearest NWIS sensor readings to the exported features. The file is taken from the data folder beside the images; if it is not there you are asked for it.</string>
+                 </property>
+                 <property name="text">
+                  <string>Correlate Sensor Data</string>
+                 </property>
+                 <property name="checked">
+                  <bool>false</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="pushButton_sensor_options_segment">
+                 <property name="toolTip">
+                  <string>Where the NWIS sensor file comes from, and how close in time a reading must be to an image.</string>
+                 </property>
+                 <property name="text">
+                  <string>Sensor Data Options</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="spacer_correlateSensorData">
+                 <property name="orientation"><enum>Qt::Horizontal</enum></property>
+                 <property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property>
+                </spacer>
+               </item>
+              </layout>
+             </item>
              <item row="2" column="1">
               <layout class="QHBoxLayout" name="horizontalLayout_exportRoiFeatures">
                <item>
@@ -203,7 +242,7 @@
                   <bold>false</bold></font>
                  </property>
                  <property name="toolTip">
-                  <string>After segmentation finishes, extract ROI features from each image and its mask into a date/time-stamped CSV and Excel file in the output folder. Requires Save Predicted Masks.</string>
+                  <string>After segmentation finishes, extract ROI features from each image and its mask into a date/time-stamped CSV and Excel file, written beside the first image folder. Requires Save Predicted Masks.</string>
                  </property>
                  <property name="text">
                   <string>Export ROI Features</string>

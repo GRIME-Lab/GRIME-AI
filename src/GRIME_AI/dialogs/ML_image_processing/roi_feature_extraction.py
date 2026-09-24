@@ -65,7 +65,9 @@ DEFAULT_SETTINGS = {
 
 # The image download creates <root>/images and <root>/data; the NWIS file lands in data.
 SENSOR_DATA_FOLDER_NAME = "data"
-SENSOR_FILE_EXTENSIONS = (".txt", ".csv")
+# Downloads arrive as USGS text and are converted to CSV; only the CSV is used, so
+# the two copies of one download are not offered as a choice.
+SENSOR_FILE_EXTENSIONS = (".csv",)
 
 GLCM_PROPERTIES = ("contrast", "homogeneity", "correlation")
 WAVELET_BANDS = ("cH", "cV", "cD")
@@ -143,8 +145,8 @@ def sister_data_folder(images_folder) -> str:
 
 
 def sensor_files_in(folder) -> list:
-    """NWIS files in folder, newest first (the USGS text file and the CSV it is
-    converted to; repeated downloads of the same range add more)."""
+    """NWIS CSV files in folder, newest first. Repeated downloads of the same range
+    leave more than one, and then the user is asked which to use."""
     if not folder or not os.path.isdir(folder):
         return []
     paths = [os.path.join(folder, f) for f in os.listdir(folder)
@@ -473,6 +475,93 @@ def export_pairs(pairs, output_folder, settings=None, prefix=None,
 
     return {"csv_path": csv_path, "xlsx_path": xlsx_path, "rows_ok": n_ok,
             "rows_failed": n_failed, "cancelled": cancelled, "header": header, "rows": rows}
+
+
+def export_datasets(datasets, output_folder, settings=None, prefix=None,
+                    progress_callback=None, cancel_callback=None):
+    """
+    Features for several datasets in one file. datasets is a list of
+    (pairs, sensor_file); each dataset is correlated against its own sensor file,
+    and all of them go into one <prefix>_roi_metrics.csv and .xlsx in output_folder.
+
+    Rows are written to the CSV as they are computed; the sensor columns are added
+    when every dataset is done, so a stopped run still leaves the features.
+    Returns the same keys as export_pairs, plus "sensor_columns".
+    """
+    import pandas as pd
+
+    settings = merged_settings(settings)
+    extractor = RoiFeatureExtractor(settings)
+    header = extractor.header()
+    prefix = prefix or run_prefix()
+    os.makedirs(output_folder, exist_ok=True)
+    csv_path = os.path.join(output_folder, f"{prefix}_roi_metrics.csv")
+
+    total = sum(len(pairs) for pairs, _ in datasets)
+    done, n_ok, n_failed, cancelled = 0, 0, 0, False
+    frames = []
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        for pairs, sensor_file in datasets:
+            rows = []
+            for image_path, mask_path in pairs:
+                if cancel_callback is not None and cancel_callback():
+                    cancelled = True
+                    break
+                row = extractor.compute_row(image_path, mask_path)
+                writer.writerow(row)
+                f.flush()
+                rows.append(row)
+                n_ok, n_failed = (n_ok + 1, n_failed) if row[-1] == STATUS_OK else (n_ok, n_failed + 1)
+                done += 1
+                if progress_callback is not None:
+                    progress_callback(done, total)
+            if rows:
+                frames.append(_with_sensor_columns(pd.DataFrame(rows, columns=header),
+                                                   sensor_file, settings))
+            if cancelled:
+                break
+
+    if not frames:
+        return {"csv_path": csv_path, "xlsx_path": None, "rows_ok": n_ok, "rows_failed": n_failed,
+                "cancelled": cancelled, "header": header, "rows": [], "sensor_columns": []}
+
+    df = pd.concat(frames, ignore_index=True, sort=False)
+    sensor_columns = [c for c in df.columns if c not in header]
+    header = list(df.columns)
+    rows = df.astype(object).where(df.notna(), "").values.tolist()
+    df.to_csv(csv_path, index=False)
+
+    xlsx_path = None
+    if settings["output"]["excel"]:
+        xlsx_path = os.path.join(output_folder, f"{prefix}_roi_metrics.xlsx")
+        try:
+            write_xlsx(xlsx_path, header, rows)
+        except Exception as e:
+            print(f"[roi_feature_extraction] Could not write {xlsx_path}: {e}")
+            xlsx_path = None
+
+    return {"csv_path": csv_path, "xlsx_path": xlsx_path, "rows_ok": n_ok, "rows_failed": n_failed,
+            "cancelled": cancelled, "header": header, "rows": rows, "dataframe": df,
+            "sensor_columns": sensor_columns}
+
+
+def _with_sensor_columns(df, sensor_file, settings):
+    """Append the nearest sensor reading for each image. Returns df unchanged on failure."""
+    if not sensor_file or not os.path.isfile(sensor_file):
+        return df
+    try:
+        import pandas as pd
+        from appcore.SensorImageCorrelator import SensorImageCorrelator
+        tolerance = settings["sensor"]["tolerance_minutes"] or None      # 0: automatic
+        sensor_df = SensorImageCorrelator().sensor_values_for_images(
+            df["Image Path"].tolist(), sensor_file, tolerance_minutes=tolerance)
+        return pd.concat([df.reset_index(drop=True), sensor_df.reset_index(drop=True)], axis=1)
+    except Exception as e:
+        print(f"[roi_feature_extraction] Sensor correlation failed for {sensor_file}: {e}")
+        return df
 
 
 def segmentation_pairs(input_dir, output_dir, image_filter=None, include_missing=True):
