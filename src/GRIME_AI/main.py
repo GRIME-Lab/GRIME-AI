@@ -861,6 +861,19 @@ class MainWindow(QMainWindow):
             print(f"[ERROR] Failed to add Site Config Editor to Tools menu: {e}")
             traceback.print_exc()
 
+        try:
+            # Tools > Plugins: drop-in plugins from <user root>/plugins/ that ask
+            # for the "tools" surface. The list is rebuilt each time the menu is
+            # opened, so a plugin can be added or removed without restarting.
+            self._menu_plugins = QMenu("Plugins", self)
+            self._menu_plugins.aboutToShow.connect(self._build_plugins_menu)
+            self.menuTools.addSeparator()
+            self.menuTools.addMenu(self._menu_plugins)
+            print("[INFO] Plugins added to Tools menu successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to add Plugins to Tools menu: {e}")
+            traceback.print_exc()
+
 
         # ------------------------------------------------------------------------------------------------------------------
         # VIEW MENU — dark/light mode toggle
@@ -3881,6 +3894,57 @@ class MainWindow(QMainWindow):
             print(f"[ERROR] Failed to open Site Config Editor: {e}")
             traceback.print_exc()
             QMessageBox.critical(self, "Site Config Editor", str(e))
+
+    def _build_plugins_menu(self):
+        """Fill Tools > Plugins with the plugins that asked for the Tools surface.
+
+        Nothing here is allowed to take the application down: a missing plugin
+        system or an unreadable plugins folder just leaves the menu empty."""
+        self._menu_plugins.clear()
+        try:
+            from appcore.plugins import discover, open_in_window, plugins_folder, SURFACE_TOOLS
+        except Exception as e:
+            print(f"[ERROR] Plugin support unavailable: {e}")
+            traceback.print_exc()
+            action = self._menu_plugins.addAction("Plugins unavailable")
+            action.setEnabled(False)
+            return
+
+        try:
+            found = discover(surface=SURFACE_TOOLS)
+        except Exception as e:
+            print(f"[ERROR] Could not read the plugins folder: {e}")
+            traceback.print_exc()
+            found = []
+
+        if not found:
+            action = self._menu_plugins.addAction("No plugins installed")
+            action.setEnabled(False)
+        else:
+            for info in found:
+                action = self._menu_plugins.addAction(info.title)
+                action.setStatusTip(info.meta.get("description", f"Open {info.title}"))
+                action.triggered.connect(
+                    lambda _checked=False, plugin=info: open_in_window(plugin, parent=self))
+
+        self._menu_plugins.addSeparator()
+        folder_action = self._menu_plugins.addAction("Open Plugins Folder\u2026")
+        folder_action.setStatusTip(plugins_folder())
+        folder_action.triggered.connect(self._open_plugins_folder)
+
+    def _open_plugins_folder(self):
+        """Show the plugins folder in the file manager, creating it if needed."""
+        from PyQt5.QtGui import QDesktopServices
+        from PyQt5.QtCore import QUrl
+        folder = ""
+        try:
+            from appcore.plugins import plugins_folder
+            folder = plugins_folder()
+            os.makedirs(folder, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        except Exception as e:
+            print(f"[ERROR] Could not open the plugins folder: {e}")
+            QMessageBox.warning(self, "Plugins", f"Could not open:\n{folder}\n\n{e}")
 
     def _get_recipe_store(self):
         """Return the single shared RecipeStore instance (created lazily), so
