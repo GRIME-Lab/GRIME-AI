@@ -44,7 +44,7 @@ class ML_ImageProcessingDlg(QDialog):
     # ******************************************************************************************************************
     # * INITIALIZE DIALOGBOX AND  TABS     *     INITIALIZE DIALOGBOX AND TABS     *     INITIALIZE DIALOGBOX AND TABS *
     # ******************************************************************************************************************
-    PLUGIN_API_VERSION = 1
+    PLUGIN_API_VERSION = 1      # kept for reference; appcore.plugins gates the versions
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -237,60 +237,24 @@ class ML_ImageProcessingDlg(QDialog):
             return None
 
     def _load_plugins(self):
-        """Load optional tab plugins from <user root>/plugins/.
+        """Add the tab plugins from <user root>/plugins/ that asked for this dialog.
 
-        Each plugin is a .py file exposing a module-level PLUGIN dict:
-            PLUGIN = {
-                "title": "My Tab",            # tab label
-                "class": "MyTabClass",        # class defined in this file
-                "ui": "my_tab.ui" or None,    # optional, relative to the file
-                "post": ["wire_connections"], # methods to call on the widget
-                "api_version": 1,
-            }
+        Discovery and loading live in appcore.plugins, shared with the
+        Tools > Plugins menu. Plugins that name surface "tools" open from that
+        menu instead and are skipped here; a plugin with no surface key belongs
+        here, so existing plugins are unaffected.
+        Every plugin is fully guarded: a bad one is skipped and logged, never
+        crashing the dialog."""
+        from appcore.plugins import discover, load_widget, SURFACE_ML
 
-        The module is loaded BY FILE PATH (spec_from_file_location), so a
-        plugin need not be an installed package module; its own
-        `from appcore...` imports still resolve against the installed package.
-        Every plugin is fully guarded — a bad one is skipped and logged, never
-        crashing the dialog. Presence of the file is the only gate."""
-        import os
-        import importlib.util
-        plugin_dir = str(PLUGINS_DIR)
-        if not os.path.isdir(plugin_dir):
-            return
-        for fname in sorted(os.listdir(plugin_dir)):
-            if not fname.endswith(".py") or fname.startswith("_"):
-                continue
-            path = os.path.join(plugin_dir, fname)
-            title = fname
+        for info in discover(surface=SURFACE_ML):
             try:
-                mod_name = os.path.splitext(fname)[0]
-                spec = importlib.util.spec_from_file_location(mod_name, path)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)       # executes the plugin file
-                meta = getattr(module, "PLUGIN", None)
-                if not isinstance(meta, dict):
-                    print(f"[ML] plugin '{fname}' skipped (no PLUGIN dict).")
-                    continue
-                if meta.get("api_version") != self.PLUGIN_API_VERSION:
-                    print(f"[ML] plugin '{fname}' skipped (api_version mismatch).")
-                    continue
-                title = meta.get("title", fname)
-                tab = getattr(module, meta["class"])(self)
-                ui_rel = meta.get("ui")
-                if ui_rel:
-                    ui_file = os.path.join(plugin_dir, ui_rel)
-                    if not os.path.exists(ui_file):
-                        print(f"[ML] plugin '{title}' skipped (UI file not found).")
-                        continue
-                    loadUi(ui_file, tab)
-                for method in meta.get("post", []):
-                    getattr(tab, method)()
-                self.tabWidget.addTab(tab, "* " + title)   # asterisk marks a plugin
-                print(f"[ML] plugin loaded: {title}")
+                tab = load_widget(info, parent=self)
+                self.tabWidget.addTab(tab, "* " + info.title)   # asterisk marks a plugin
+                print(f"[ML] plugin loaded: {info.title}")
             except Exception as err:
                 import traceback
-                print(f"[ML] plugin '{title}' unavailable: "
+                print(f"[ML] plugin '{info.title}' unavailable: "
                       f"{type(err).__name__}: {err}", flush=True)
                 traceback.print_exc()
 
