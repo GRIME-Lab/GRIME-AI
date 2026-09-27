@@ -353,7 +353,7 @@ class OpenStreetMapWidget(QWidget):
     # --------------------------------------------------------------------------------------------------------------
     # Public API: interactive marker layers (clickable, hover tooltips, removable, recolorable)
     # --------------------------------------------------------------------------------------------------------------
-    def add_marker_layer(self, name, markers):
+    def add_marker_layer(self, name, markers, dot=None):
         """
         Add many pins in one call as a named, removable layer. Replaces any layer with the same name.
 
@@ -361,14 +361,19 @@ class OpenStreetMapWidget(QWidget):
             id       str    returned by markerClicked / boxSelected
             lat, lng float
             tooltip  str    HTML shown on hover (optional)
-            color    str    icon color key, e.g. "blue", "red" (optional; default Leaflet icon if missing)
+            color    str    pins: icon color key, e.g. "blue", "red" (default Leaflet icon if missing)
+                            dots: CSS fill color
+            border   str    dots only: CSS border color (optional; defaults to color)
 
-        Clicking a pin emits markerClicked(id).
+        dot: None draws icon pins. A dict draws small circles instead:
+            {"radius": px, "weight": border width px, "fill_opacity": 0..1}
+
+        Clicking a pin or dot emits markerClicked(id).
         """
-        def _impl(name, markers):
-            js = f"window.gaAddMarkerLayer({json.dumps(name)}, {json.dumps(markers)});"
+        def _impl(name, markers, dot):
+            js = f"window.gaAddMarkerLayer({json.dumps(name)}, {json.dumps(markers)}, {json.dumps(dot)});"
             self.view.page().runJavaScript(js)
-        self._queue_or_run(_impl, name, list(markers))
+        self._queue_or_run(_impl, name, list(markers), dot)
 
     def clear_marker_layer(self, name):
         """Remove a layer added with add_marker_layer."""
@@ -376,12 +381,13 @@ class OpenStreetMapWidget(QWidget):
             self.view.page().runJavaScript(f"window.gaClearMarkerLayer({json.dumps(name)});")
         self._queue_or_run(_impl, name)
 
-    def set_marker_color(self, layer, marker_id, color):
-        """Change one pin's icon color, e.g. to show it as selected."""
-        def _impl(layer, marker_id, color):
+    def set_marker_color(self, layer, marker_id, color, border=None):
+        """Change one pin's icon color (pins) or fill and border color (dots), e.g. to show it as selected."""
+        def _impl(layer, marker_id, color, border):
             self.view.page().runJavaScript(
-                f"window.gaSetMarkerColor({json.dumps(layer)}, {json.dumps(str(marker_id))}, {json.dumps(color)});")
-        self._queue_or_run(_impl, layer, marker_id, color)
+                f"window.gaSetMarkerColor({json.dumps(layer)}, {json.dumps(str(marker_id))}, "
+                f"{json.dumps(color)}, {json.dumps(border)});")
+        self._queue_or_run(_impl, layer, marker_id, color, border)
 
     def enable_box_select(self, enabled=True):
         """
@@ -447,15 +453,23 @@ class OpenStreetMapWidget(QWidget):
                         delete window.gaLayers[name];
                     };
 
-                    window.gaAddMarkerLayer = function (name, markers) {
+                    window.gaAddMarkerLayer = function (name, markers, dot) {
                         if (!mapReady()) { console.error('Map not ready yet'); return; }
                         window.gaClearMarkerLayer(name);
                         var group = L.layerGroup();
                         var byId = {};
                         markers.forEach(function (m) {
                             var id = String(m.id);
-                            var icon = window.gaIcon(m.color);
-                            var mk = icon ? L.marker([m.lat, m.lng], {icon: icon}) : L.marker([m.lat, m.lng]);
+                            var mk;
+                            if (dot) {
+                                mk = L.circleMarker([m.lat, m.lng], {
+                                    radius: dot.radius, weight: dot.weight, fillOpacity: dot.fill_opacity,
+                                    fillColor: m.color, color: m.border || m.color
+                                });
+                            } else {
+                                var icon = window.gaIcon(m.color);
+                                mk = icon ? L.marker([m.lat, m.lng], {icon: icon}) : L.marker([m.lat, m.lng]);
+                            }
                             if (m.tooltip) mk.bindTooltip(m.tooltip, {direction: 'top'});
                             mk.on('click', function () {
                                 if (window.gaBridge) window.gaBridge.markerClicked(id);
@@ -464,15 +478,21 @@ class OpenStreetMapWidget(QWidget):
                             byId[id] = mk;
                         });
                         group.addTo(window.map);
-                        window.gaLayers[name] = {group: group, byId: byId};
+                        window.gaLayers[name] = {group: group, byId: byId, dot: !!dot};
                     };
 
-                    window.gaSetMarkerColor = function (name, id, color) {
+                    window.gaSetMarkerColor = function (name, id, color, border) {
                         var layer = window.gaLayers[name];
                         if (!layer) return;
                         var mk = layer.byId[String(id)];
-                        var icon = window.gaIcon(color);
-                        if (mk && icon) mk.setIcon(icon);
+                        if (!mk) return;
+                        if (layer.dot) {
+                            mk.setStyle({fillColor: color, color: border || color});
+                            mk.bringToFront();
+                        } else {
+                            var icon = window.gaIcon(color);
+                            if (icon) mk.setIcon(icon);
+                        }
                     };
 
                     // Box select: shift+drag draws a rectangle
