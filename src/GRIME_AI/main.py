@@ -175,7 +175,6 @@ from appcore.usgs.usgs_client import USGSClient
 # lazy: from appcore.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
 # lazy: from appcore.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
 # lazy: from appcore.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
-# lazy: from appcore.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
 from appcore.dialogs.triage.TriageOptionsDlg import TriageOptionsDlg
 from appcore.Color import Color
 from appcore.vegetation_indices import Vegetation_Indices, GreennessIndex
@@ -806,17 +805,6 @@ class MainWindow(QMainWindow):
         self.action_ImageOrganizer.triggered.connect(self.menubar_ImageOrganizer)
 
         try:
-            self.action_TemporalAveraging = QAction("Temporal Averaging", self)
-            self.action_TemporalAveraging.setStatusTip("Average a folder of images together")
-            self.action_TemporalAveraging.triggered.connect(self.toolbarButtonTemporalAveraging)
-            self.menuTools.addSeparator()
-            self.menuTools.addAction(self.action_TemporalAveraging)
-            print("[INFO] Temporal Averaging added to Tools menu successfully.")
-        except Exception as e:
-            print(f"[ERROR] Failed to add Temporal Averaging to Tools menu: {e}")
-            traceback.print_exc()
-
-        try:
             self.action_LaunchSAGE = QAction("SAGE", self)
             self.action_LaunchSAGE.setStatusTip("Open the SAGE annotation and segmentation tool")
             self.action_LaunchSAGE.triggered.connect(self.menubar_launch_sage)
@@ -920,7 +908,7 @@ class MainWindow(QMainWindow):
         # MENU REORGANIZATION — split the crowded Tools menu into topic menus.
         # Actions already exist (from the .ui or created above); here they are
         # re-parented into Data Explorer / Annotations / Connectivity /
-        # Productivity / Test menus. Tools keeps only SAGE and Temporal Averaging.
+        # Productivity / Test menus. Tools keeps SAGE and the plugins.
         # ------------------------------------------------------------------------------------------------------------------
         try:
             def _move_action(attr_name, target_menu):
@@ -2343,8 +2331,6 @@ class MainWindow(QMainWindow):
              "GRIME2 - Water Level Measurement", self.toolbarButtonGRIME2),
             ("Help_2.png", "Help",
              "Help and Release Notes", self.toolbarButtonReleaseNotes),
-            ("TemporalAvg.png", "Temporal Averaging",
-             "Average a folder of images together", self.toolbarButtonTemporalAveraging),
         ]
 
         # Generic creation loop
@@ -4174,18 +4160,6 @@ class MainWindow(QMainWindow):
             print(f"[ERROR] Failed to launch Image Organizer dialog: {e}")
             traceback.print_exc()  # full traceback to terminal
 
-
-    # ======================================================================================================================
-    # TEMPORAL AVERAGING
-    # ======================================================================================================================
-    def toolbarButtonTemporalAveraging(self):
-        """Launch the Temporal Averaging dialog."""
-        if not hasattr(self, "_temporalAvgDlg") or self._temporalAvgDlg is None:
-            from appcore.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
-            self._temporalAvgDlg = TemporalAveragingDlg(self)
-        self._temporalAvgDlg.show()
-        self._temporalAvgDlg.raise_()
-        self._temporalAvgDlg.activateWindow()
 
     # ==================================================================================================================
     # SAGE — SEGMENTATION & ANNOTATION FOR GEOSPATIAL ECOHYDROLOGY

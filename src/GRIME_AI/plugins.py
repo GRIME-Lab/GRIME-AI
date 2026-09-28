@@ -26,6 +26,7 @@
 #         "ui":      "my_tab.ui" or None,         # optional, beside the .py
 #         "post":    ["wire_connections"],        # methods called on the widget
 #         "surface": "tools",                     # "tools", "ml", or both
+#         "size":    [1400, 900],                 # optional opening window size
 #         "api_version": 2,
 #     }
 #
@@ -151,7 +152,16 @@ def open_in_window(info: PluginInfo, parent=None):
     layout = QVBoxLayout(window)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.addWidget(widget)
-    window.resize(widget.sizeHint().expandedTo(widget.minimumSizeHint()))
+    # A plugin whose panels are empty until the user loads something has a
+    # small size hint, so it can say what it wants to open at. Whatever the
+    # source, the window is kept inside the screen it opens on.
+    size = meta_size(info) or widget.sizeHint().expandedTo(widget.minimumSizeHint())
+    from PyQt5.QtWidgets import QApplication
+    screen = QApplication.primaryScreen()
+    if screen is not None:
+        available = screen.availableGeometry().size()
+        size = size.boundedTo(available)
+    window.resize(size)
 
     if parent is not None:
         # Hold a reference so the window survives; drop it when it closes.
@@ -165,6 +175,18 @@ def open_in_window(info: PluginInfo, parent=None):
 
     window.show()
     return window
+
+
+def meta_size(info: PluginInfo):
+    """The plugin's requested opening size as a QSize, or None."""
+    from PyQt5.QtCore import QSize
+    size = info.meta.get("size")
+    try:
+        if size and len(size) == 2:
+            return QSize(int(size[0]), int(size[1]))
+    except (TypeError, ValueError):
+        print(f"[plugins] '{info.title}': ignoring an invalid size {size!r}.")
+    return None
 
 
 # ======================================================================================================================
@@ -214,16 +236,13 @@ def _import_module(path):
     spec = importlib.util.spec_from_file_location(mod_name, path)
     module = importlib.util.module_from_spec(spec)
 
-    # A plugin in its own folder can import its own modules by name.
+    # A plugin in its own folder can import its own modules by name. The folder
+    # stays on sys.path: a plugin also imports its modules while its widgets are
+    # built and while it runs, long after this import has returned.
     own_folder = os.path.dirname(path)
-    added = own_folder not in sys.path
-    if added:
-        sys.path.insert(0, own_folder)
-    try:
-        spec.loader.exec_module(module)      # executes the plugin file
-    finally:
-        if added and own_folder in sys.path:
-            sys.path.remove(own_folder)
+    if own_folder not in sys.path:
+        sys.path.append(own_folder)
+    spec.loader.exec_module(module)          # executes the plugin file
     return module
 
 

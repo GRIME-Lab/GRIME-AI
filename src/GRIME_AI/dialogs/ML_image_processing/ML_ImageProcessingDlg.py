@@ -95,14 +95,6 @@ class ML_ImageProcessingDlg(QDialog):
             post=lambda t: (t.configure_filmstrip(), t.wire_connections()))
 
         # --------------------------------------------------------------------------------------------------------------
-        # SANDBAR ANALYZER TAB     ---     SANDBAR ANALYZER TAB     ---     SANDBAR ANALYZER TAB     ---     SANDBAR ANALYZER TAB
-        # --------------------------------------------------------------------------------------------------------------
-        self.sandbar_tab = self._add_tab_safe(
-            "Sandbar Analyzer", _MOD + "sandbar_analyzer_tab", "SandbarAnalyzerTab",
-            ui_rel="ML_image_processing/sandbar_analyzer_tab.ui",
-            post=lambda t: (t.configure_filmstrip(), t.wire_connections()))
-
-        # --------------------------------------------------------------------------------------------------------------
         # COCO GENERATION TAB    ---    COCO GENERATION TAB    ---    COCO GENERATION TAB    ---    COCO GENERATION TAB
         # --------------------------------------------------------------------------------------------------------------
         self.coco_generation_tab = self._add_tab_safe(
