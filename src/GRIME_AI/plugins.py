@@ -42,6 +42,7 @@
 
 import os
 import sys
+import json
 import importlib.util
 import traceback
 
@@ -187,6 +188,123 @@ def meta_size(info: PluginInfo):
     except (TypeError, ValueError):
         print(f"[plugins] '{info.title}': ignoring an invalid size {size!r}.")
     return None
+
+
+# ======================================================================================================================
+# Per-plugin settings
+# ======================================================================================================================
+class PluginSettings(dict):
+    """
+    A plugin's own settings file, so folder paths and choices come back the next
+    time it is opened. One file per plugin, named after it, in the application's
+    Settings folder. A missing or damaged file starts empty rather than raising:
+    settings are a convenience and must never stop a plugin from opening.
+
+    Widgets can be bound to keys, which is most of what a plugin needs:
+
+        settings = plugin_settings(__file__)
+        settings.bind(self._edit_folder, "folder")
+        settings.bind(self._combo_mode, "mode")
+
+    A bound widget is filled from the file when it is bound, and writes back
+    whenever the user changes it.
+    """
+
+    def __init__(self, path, defaults=None):
+        super().__init__(defaults or {})
+        self.path = path
+        self._bound = []
+        self.load()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def load(self):
+        try:
+            with open(self.path, "r") as handle:
+                stored = json.load(handle)
+            if isinstance(stored, dict):
+                self.update(stored)
+        except Exception:
+            pass          # absent or unreadable: keep the defaults
+        return self
+
+    def save(self):
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            with open(self.path, "w") as handle:
+                json.dump(dict(self), handle, indent=4)
+            return True
+        except Exception as err:
+            print(f"[plugins] Could not save {self.path}: {err}")
+            return False
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def bind(self, widget, key, default=None):
+        """
+        Restore a widget from the file and save it whenever it changes. Handles
+        line edits, check boxes, combo boxes, spin boxes, sliders and splitters;
+        anything else has to be read and written by the plugin itself.
+        """
+        setter, getter, signal = _widget_access(widget)
+        if setter is None:
+            print(f"[plugins] No binding for {type(widget).__name__}; "
+                  f"read and write '{key}' directly.")
+            return self
+
+        value = self.get(key, default)
+        if value is not None:
+            try:
+                setter(value)
+            except Exception as err:
+                print(f"[plugins] Could not restore '{key}': {err}")
+
+        def remember(*_):
+            self[key] = getter()
+            self.save()
+
+        signal.connect(remember)
+        self._bound.append((widget, key))
+        return self
+
+
+def _widget_access(widget):
+    """(setter, getter, changed signal) for a widget, or (None, None, None)."""
+    from PyQt5.QtWidgets import (QLineEdit, QCheckBox, QComboBox, QSpinBox,
+                                 QDoubleSpinBox, QSlider, QSplitter, QPlainTextEdit)
+
+    if isinstance(widget, QLineEdit):
+        return widget.setText, widget.text, widget.editingFinished
+    if isinstance(widget, QCheckBox):
+        return widget.setChecked, widget.isChecked, widget.toggled
+    if isinstance(widget, QComboBox):
+        return widget.setCurrentIndex, widget.currentIndex, widget.currentIndexChanged
+    if isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+        return widget.setValue, widget.value, widget.valueChanged
+    if isinstance(widget, QSlider):
+        return widget.setValue, widget.value, widget.valueChanged
+    if isinstance(widget, QSplitter):
+        return widget.setSizes, widget.sizes, widget.splitterMoved
+    if isinstance(widget, QPlainTextEdit):
+        return widget.setPlainText, widget.toPlainText, widget.textChanged
+    return None, None, None
+
+
+def settings_folder() -> str:
+    """Where plugin settings files live: the application's Settings folder."""
+    return os.path.join(os.path.dirname(os.path.normpath(plugins_folder())), "Settings")
+
+
+def plugin_settings(plugin_file, defaults=None) -> PluginSettings:
+    """
+    The settings for one plugin, named after its file. Pass __file__ from the
+    plugin. Standalone, where there is no application folder, the file sits
+    beside the plugin instead.
+    """
+    name = os.path.splitext(os.path.basename(plugin_file))[0] + ".json"
+    try:
+        folder = settings_folder()
+    except Exception:
+        folder = os.path.dirname(os.path.abspath(plugin_file))
+    return PluginSettings(os.path.join(folder, name), defaults)
 
 
 # ======================================================================================================================

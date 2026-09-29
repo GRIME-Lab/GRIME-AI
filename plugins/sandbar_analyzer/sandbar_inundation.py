@@ -57,6 +57,24 @@ LABEL_NO_THRESHOLD = {
 }
 
 
+def _load_correlator():
+    """
+    The SensorImageCorrelator class, from the host package or from a copy beside
+    this plugin when it runs standalone.
+    """
+    try:
+        from appcore.SensorImageCorrelator import SensorImageCorrelator
+    except ImportError:
+        try:
+            from SensorImageCorrelator import SensorImageCorrelator      # beside this file
+        except ImportError as err:
+            raise ImportError(
+                "SensorImageCorrelator was not found. Running outside the application, "
+                "place SensorImageCorrelator.py beside this plugin. Original error: "
+                f"{err}") from err
+    return SensorImageCorrelator
+
+
 # ======================================================================================================================
 # Worker
 # ======================================================================================================================
@@ -341,7 +359,7 @@ class InundationThresholdTab(QWidget):
 
     def _pairs_with_stage(self, images_folder, masks_folder, sensor_file):
         """[(image, mask, stage)] for every image that has both a mask and a stage."""
-        from SensorImageCorrelator import SensorImageCorrelator      # beside this plugin
+        SensorImageCorrelator = _load_correlator()
         images = []
         masks = []
         for name in sorted(os.listdir(images_folder)):
