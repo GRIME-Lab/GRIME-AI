@@ -57,6 +57,9 @@ SETTINGS_OWNER = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 RASTER_FILTER = "Raster (*.tif *.tiff *.jp2 *.png *.jpg);;All files (*.*)"
 LIDAR_FILTER = "Lidar (*.las *.laz);;All files (*.*)"
 PREVIEW_LONG_EDGE = 1600        # tiles are far larger than any panel
+# Analyses read the region at full resolution up to this many cells; beyond it
+# they would take minutes, and the user is asked to draw a smaller region.
+MAX_ANALYSIS_CELLS = 16_000_000
 VOID_BELOW = -9000.0            # 3DEP stores voids as a large negative value
 HILLSHADE_AZIMUTH = 315.0
 HILLSHADE_ALTITUDE = 45.0
@@ -96,7 +99,18 @@ def stretch(values, low_percentile=2.0, high_percentile=98.0) -> np.ndarray:
     return np.clip((values - low) / (high - low) * 255.0, 0, 255).astype(np.uint8)
 
 
+# Display detail choices for the Elevation view: the long edge in pixels, or
+# None for the file as it is. Only the display uses this; analyses read the file.
+DISPLAY_DETAIL = [("1,600 px (fastest)", 1600), ("3,200 px", 3200), ("6,400 px", 6400),
+                  ("Full resolution", None)]
+# Analysis cell size choices: 1 is the file's own cells, 2 averages 2 x 2, and so on.
+ANALYSIS_COARSENING = [("File resolution", 1), ("2 x coarser", 2), ("4 x coarser", 4),
+                       ("8 x coarser", 8)]
+
+
 def downscale(image, long_edge=PREVIEW_LONG_EDGE):
+    if not long_edge:
+        return image
     scale = long_edge / max(image.shape[0], image.shape[1])
     if scale < 1.0:
         interpolation = cv2.INTER_AREA
@@ -279,6 +293,7 @@ class ZoomableView(QGraphicsView):
     cursor_moved = pyqtSignal(object)   # (row, column) under the pointer, or None
     clicked = pyqtSignal(object)        # (row, column) clicked in Select mode
     double_clicked = pyqtSignal(object)  # (row, column) double clicked in Select mode
+    dragged = pyqtSignal(object)        # (row, column) under a Select-mode drag
 
     ZOOM_STEP = 1.25
     MIN_SCALE = 0.02
@@ -307,6 +322,7 @@ class ZoomableView(QGraphicsView):
         self._roi_item = None
         self._roi_origin = None
         self._pan_from = None
+        self._select_dragging = False
         for bar in (self.horizontalScrollBar(), self.verticalScrollBar()):
             bar.valueChanged.connect(self.view_changed)
 
@@ -327,6 +343,68 @@ class ZoomableView(QGraphicsView):
             self.centerOn(centre)
         else:
             self.fit()
+        self.view_changed.emit()
+
+    # ── Overlays: vector outlines and labels that stay the same size on screen ──
+    def clear_overlays(self):
+        for item in getattr(self, "_overlays", []):
+            self._scene.removeItem(item)
+        self._overlays = []
+
+    def add_outline(self, points, rgb, width=1.0, dashed=False, z=2.0):
+        """A closed outline in image coordinates, drawn with a pen whose width is
+        in screen pixels, so it stays visible however far the view is zoomed out."""
+        from PyQt5.QtGui import QPainterPath, QPen, QColor
+        if len(points) < 2:
+            return None
+        path = QPainterPath()
+        path.moveTo(float(points[0][0]), float(points[0][1]))
+        for x, y in points[1:]:
+            path.lineTo(float(x), float(y))
+        path.closeSubpath()
+        pen = QPen(QColor(*rgb), float(width))
+        pen.setCosmetic(True)
+        if dashed:
+            pen.setStyle(Qt.DashLine)
+        item = self._scene.addPath(path, pen)
+        item.setZValue(z)
+        if not hasattr(self, "_overlays"):
+            self._overlays = []
+        self._overlays.append(item)
+        return item
+
+    def add_label(self, x, y, text, rgb, point_size=9):
+        """Text pinned to an image position but drawn at a fixed screen size."""
+        from PyQt5.QtGui import QColor, QFont, QPen
+        from PyQt5.QtWidgets import QGraphicsSimpleTextItem, QGraphicsItem
+        item = QGraphicsSimpleTextItem(str(text))
+        font = QFont()
+        font.setPointSize(int(point_size))
+        font.setBold(True)
+        item.setFont(font)
+        item.setBrush(QColor(*rgb))
+        item.setPen(QPen(QColor(0, 0, 0), 0.6))        # a dark edge so it reads on any colour
+        item.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+        item.setPos(float(x), float(y))
+        item.setZValue(3.0)
+        self._scene.addItem(item)
+        if not hasattr(self, "_overlays"):
+            self._overlays = []
+        self._overlays.append(item)
+        return item
+
+    def zoom_to(self, points, fill=0.35):
+        """Zoom so the points' extent fills this share of the view, centred."""
+        if not len(points):
+            return
+        xs = [float(p[0]) for p in points]
+        ys = [float(p[1]) for p in points]
+        width = max(max(xs) - min(xs), 4.0) / fill
+        height = max(max(ys) - min(ys), 4.0) / fill
+        centre_x, centre_y = (max(xs) + min(xs)) / 2.0, (max(ys) + min(ys)) / 2.0
+        self.fitInView(QRectF(centre_x - width / 2, centre_y - height / 2, width, height),
+                       Qt.KeepAspectRatio)
+        self._fitted = False
         self.view_changed.emit()
 
     def set_message(self, text):
@@ -414,7 +492,10 @@ class ZoomableView(QGraphicsView):
 
     def mousePressEvent(self, event):
         if self._mode == MODE_SELECT and event.button() == Qt.LeftButton:
-            self.clicked.emit(self._cell_at(event.pos()))
+            self._select_dragging = True
+            cell = self._cell_at(event.pos())
+            self.clicked.emit(cell)
+            self.dragged.emit(cell)
             return
         if self._mode == MODE_DRAW and event.button() == Qt.LeftButton:
             point = self.mapToScene(event.pos())
@@ -459,6 +540,11 @@ class ZoomableView(QGraphicsView):
                           max(self._roi_origin.x(), scene_point.x()),
                           max(self._roi_origin.y(), scene_point.y())))
             return
+        if self._select_dragging:
+            cell = self._cell_at(event.pos())
+            if cell is not None:
+                self.dragged.emit(cell)
+            return
         if self._pan_from is not None:
             delta = event.pos() - self._pan_from
             self._pan_from = event.pos()
@@ -473,6 +559,9 @@ class ZoomableView(QGraphicsView):
         if self._mode == MODE_DRAW and self._roi_origin is not None:
             self._roi_origin = None
             self.roi_changed.emit(self.roi())
+            return
+        if self._select_dragging:
+            self._select_dragging = False
             return
         if self._pan_from is not None:
             self._pan_from = None
@@ -671,10 +760,11 @@ class NaipViewerTab(_ViewerBase):
         self._check_stretch = QCheckBox("Percentile stretch")
         self._check_stretch.setChecked(True)
         self._check_stretch.toggled.connect(self._render)
-        self._check_visible_only = QCheckBox("Plot the visible area only")
+        self._check_visible_only = QCheckBox("On-screen area only")
         self._check_visible_only.setChecked(True)
         self._check_visible_only.setToolTip(
-            "The histogram and the percentages describe the part of the tile on screen.")
+            "The histogram and the percentages describe the part of the tile on screen, "
+            "rather than the whole tile.")
         self._check_visible_only.toggled.connect(self._update_plot)
         self._controls.addWidget(QLabel("View:"))
         self._controls.addWidget(self._combo_mode)
@@ -808,30 +898,42 @@ class DemViewerTab(_ViewerBase):
         self._combo_mode.currentIndexChanged.connect(self._render)
         self._combo_axis = QComboBox()
         self._combo_axis.addItems(["Profile across a row", "Profile down a column"])
-        self._combo_axis.currentIndexChanged.connect(self._render)
+        self._combo_axis.currentIndexChanged.connect(self._axis_changed)
+        # One step is one row or column of the tile, set when a file loads, so
+        # the line moves smoothly instead of jumping a percent at a time.
         self._slider_line = QSlider(Qt.Horizontal)
-        self._slider_line.setRange(0, 100)
-        self._slider_line.setValue(50)
+        self._slider_line.setRange(0, 0)
         self._slider_line.valueChanged.connect(self._render)
 
         self._controls.addWidget(QLabel("View:"))
         self._controls.addWidget(self._combo_mode)
         self._controls.addWidget(self._combo_axis)
-        self._check_visible_only = QCheckBox("Plot the visible area only")
+        self._check_visible_only = QCheckBox("On-screen area only")
         self._check_visible_only.setChecked(True)
         self._check_visible_only.setToolTip(
-            "Profile and histogram describe the part of the tile on screen, so zooming "
-            "in on a reach plots that reach rather than the whole tile.")
+            "What the profile, the slope, Compound Bars, Morphology and the 3D views "
+            "analyse: a drawn region always wins; with no region, the part of the tile "
+            "on screen when this is ticked, otherwise the whole tile.")
         self._check_visible_only.toggled.connect(self._update_plot)
+        self._label_area_source = QLabel("")
 
         self._modes = ModeBar(self._image)
         self._button_clear_roi = QPushButton("Clear Region")
         self._button_clear_roi.clicked.connect(lambda: self._image.set_roi(None))
         self._button_bars = QPushButton("Compound Bars")
-        self._button_bars.setToolTip("Find the bar units in the region, or in the whole view "
+        self._button_bars.setToolTip("Find the platforms in the region, or in the whole view "
                                      "when no region is drawn.")
         self._button_bars.clicked.connect(self._open_compound_bars)
         self._bars_dialog = None
+
+        self._combo_display = QComboBox()
+        self._combo_display.addItems([label for label, _ in DISPLAY_DETAIL])
+        self._combo_display.setToolTip(
+            "How much detail the view shows. Coarser is faster to pan and zoom on a large "
+            "tile. Analyses always read the file itself, whatever this is set to.")
+        self._combo_display.currentIndexChanged.connect(self._display_changed)
+        self.analysis_coarsening = 1
+        self.max_analysis_cells = MAX_ANALYSIS_CELLS
 
         self._button_3d = QPushButton("3D Surface")
         self._button_3d.setToolTip("Open the elevation as a rotatable 3-D surface.")
@@ -841,10 +943,13 @@ class DemViewerTab(_ViewerBase):
         self._controls.addWidget(QLabel("Position:"))
         self._controls.addWidget(self._slider_line, 1)
         self._controls.addWidget(self._check_visible_only)
+        self._controls.addWidget(self._label_area_source)
         self._controls.addWidget(self._modes)
         self._controls.addWidget(self._button_clear_roi)
         self._controls.addWidget(self._button_bars)
         self._controls.addWidget(self._button_3d)
+        self._controls.addWidget(QLabel("Display:"))
+        self._controls.addWidget(self._combo_display)
 
         # Under the cursor: elevation as the DEM holds it, plus whatever else is
         # worth reporting later.
@@ -852,8 +957,18 @@ class DemViewerTab(_ViewerBase):
         self._status.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._layout.addWidget(self._status)
         self._image.cursor_moved.connect(self._update_status)
+        # Dragging in Select mode moves the profile line to the pointer.
+        self._image.dragged.connect(self._drag_profile_line)
+        self._image.roi_changed.connect(lambda _bounds: self._update_plot())
+
+        # The general slope of the area shown, under the profile.
+        self._plane_label = QLabel("")
+        self._plane_label.setWordWrap(True)
+        self._plane_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._layout.insertWidget(self._layout.indexOf(self._log), self._plane_label)
 
         self._bind(self._combo_mode, "mode")
+        self._bind(self._combo_display, "display_detail")
         self._bind(self._combo_axis, "profile_axis")
         self._bind(self._slider_line, "profile_position")
         self._bind(self._check_visible_only, "visible_only")
@@ -865,9 +980,22 @@ class DemViewerTab(_ViewerBase):
             raise ValueError("The file is not a readable raster.")
         if raster.ndim == 3:
             raster = raster[:, :, 0]
-        elevation = downscale(raster).astype(np.float32)
+        elevation = downscale(raster, self._display_edge()).astype(np.float32)
         elevation[elevation < VOID_BELOW] = np.nan
         self._elevation = elevation
+        # The view is downscaled for speed, so one displayed cell spans this many
+        # cells of the file. Slopes are measured per file cell, not per pixel.
+        self._cells_per_pixel = raster.shape[1] / float(elevation.shape[1])
+        # Ground size of one file cell, from the georeferencing when rasterio can
+        # read it. Without it, one cell is taken as one metre, as for 3DEP 1 m.
+        self._file_cell_m = 1.0
+        try:
+            import rasterio
+            with rasterio.open(path) as source:
+                self._file_cell_m = float(abs(source.transform.a)) or 1.0
+        except Exception:
+            pass
+        self._set_slider_range()
 
         finite = elevation[np.isfinite(elevation)]
         if finite.size:
@@ -878,6 +1006,34 @@ class DemViewerTab(_ViewerBase):
                 f"median {percentiles[1]:,.2f}, relief {finite.max() - finite.min():,.2f}; "
                 f"{100 * (1 - finite.size / elevation.size):,.1f}% void")
         self._render()
+
+    def _set_slider_range(self):
+        """One slider step per row, or per column, of the loaded tile."""
+        if self._elevation is None:
+            return
+        rows, columns = self._elevation.shape
+        count = rows if self._combo_axis.currentIndex() == 0 else columns
+        value = self._slider_line.value()
+        self._slider_line.blockSignals(True)
+        self._slider_line.setRange(0, max(count - 1, 0))
+        self._slider_line.setValue(min(value, count - 1) if value else count // 2)
+        self._slider_line.blockSignals(False)
+
+    def _axis_changed(self):
+        self._set_slider_range()
+        self._render()
+
+    def _drag_profile_line(self, cell):
+        """Put the profile line where the pointer is; the slider follows."""
+        if cell is None or self._elevation is None:
+            return
+        row, column = cell
+        self._slider_line.setValue(row if self._combo_axis.currentIndex() == 0 else column)
+
+    def _line_index(self):
+        rows, columns = self._elevation.shape
+        limit = rows if self._combo_axis.currentIndex() == 0 else columns
+        return int(min(max(self._slider_line.value(), 0), limit - 1))
 
     def _render(self):
         if self._elevation is None:
@@ -897,23 +1053,81 @@ class DemViewerTab(_ViewerBase):
             display = cv2.applyColorMap(stretch(slope_degrees, 1, 99), cv2.COLORMAP_INFERNO)
 
         rows, columns = elevation.shape
-        fraction = self._slider_line.value() / 100.0
-        along_row = self._combo_axis.currentIndex() == 0
-        if along_row:
-            index = min(int(fraction * (rows - 1)), rows - 1)
-            values = elevation[index, :]
+        index = self._line_index()
+        if self._combo_axis.currentIndex() == 0:
             marker = ((0, index), (columns - 1, index))
-            title = f"Elevation across row {index} of {rows}"
         else:
-            index = min(int(fraction * (columns - 1)), columns - 1)
-            values = elevation[:, index]
             marker = ((index, 0), (index, rows - 1))
-            title = f"Elevation down column {index} of {columns}"
 
         display = display.copy()
-        cv2.line(display, marker[0], marker[1], (0, 0, 255), max(1, rows // 400))
+        cv2.line(display, marker[0], marker[1], (0, 0, 255), 1)
         self._show(display)
         self._update_plot()
+
+    def _display_edge(self):
+        """The long edge the view is drawn at, or None for the file's own size."""
+        combo = getattr(self, "_combo_display", None)
+        index = combo.currentIndex() if combo is not None else 0
+        return DISPLAY_DETAIL[max(index, 0)][1]
+
+    def _display_changed(self):
+        """Redraw the open file at the new detail, keeping its region if one is drawn."""
+        if self._path and os.path.exists(self._path):
+            self.load(self._path)
+
+    def cell_size_m(self):
+        """Metres of ground per displayed cell: file cell size times the downscaling."""
+        return getattr(self, "_file_cell_m", 1.0) * getattr(self, "_cells_per_pixel", 1.0)
+
+    def region_full_resolution(self):
+        """
+        The current region read from the file at its own resolution, rather than
+        from the downscaled copy on screen. Returns (patch, metres per cell,
+        (left, top, right, bottom) in file cells, source), or None when the
+        region would be too large to analyse at full resolution.
+
+        The view is downscaled for speed, which on a large tile makes a cell
+        several metres across; small features vanish in that copy.
+        """
+        if self._elevation is None or not self._path:
+            return None
+        (left, top, right, bottom), source = self._region()
+        scale = getattr(self, "_cells_per_pixel", 1.0)
+        box = (int(left * scale), int(top * scale),
+               int(math.ceil(right * scale)), int(math.ceil(bottom * scale)))
+        coarsening = int(getattr(self, "analysis_coarsening", 1) or 1)
+        cells = (box[2] - box[0]) * (box[3] - box[1]) / float(coarsening * coarsening)
+        if cells > float(getattr(self, "max_analysis_cells", MAX_ANALYSIS_CELLS)):
+            return None
+
+        patch = None
+        try:
+            import rasterio
+            from rasterio.windows import Window
+            with rasterio.open(self._path) as source_file:
+                window = Window(box[0], box[1], box[2] - box[0], box[3] - box[1])
+                patch = source_file.read(1, window=window).astype(np.float32)
+        except Exception:
+            raster = cv2.imread(self._path, cv2.IMREAD_UNCHANGED)
+            if raster is not None:
+                if raster.ndim == 3:
+                    raster = raster[:, :, 0]
+                patch = raster[box[1]:box[3], box[0]:box[2]].astype(np.float32)
+        if patch is None or patch.size == 0:
+            return None
+        patch[patch < VOID_BELOW] = np.nan
+        cell = getattr(self, "_file_cell_m", 1.0)
+        if coarsening > 1:
+            # Block means, ignoring voids, so a coarser cell is the average ground.
+            valid = np.isfinite(patch)
+            filled = np.where(valid, patch, 0.0).astype(np.float32)
+            size = (max(patch.shape[1] // coarsening, 1), max(patch.shape[0] // coarsening, 1))
+            sums = cv2.resize(filled, size, interpolation=cv2.INTER_AREA)
+            weights = cv2.resize(valid.astype(np.float32), size, interpolation=cv2.INTER_AREA)
+            patch = np.where(weights > 0, sums / np.maximum(weights, 1e-6), np.nan)
+            patch = patch.astype(np.float32)
+            cell *= coarsening
+        return patch, cell, box, source
 
     def _region(self):
         """The drawn region, else the visible area, else the whole tile."""
@@ -947,8 +1161,11 @@ class DemViewerTab(_ViewerBase):
         if 0 < row < rows - 1 and 0 < column < columns - 1:
             patch = self._elevation[row - 1:row + 2, column - 1:column + 2]
             if np.isfinite(patch).all():
-                dy = (float(patch[2, 1]) - float(patch[0, 1])) / 2.0
-                dx = (float(patch[1, 2]) - float(patch[1, 0])) / 2.0
+                # Per file cell: the view is downscaled, so a displayed cell
+                # spans several of the file's.
+                spacing = 2.0 * getattr(self, "_cells_per_pixel", 1.0)
+                dy = (float(patch[2, 1]) - float(patch[0, 1])) / spacing
+                dx = (float(patch[1, 2]) - float(patch[1, 0])) / spacing
                 parts.append(f"slope {math.degrees(math.atan(math.hypot(dx, dy))):,.2f}\u00b0")
 
         roi = self._image.roi()
@@ -964,12 +1181,18 @@ class DemViewerTab(_ViewerBase):
         if self._elevation is None:
             QMessageBox.information(self, "Compound Bars", "Open an elevation file first.")
             return
-        (left, top, right, bottom), source = self._region()
-        patch = self._elevation[top:bottom, left:right]
+        full = self.region_full_resolution()
+        if full is None:
+            QMessageBox.information(self, "Compound Bars",
+                                    "This region is too large to analyse at full resolution. "
+                                    "Draw a smaller region or zoom in.")
+            return
+        patch, cell_size, (left, top, right, bottom), source = full
         title = (f"{os.path.basename(self._path)} ({source}: rows {top}-{bottom}, "
-                 f"columns {left}-{right})")
+                 f"columns {left}-{right}, {cell_size:g} m cells)")
         if self._bars_dialog is None:
-            self._bars_dialog = CompoundBarsDialog(patch, title, self, self._settings)
+            self._bars_dialog = CompoundBarsDialog(patch, title, self, self._settings,
+                                                   cell_size=cell_size)
         else:
             self._bars_dialog.set_elevation(patch, title)
         self._bars_dialog.show()
@@ -1006,8 +1229,8 @@ class DemViewerTab(_ViewerBase):
             return
         elevation = self._elevation
         rows, columns = elevation.shape
-        fraction = self._slider_line.value() / 100.0
         along_row = self._combo_axis.currentIndex() == 0
+        index = self._line_index()
 
         left, top, right, bottom = 0, 0, columns, rows
         visible = self._image.visible_image_rect() if self._check_visible_only.isChecked() else None
@@ -1015,12 +1238,10 @@ class DemViewerTab(_ViewerBase):
             left, top, right, bottom = visible
 
         if along_row:
-            index = min(int(fraction * (rows - 1)), rows - 1)
             values = elevation[index, left:right]
             extent = f"columns {left} to {right}" if visible else f"all {columns} columns"
             title = f"Elevation across row {index}, {extent}"
         else:
-            index = min(int(fraction * (columns - 1)), columns - 1)
             values = elevation[top:bottom, index]
             extent = f"rows {top} to {bottom}" if visible else f"all {rows} rows"
             title = f"Elevation down column {index}, {extent}"
@@ -1029,6 +1250,40 @@ class DemViewerTab(_ViewerBase):
             plot_profile(np.asarray(values, np.float32), title,
                          "pixels along the line", "elevation")).scaled(
             self._plot.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self._update_plane(elevation[top:bottom, left:right],
+                           "visible area" if visible else "whole tile")
+        _, analysed = self._region()
+        self._label_area_source.setText(f"Analysing: {analysed}")
+
+    def _update_plane(self, patch, extent):
+        """
+        The plane fitted to the area shown: how steeply it dips, which way, and
+        how far it falls across the area. Distances are in file cells, taken as
+        the elevation model's own units, which is metres for a 1 m 3DEP DEM.
+        """
+        label = getattr(self, "_plane_label", None)
+        if label is None:
+            return
+        values = np.asarray(patch, np.float64)
+        if values.ndim != 2 or min(values.shape) < 2:
+            label.setText("")
+            return
+        rows, columns = values.shape
+        good = np.isfinite(values)
+        if good.sum() < 3:
+            label.setText("")
+            return
+        y, x = np.nonzero(good)
+        design = np.column_stack([np.ones(len(x)), x, y])
+        (_, per_column, per_row), *_ = np.linalg.lstsq(design, values[good], rcond=None)
+
+        spacing = getattr(self, "_cells_per_pixel", 1.0)
+        gradient = math.hypot(per_column, per_row) / spacing       # rise per file cell
+        angle = math.degrees(math.atan(gradient))
+
+        label.setText(
+            f"General slope of the {extent}: {angle:,.3f}\u00b0 "
+            f"({gradient * 1000:,.2f} per 1,000).")
 
 
 def _hillshade_image(filled, azimuth=HILLSHADE_AZIMUTH, altitude=HILLSHADE_ALTITUDE):
@@ -1566,8 +1821,11 @@ class CompoundBarsDialog(QDialog):
     BASES = ["Elevation (grey)", "Hillshade", "None (black)"]
     OVERLAYS = ["Slope", "Color relief", "Hillshade", "None"]
 
-    def __init__(self, elevation, title, parent=None, settings=None):
+    def __init__(self, elevation, title, parent=None, settings=None, cell_size=None):
         super().__init__(parent)
+        # Metres of ground per cell of the patch. Areas and widths are entered and
+        # reported in metres; the analysis works in cells, so this converts.
+        self._cell_size = float(cell_size) if cell_size else None
         self.setWindowTitle(f"Compound Bars: {title}")
         self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint)
         self._elevation = elevation
@@ -1577,10 +1835,24 @@ class CompoundBarsDialog(QDialog):
         import compound_bars
         self._bars = compound_bars
 
+        self._spin_slice = QDoubleSpinBox()
+        self._spin_slice.setRange(0.0, 10.0)
+        self._spin_slice.setDecimals(3)
+        self._spin_slice.setSingleStep(0.05)
+        self._spin_slice.setValue(compound_bars.DEFAULT_SLICE_INTERVAL)
+        self._spin_slice.setKeyboardTracking(False)
+        self._spin_slice.setSpecialValueText("Use slice count")
+        self._spin_slice.setSuffix(" m")
+        self._spin_slice.setToolTip(
+            "Thickness of one slice, in the elevation model's own units. The number "
+            "of slices follows from the relief, and both are reported. Set it to "
+            "zero to give the count instead.")
+        self._spin_slice.valueChanged.connect(self._run)
         self._spin_levels = QSpinBox()
-        self._spin_levels.setRange(5, 500)
+        self._spin_levels.setRange(5, 2000)
         self._spin_levels.setValue(compound_bars.DEFAULT_LEVELS)
-        self._spin_levels.setToolTip("Slices between the lowest and highest point in the region.")
+        self._spin_levels.setToolTip("How many slices to cut, used when the thickness "
+                                     "is set to zero.")
         self._spin_prominence = QDoubleSpinBox()
         self._spin_prominence.setRange(0.0, 100.0)
         self._spin_prominence.setDecimals(3)
@@ -1588,59 +1860,69 @@ class CompoundBarsDialog(QDialog):
         self._spin_prominence.setSpecialValueText("Automatic")
         self._spin_prominence.setToolTip(
             "How far a summit must stand above the level where it merges with its "
-            "neighbour to count as a unit, in the elevation model's own units. "
+            "neighbour to count as a platform, in the elevation model's own units. "
             "Automatic uses the larger of three times the estimated noise and a "
             "small fraction of the relief.")
-        self._spin_min_area = QSpinBox()
-        self._spin_min_area.setRange(0, 1000000)
-        self._spin_min_area.setValue(compound_bars.DEFAULT_MIN_AREA_CELLS)
-        self._spin_min_area.setToolTip("Smallest crest area counted as a unit, in cells.")
+        self._spin_min_area = QDoubleSpinBox()
+        self._spin_min_area.setRange(0.0, 1e8)
+        self._spin_min_area.setDecimals(0)
+        self._spin_min_area.setSingleStep(100.0)
+        self._spin_min_area.setSuffix(" m\u00b2")
+        self._spin_min_area.setValue(float(compound_bars.DEFAULT_MIN_AREA_CELLS))
+        self._spin_min_area.setToolTip("Smallest platform counted, in square metres of ground.")
         self._combo_detrend = QComboBox()
-        self._combo_detrend.addItems(["No detrend", "Remove slope", "Remove slope and curvature"])
+        self._combo_detrend.addItems(["No", "Plane", "Plane and curvature"])
         self._combo_detrend.setCurrentIndex(compound_bars.DEFAULT_DETREND_ORDER)
         self._combo_detrend.setToolTip(
-            "A reach falls downstream, so slicing raw elevation cuts bands across the "
-            "region instead of closed lobes. Removing that trend leaves the relief "
-            "relative to the local surface, which is what a bar platform is.")
+            "Fits a plane (or a curved surface) to the region and subtracts it, so the "
+            "downstream fall of the reach does not slice the region into bands.")
         self._combo_detrend.currentIndexChanged.connect(self._run)
         self._spin_max_units = QSpinBox()
         self._spin_max_units.setRange(1, 200)
         self._spin_max_units.setValue(compound_bars.DEFAULT_MAX_UNITS)
-        self._spin_max_units.setToolTip("Report at most this many units, the most prominent "
-                                        "first.")
-        self._spin_smoothing = QSpinBox()
-        self._spin_smoothing.setRange(0, 51)
-        self._spin_smoothing.setValue(compound_bars.DEFAULT_SMOOTHING_CELLS)
-        self._spin_smoothing.setToolTip("Median filter width before slicing. 0 leaves the "
-                                        "surface as it is.")
+        self._spin_max_units.setToolTip("Report at most this many platforms, the most "
+                                        "prominent first.")
+        self._spin_smoothing = QDoubleSpinBox()
+        self._spin_smoothing.setRange(0.0, 500.0)
+        self._spin_smoothing.setDecimals(1)
+        self._spin_smoothing.setSuffix(" m")
+        self._spin_smoothing.setValue(float(compound_bars.DEFAULT_SMOOTHING_CELLS))
+        self._spin_smoothing.setToolTip("Width of the smoothing applied before analysis, in "
+                                        "metres of ground. Features narrower than this are "
+                                        "removed. 0 leaves the surface as it is.")
         self._combo_method = QComboBox()
         self._combo_method.addItems(["Margins (slope)", "Prominence (elevation)", "Both"])
         self._combo_method.setToolTip(
-            "Margins finds units by the slope breaks around them, which separates "
+            "Margins finds platforms by the slope breaks around them, which separates "
             "platforms of the same height. Prominence finds them by how far each "
             "summit stands above its neighbours. Both reports each and compares them.")
         self._combo_method.currentIndexChanged.connect(self._run)
         self._spin_flat = QDoubleSpinBox()
         self._spin_flat.setRange(1.0, 95.0)
+        self._spin_flat.setSuffix(" % of slopes")
         self._spin_flat.setValue(compound_bars.DEFAULT_FLAT_PERCENTILE)
         self._spin_flat.setKeyboardTracking(False)
-        self._spin_flat.setToolTip("Slope percentile below which ground is flat enough to "
-                                   "seed a platform.")
+        self._spin_flat.setToolTip("Ground flatter than this share of the region's slopes "
+                                   "can start a platform. The equivalent slope in degrees "
+                                   "is shown beside it after each run.")
+        self._label_flat = QLabel("")
         self._spin_margin = QDoubleSpinBox()
         self._spin_margin.setRange(5.0, 99.9)
+        self._spin_margin.setSuffix(" % of slopes")
         self._spin_margin.setValue(compound_bars.DEFAULT_MARGIN_PERCENTILE)
         self._spin_margin.setKeyboardTracking(False)
-        self._spin_margin.setToolTip("Slope percentile a boundary must reach to count as a "
-                                     "margin; weaker ones are dissolved and their regions "
-                                     "merged.")
+        self._spin_margin.setToolTip("A boundary must be steeper than this share of the "
+                                     "region's slopes to count as a margin; gentler ones "
+                                     "are dissolved and the platforms either side merged. "
+                                     "The equivalent slope in degrees is shown beside it.")
+        self._label_margin = QLabel("")
         self._spin_detail = QSpinBox()
         self._spin_detail.setRange(1, 6)
         self._spin_detail.setValue(compound_bars.DEFAULT_DETAIL_STEPS)
         self._spin_detail.setKeyboardTracking(False)
         self._spin_detail.setToolTip(
-            "How many margin thresholds to run. One splits the region into bars; "
-            "more find what stands on them, because a weaker threshold subdivides "
-            "a bar into the platforms it is built from.")
+            "How many levels of stacking to look for. 1 finds the bars; each extra "
+            "level looks for platforms built on the level below.")
         self._spin_detail.valueChanged.connect(self._run)
         for widget in (self._spin_flat, self._spin_margin):
             widget.valueChanged.connect(self._run)
@@ -1715,15 +1997,16 @@ class CompoundBarsDialog(QDialog):
 
         detection = group("Detection", [
             ("Method:", self._combo_method),
-            ("Flat %:", self._spin_flat),
-            ("Margin %:", self._spin_margin),
-            ("Levels:", self._spin_detail),
-            ("Slices:", self._spin_levels),
+            ("Flat below:", self._with_note(self._spin_flat, self._label_flat)),
+            ("Margin above:", self._with_note(self._spin_margin, self._label_margin)),
+            ("Stack levels:", self._spin_detail),
+            ("Slice thickness:", self._spin_slice),
+            ("Slice count:", self._spin_levels),
             ("Prominence:", self._spin_prominence),
             ("Min area:", self._spin_min_area),
             ("Max units:", self._spin_max_units),
             ("Smoothing:", self._spin_smoothing),
-            ("Trend:", self._combo_detrend),
+            ("Remove reach slope:", self._combo_detrend),
         ])
         display = group("Display", [
             ("Base:", self._combo_background),
@@ -1806,10 +2089,11 @@ class CompoundBarsDialog(QDialog):
                             (self._spin_margin, "margin_percentile"),
                             (self._spin_detail, "detail_steps"),
                             (self._spin_levels, "levels"),
+                            (self._spin_slice, "slice_interval"),
                             (self._spin_prominence, "prominence"),
-                            (self._spin_min_area, "min_area"),
+                            (self._spin_min_area, "min_area_m2"),
                             (self._spin_max_units, "max_units"),
-                            (self._spin_smoothing, "smoothing"),
+                            (self._spin_smoothing, "smoothing_m"),
                             (self._combo_detrend, "detrend"),
                             (self._combo_background, "base_layer"),
                             (self._combo_overlay, "overlay_layer"),
@@ -1832,25 +2116,41 @@ class CompoundBarsDialog(QDialog):
         method = self._combo_method.currentIndex()      # 0 margins, 1 prominence, 2 both
         tree = margins = None
 
+        # Entered in metres of ground; the analysis counts cells.
+        size = self._cell_size or 1.0
+        min_area_cells = self._spin_min_area.value() / (size * size)
+        smoothing_cells = int(round(self._spin_smoothing.value() / size))
+
         if method in (1, 2):
             tree = self._bars.analyze(
                 self._elevation,
                 levels=self._spin_levels.value(),
+                slice_interval=self._spin_slice.value(),             # 0 means use the count
                 prominence=self._spin_prominence.value() or None,    # 0 means automatic
-                min_area_cells=self._spin_min_area.value(),
-                smoothing_cells=self._spin_smoothing.value(),
+                min_area_cells=min_area_cells,
+                smoothing_cells=smoothing_cells,
                 max_units=self._spin_max_units.value(),
                 detrend_order=self._combo_detrend.currentIndex())
+            tree["cell_size"] = self._cell_size
         if method in (0, 2):
             margins = self._bars.analyze_margins(
                 self._elevation,
-                smoothing_cells=self._spin_smoothing.value(),
+                smoothing_cells=smoothing_cells,
                 detrend_order=self._combo_detrend.currentIndex(),
                 flat_percentile=self._spin_flat.value(),
                 margin_percentile=self._spin_margin.value(),
-                min_area_cells=self._spin_min_area.value(),
+                min_area_cells=min_area_cells,
                 max_units=self._spin_max_units.value(),
                 detail_steps=self._spin_detail.value())
+            margins["cell_size"] = self._cell_size
+
+        # The slope each percentile turned into, beside its control.
+        if margins is not None and not margins.get("error"):
+            self._label_flat.setText(f"= {margins['flat_level']:,.2f}\u00b0")
+            self._label_margin.setText(f"= {margins['margin_level']:,.2f}\u00b0")
+        else:
+            self._label_flat.setText("")
+            self._label_margin.setText("")
 
         text = []
         if margins is not None:
@@ -1870,7 +2170,7 @@ class CompoundBarsDialog(QDialog):
         self._combo_stack.clear()
         self._combo_stack.addItem("All stacks")
         for level in levels:
-            self._combo_stack.addItem(f"Stack {level} only")
+            self._combo_stack.addItem(f"Stack {level + 1} only")      # stack 1 is on the ground
         index = self._combo_stack.findText(previous)
         self._combo_stack.setCurrentIndex(index if index >= 0 else 0)
         self._combo_stack.blockSignals(False)
@@ -1964,10 +2264,11 @@ class CompoundBarsDialog(QDialog):
         unit = self._innermost_unit(*cell) if cell else None
         self._highlight = unit["index"] if unit else None
         if unit:
-            parent = f", on unit {unit['parent']}" if unit.get("parent") else ""
+            parent = f", on platform {unit['parent']}" if unit.get("parent") else ""
+            area = self._bars.area_text(self._result, unit["area_cells"])
             self._status.setText(
-                f"unit {unit['index']}, stack {unit.get('stack', 0)}{parent}   |   "
-                f"summit {unit['summit']:,.2f}   |   area {unit['area_cells']:,} cells"
+                f"platform {unit['index']}, stack {unit.get('stack', 0) + 1}{parent}   |   "
+                f"summit {unit['summit']:,.2f}   |   area {area}"
                 f"   |   double click to look inside it")
         self._draw()
 
@@ -1983,7 +2284,7 @@ class CompoundBarsDialog(QDialog):
         row, column = cell
         unit = self._innermost_unit(row, column)
         if unit is None:
-            self._status.setText("Double click inside a unit to look into it.")
+            self._status.setText("Double click inside a platform to look into it.")
             return
 
         outline = np.asarray(unit["outline"], np.int32)
@@ -2004,9 +2305,10 @@ class CompoundBarsDialog(QDialog):
         if np.isnan(patch).all():
             return
 
-        title = f"unit {unit['index']} of {self.windowTitle().split(':', 1)[-1].strip()}"
+        title = f"platform {unit['index']} of {self.windowTitle().split(':', 1)[-1].strip()}"
         if self._detail_dialog is None:
-            self._detail_dialog = CompoundBarsDialog(patch, title, self, self._settings)
+            self._detail_dialog = CompoundBarsDialog(patch, title, self, self._settings,
+                                                     cell_size=self._cell_size)
         else:
             self._detail_dialog.set_elevation(patch, title)
         self._detail_dialog.show()
@@ -2036,14 +2338,14 @@ class CompoundBarsDialog(QDialog):
                                                      False) >= 0:
                 containing.append(unit)
         if not containing:
-            return "no unit"
+            return "no platform"
         innermost = min(containing, key=lambda unit: (unit["area_cells"],
                                                       -unit.get("stack", 0)))
-        text = f"unit {innermost['index']}, stack {innermost.get('stack', 0)}"
+        text = f"platform {innermost['index']}, stack {innermost.get('stack', 0) + 1}"
         if innermost.get("parent"):
-            text += f", on unit {innermost['parent']}"
+            text += f", on platform {innermost['parent']}"
         if len(containing) > 1:
-            text += f" ({len(containing)} unit(s) enclose this point)"
+            text += f" ({len(containing)} platform(s) are piled here)"
         return text
 
     def _selected_stack(self):
@@ -2051,10 +2353,21 @@ class CompoundBarsDialog(QDialog):
         text = self._combo_stack.currentText()
         if text.startswith("Stack "):
             try:
-                return int(text.split()[1])
+                return int(text.split()[1]) - 1        # shown from 1, stored from 0
             except (IndexError, ValueError):
                 return None
         return None
+
+    @staticmethod
+    def _with_note(widget, note):
+        """A control with a short live note beside it, as one form field."""
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        row.addWidget(widget)
+        row.addWidget(note)
+        return holder
 
     def _save(self):
         if not self._result:

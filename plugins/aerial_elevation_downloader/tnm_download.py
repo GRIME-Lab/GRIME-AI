@@ -86,6 +86,22 @@ def gage_location(gage_number: str) -> tuple:
             record.get("station_nm", gage_number))
 
 
+def gage_record(gage_number: str) -> dict:
+    """
+    The full NWIS site record for a gage: location, and the gage datum, which is
+    the elevation of the zero point that gage height is measured from.
+    Keys follow NWIS: dec_lat_va, dec_long_va, alt_va (feet), alt_datum_cd.
+    """
+    params = {"format": "rdb", "sites": gage_number, "siteOutput": "expanded"}
+    response = requests.get(NWIS_SITE_URL, params=params,
+                            headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
+    response.raise_for_status()
+    rows = [line for line in response.text.splitlines() if line and not line.startswith("#")]
+    if len(rows) < 3:
+        raise ValueError(f"No site record for gage {gage_number}.")
+    return dict(zip(rows[0].split("\t"), rows[2].split("\t")))
+
+
 def box_around(longitude: float, latitude: float, buffer_km: float) -> list:
     """Bounding box [minx, miny, maxx, maxy] of the given half-width, in degrees."""
     lat_degrees = buffer_km / 111.32
