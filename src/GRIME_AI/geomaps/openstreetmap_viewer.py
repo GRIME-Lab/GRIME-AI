@@ -6,6 +6,9 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QApplication
 from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEnginePage
 from PyQt5.QtCore import QUrl, QTimer, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
+import json
+from PyQt5.QtCore import QObject, pyqtSlot
+from PyQt5.QtWebChannel import QWebChannel
 
 
 class _ExternalLinkPage(QWebEnginePage):
@@ -17,10 +20,37 @@ class _ExternalLinkPage(QWebEnginePage):
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
 
+class _MapBridge(QObject):
+    """Receives map events from JavaScript over QWebChannel and re-emits them on the widget."""
+
+    def __init__(self, widget):
+        super().__init__(widget)
+        self._widget = widget
+
+    @pyqtSlot(str)
+    def markerClicked(self, marker_id):
+        self._widget.markerClicked.emit(marker_id)
+
+    @pyqtSlot(float, float, float, float)
+    def boundsChanged(self, south, west, north, east):
+        self._widget.boundsChanged.emit(south, west, north, east)
+
+    @pyqtSlot(str)
+    def boxSelected(self, ids_json):
+        try:
+            ids = json.loads(ids_json)
+        except ValueError:
+            ids = []
+        self._widget.boxSelected.emit(ids)
+
+
 class OpenStreetMapWidget(QWidget):
     mapReady = pyqtSignal(bool)  # True if loaded, False if failed/timed out
+    markerClicked = pyqtSignal(str)                       # id of a pin added via add_marker_layer
+    boundsChanged = pyqtSignal(float, float, float, float)  # south, west, north, east (after enable_bounds_events)
+    boxSelected = pyqtSignal(list)                        # ids inside a shift+drag rectangle (after enable_box_select)
 
-    def __init__(self, parent=None, timeout_ms=10000):
+    def __init__(self, parent=None, timeout_ms=10000, bounds_debounce_ms=0):
         super().__init__(parent)
         self.view = QWebEngineView(self)
         self.view.setPage(_ExternalLinkPage(self.view))
@@ -34,6 +64,13 @@ class OpenStreetMapWidget(QWidget):
 
         # Console bridge for debugging
         self.view.page().javaScriptConsoleMessage = self._console_logger
+
+        # JavaScript -> Python event channel (used only by the marker-layer / box-select / bounds API)
+        self._bounds_debounce_ms = bounds_debounce_ms
+        self._bridge = _MapBridge(self)
+        self._channel = QWebChannel(self.view.page())
+        self._channel.registerObject("mapBridge", self._bridge)
+        self.view.page().setWebChannel(self._channel)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -314,6 +351,198 @@ class OpenStreetMapWidget(QWidget):
         self._queue_or_run(_impl, lat, lng, color, label)
 
     # --------------------------------------------------------------------------------------------------------------
+    # Public API: interactive marker layers (clickable, hover tooltips, removable, recolorable)
+    # --------------------------------------------------------------------------------------------------------------
+    def add_marker_layer(self, name, markers, dot=None):
+        """
+        Add many pins in one call as a named, removable layer. Replaces any layer with the same name.
+
+        markers: list of dicts with keys
+            id       str    returned by markerClicked / boxSelected
+            lat, lng float
+            tooltip  str    HTML shown on hover (optional)
+            color    str    pins: icon color key, e.g. "blue", "red" (default Leaflet icon if missing)
+                            dots: CSS fill color
+            border   str    dots only: CSS border color (optional; defaults to color)
+
+        dot: None draws icon pins. A dict draws small circles instead:
+            {"radius": px, "weight": border width px, "fill_opacity": 0..1}
+
+        Clicking a pin or dot emits markerClicked(id).
+        """
+        def _impl(name, markers, dot):
+            js = f"window.gaAddMarkerLayer({json.dumps(name)}, {json.dumps(markers)}, {json.dumps(dot)});"
+            self.view.page().runJavaScript(js)
+        self._queue_or_run(_impl, name, list(markers), dot)
+
+    def clear_marker_layer(self, name):
+        """Remove a layer added with add_marker_layer."""
+        def _impl(name):
+            self.view.page().runJavaScript(f"window.gaClearMarkerLayer({json.dumps(name)});")
+        self._queue_or_run(_impl, name)
+
+    def set_marker_color(self, layer, marker_id, color, border=None):
+        """Change one pin's icon color (pins) or fill and border color (dots), e.g. to show it as selected."""
+        def _impl(layer, marker_id, color, border):
+            self.view.page().runJavaScript(
+                f"window.gaSetMarkerColor({json.dumps(layer)}, {json.dumps(str(marker_id))}, "
+                f"{json.dumps(color)}, {json.dumps(border)});")
+        self._queue_or_run(_impl, layer, marker_id, color, border)
+
+    def enable_box_select(self, enabled=True):
+        """
+        Shift+drag draws a selection rectangle and emits boxSelected(ids) for pins in
+        marker layers inside it. While enabled, Leaflet's shift+drag zoom is turned off.
+        """
+        def _impl(enabled):
+            self.view.page().runJavaScript(f"window.gaSetBoxSelect({json.dumps(bool(enabled))});")
+        self._queue_or_run(_impl, enabled)
+
+    def enable_bounds_events(self, enabled=True):
+        """Emit boundsChanged after each pan/zoom. Emits the current bounds immediately when enabled."""
+        def _impl(enabled):
+            self.view.page().runJavaScript(
+                f"window.gaBoundsEnabled = {json.dumps(bool(enabled))}; if (window.gaBoundsEnabled) window.gaEmitBounds();")
+        self._queue_or_run(_impl, enabled)
+
+    def _event_js(self):
+        """Page-side support for the marker-layer, box-select and bounds API."""
+        js = """
+            <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+            <script>
+                (function () {
+                    window.gaLayers = {};
+                    window.gaBoundsEnabled = false;
+                    window.gaBoxSelectEnabled = false;
+                    var debounceMs = __DEBOUNCE_MS__;
+                    var boundsTimer = null;
+
+                    if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined') {
+                        new QWebChannel(qt.webChannelTransport, function (channel) {
+                            window.gaBridge = channel.objects.mapBridge;
+                            if (window.gaBoundsEnabled) window.gaEmitBounds();
+                        });
+                    } else {
+                        console.warn('QWebChannel not available; map events will not reach Python.');
+                    }
+
+                    // window.map is the <div id="map"> element until Leaflet replaces it with the map object
+                    function mapReady() {
+                        return typeof L !== 'undefined' && window.map instanceof L.Map;
+                    }
+
+                    window.gaIcon = function (color) {
+                        return color ? window[String(color).replace(/-/g, '_') + 'Icon'] : null;
+                    };
+
+                    window.gaEmitBounds = function () {
+                        if (!mapReady() || !window.gaBridge) return;
+                        var b = window.map.getBounds();
+                        window.gaBridge.boundsChanged(b.getSouth(), b.getWest(), b.getNorth(), b.getEast());
+                    };
+
+                    function onMoveEnd() {
+                        if (!window.gaBoundsEnabled) return;
+                        if (boundsTimer) clearTimeout(boundsTimer);
+                        boundsTimer = setTimeout(window.gaEmitBounds, debounceMs);
+                    }
+
+                    window.gaClearMarkerLayer = function (name) {
+                        var layer = window.gaLayers[name];
+                        if (layer && mapReady()) window.map.removeLayer(layer.group);
+                        delete window.gaLayers[name];
+                    };
+
+                    window.gaAddMarkerLayer = function (name, markers, dot) {
+                        if (!mapReady()) { console.error('Map not ready yet'); return; }
+                        window.gaClearMarkerLayer(name);
+                        var group = L.layerGroup();
+                        var byId = {};
+                        markers.forEach(function (m) {
+                            var id = String(m.id);
+                            var mk;
+                            if (dot) {
+                                mk = L.circleMarker([m.lat, m.lng], {
+                                    radius: dot.radius, weight: dot.weight, fillOpacity: dot.fill_opacity,
+                                    fillColor: m.color, color: m.border || m.color
+                                });
+                            } else {
+                                var icon = window.gaIcon(m.color);
+                                mk = icon ? L.marker([m.lat, m.lng], {icon: icon}) : L.marker([m.lat, m.lng]);
+                            }
+                            if (m.tooltip) mk.bindTooltip(m.tooltip, {direction: 'top'});
+                            mk.on('click', function () {
+                                if (window.gaBridge) window.gaBridge.markerClicked(id);
+                            });
+                            mk.addTo(group);
+                            byId[id] = mk;
+                        });
+                        group.addTo(window.map);
+                        window.gaLayers[name] = {group: group, byId: byId, dot: !!dot};
+                    };
+
+                    window.gaSetMarkerColor = function (name, id, color, border) {
+                        var layer = window.gaLayers[name];
+                        if (!layer) return;
+                        var mk = layer.byId[String(id)];
+                        if (!mk) return;
+                        if (layer.dot) {
+                            mk.setStyle({fillColor: color, color: border || color});
+                            mk.bringToFront();
+                        } else {
+                            var icon = window.gaIcon(color);
+                            if (icon) mk.setIcon(icon);
+                        }
+                    };
+
+                    // Box select: shift+drag draws a rectangle
+                    var boxStart = null, boxRect = null;
+                    function onMouseDown(e) {
+                        if (!window.gaBoxSelectEnabled || !e.originalEvent.shiftKey) return;
+                        boxStart = e.latlng;
+                        window.map.dragging.disable();
+                        boxRect = L.rectangle([boxStart, boxStart], {weight: 1, dashArray: '4'}).addTo(window.map);
+                    }
+                    function onMouseMove(e) {
+                        if (boxStart && boxRect) boxRect.setBounds(L.latLngBounds(boxStart, e.latlng));
+                    }
+                    function onMouseUp(e) {
+                        if (!boxStart) return;
+                        var bounds = L.latLngBounds(boxStart, e.latlng);
+                        window.map.removeLayer(boxRect);
+                        boxRect = null;
+                        boxStart = null;
+                        window.map.dragging.enable();
+                        var seen = {};
+                        var ids = [];
+                        Object.keys(window.gaLayers).forEach(function (name) {
+                            var byId = window.gaLayers[name].byId;
+                            Object.keys(byId).forEach(function (id) {
+                                if (!seen[id] && bounds.contains(byId[id].getLatLng())) { seen[id] = true; ids.push(id); }
+                            });
+                        });
+                        if (window.gaBridge) window.gaBridge.boxSelected(JSON.stringify(ids));
+                    }
+
+                    window.gaSetBoxSelect = function (enabled) {
+                        window.gaBoxSelectEnabled = !!enabled;
+                        if (!mapReady()) return;
+                        if (enabled) window.map.boxZoom.disable(); else window.map.boxZoom.enable();
+                    };
+
+                    (function attach() {
+                        if (!mapReady()) return setTimeout(attach, 100);
+                        if (!window.gaBoxSelectEnabled) window.map.boxZoom.enable(); else window.map.boxZoom.disable();
+                        window.map.on('moveend', onMoveEnd);
+                        window.map.on('mousedown', onMouseDown);
+                        window.map.on('mousemove', onMouseMove);
+                        window.map.on('mouseup', onMouseUp);
+                    })();
+                })();
+            </script>"""
+        return js.replace("__DEBOUNCE_MS__", str(int(self._bounds_debounce_ms)))
+
+    # --------------------------------------------------------------------------------------------------------------
     # Internal: build and load HTML
     # --------------------------------------------------------------------------------------------------------------
     def _load_map(self):
@@ -379,6 +608,7 @@ class OpenStreetMapWidget(QWidget):
                     }}
                 }})();
             </script>
+            {self._event_js()}
         </body>
         </html>"""
 
