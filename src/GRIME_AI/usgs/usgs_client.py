@@ -3,7 +3,7 @@ from PyQt5.QtGui import QPixmap
 
 from .usgs_service import USGSService
 from .usgs_types import CameraInfo
-from GRIME_AI.dialogs.api_keys import APIKeyManager
+from appcore.dialogs.api_keys import APIKeyManager
 
 # Progress callback signature: (index, total, label)
 ProgressFn = Callable[[int, int, Optional[str]], None]

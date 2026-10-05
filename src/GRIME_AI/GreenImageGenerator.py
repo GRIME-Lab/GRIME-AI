@@ -20,6 +20,11 @@ from PIL import Image, ImageDraw
 from openpyxl import Workbook
 from openpyxl.styles import PatternFill
 
+from .app_identity import APP_ID
+
+# Prefix for generated test image file names.
+TEST_IMAGE_PREFIX = f"{APP_ID.lower()}test"
+
 
 class GreenImageGenerator:
     """
@@ -135,7 +140,7 @@ class GreenImageGenerator:
                 base_rgb = self.hsv_to_rgb8(self.HUE_GREEN, s, v)
                 base_hsv_str = f"({self.HUE_GREEN}, {round(s, 3)}, {round(v, 3)})"
 
-            fname = f"grimeaitest{self.timestamp_suffix(base_time, idx)}".lower()
+            fname = f"{TEST_IMAGE_PREFIX}{self.timestamp_suffix(base_time, idx)}".lower()
 
             if texture == "flat":
                 img = Image.new("RGB", (self.W, self.H), base_rgb)
@@ -272,7 +277,7 @@ class GreenImageGenerator:
                 ImageDraw.Draw(mask).ellipse((0, 0, 2 * r, 2 * r), fill=255)
                 bg.paste(patch, (x - r, y - r), mask)
 
-            fname = f"grimeaitest{self.timestamp_suffix(base_time, idx)}.jpg".lower()
+            fname = f"{TEST_IMAGE_PREFIX}{self.timestamp_suffix(base_time, idx)}.jpg".lower()
             bg.save(os.path.join(img_dir, fname), quality=100)
 
             row = [fname, background_texture, splotch_texture, "", str(bg_color)]

@@ -6,8 +6,8 @@ import cv2
 from PyQt5 import QtWidgets, QtGui, QtCore
 import pycocotools.mask as maskutils
 
-from GRIME_AI.dialogs.ML_image_processing.mask_visualizer import MaskVisualizer
-from GRIME_AI.JSON_Editor import JsonEditor
+from appcore.dialogs.ML_image_processing.mask_visualizer import MaskVisualizer
+from appcore.JSON_Editor import JsonEditor
 
 _JSON_KEY = "COCO_Viewer_JSON_Path"
 _K_OPACITY = "COCO_Viewer_Opacity"

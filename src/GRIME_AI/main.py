@@ -45,7 +45,7 @@ os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 
 try:
     # TRY TO IMPORT THE VERSION CONSTANT FROM VERSION.PY
-    from GRIME_AI.version import SW_VERSION
+    from appcore.version import SW_VERSION
 except ImportError:
     # FALLBACK IF VERSION.PY DOES NOT EXIST. 0.0.0.0 IS AN INVALID VERSION NUMBER
     SW_VERSION = "Ver. 0.0.0.0"
@@ -144,7 +144,7 @@ import traceback
 
 from dataclasses import dataclass
 
-from GRIME_AI.utils.resource_utils import icon_path
+from appcore.utils.resource_utils import icon_path
 
 from pathlib import Path
 
@@ -158,60 +158,59 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QTableWidgetItem, QToolBa
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QMenu
 from PyQt5.QtWidgets import QTreeWidgetItem
 
-from GRIME_AI.SplashScreen import SplashScreen
-from GRIME_AI.utils.window_utils import (
+from appcore.SplashScreen import SplashScreen
+from appcore.utils.window_utils import (
     install_window_placement_guard,
     reset_window_layout,
 )
 
 # pandas imported lazily inside functions
 
-from GRIME_AI.usgs.usgs_client import USGSClient
+from appcore.usgs.usgs_client import USGSClient
 
 # ----------------------------------------------------------------------------
 # POP-UP/MODELESS DIALOG BOXES
 # ----------------------------------------------------------------------------
-# lazy: from GRIME_AI.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
-# lazy: from GRIME_AI.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
-# lazy: from GRIME_AI.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
-# lazy: from GRIME_AI.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
-# lazy: from GRIME_AI.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
-# lazy: from GRIME_AI.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
-# lazy: from GRIME_AI.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
-# lazy: from GRIME_AI.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
-# lazy: from GRIME_AI.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
-# lazy: from GRIME_AI.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
-from GRIME_AI.dialogs.triage.TriageOptionsDlg import TriageOptionsDlg
-from GRIME_AI.Color import Color
-from GRIME_AI.vegetation_indices import Vegetation_Indices, GreennessIndex
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.ImageData import imageData
-from GRIME_AI.ProductTable import ProductTable
-from GRIME_AI.App_QLabel import DrawingMode
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.App_Utils import App_Utils
-from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.Resize_Controls import Resize_Controls
-from GRIME_AI.TimeStamp_Utils import TimeStamp_Utils
-from GRIME_AI.ImageTriage import ImageTriage
-from GRIME_AI.GreenImageGenerator import GreenImageGenerator
-from GRIME_AI.COCO_Utils import COCO_Utils
+# lazy: from appcore.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
+# lazy: from appcore.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
+# lazy: from appcore.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
+# lazy: from appcore.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
+# lazy: from appcore.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
+# lazy: from appcore.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
+# lazy: from appcore.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
+# lazy: from appcore.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
+# lazy: from appcore.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
+from appcore.dialogs.triage.TriageOptionsDlg import TriageOptionsDlg
+from appcore.Color import Color
+from appcore.vegetation_indices import Vegetation_Indices, GreennessIndex
+from appcore.JSON_Editor import JsonEditor
+from appcore.ImageData import imageData
+from appcore.ProductTable import ProductTable
+from appcore.App_QLabel import DrawingMode
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.QProgressWheel import QProgressWheel
+from appcore.App_Utils import App_Utils
+from appcore.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
+from appcore.Save_Utils import Save_Utils
+from appcore.Resize_Controls import Resize_Controls
+from appcore.TimeStamp_Utils import TimeStamp_Utils
+from appcore.ImageTriage import ImageTriage
+from appcore.GreenImageGenerator import GreenImageGenerator
+from appcore.COCO_Utils import COCO_Utils
 
 # ----------------------------------------------------------------------------
 # PHENOCAM
 # ----------------------------------------------------------------------------
-from GRIME_AI.phenocam.PhenoCam import PhenoCam, dailyList
-from GRIME_AI.phenocam.Phenocam_API import Phenocam_API
+from appcore.phenocam.PhenoCam import PhenoCam, dailyList
+from appcore.phenocam.Phenocam_API import Phenocam_API
 
-from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
+from appcore.colorSegmentationParams import colorSegmentationParamsClass
 
 # ----------------------------------------------------------------------------
 # DIGITAL MAPPING PLATFORMS
 # ----------------------------------------------------------------------------
-from GRIME_AI.geomaps.google_maps_viewer import GoogleMapWidget
-from GRIME_AI.geomaps.openstreetmap_viewer import OpenStreetMapWidget
+from appcore.geomaps.google_maps_viewer import GoogleMapWidget
+from appcore.geomaps.openstreetmap_viewer import OpenStreetMapWidget
 
 # ----------------------------------------------------------------------------------------------------------------------
 # HYDRA (for SAM2)
@@ -222,17 +221,17 @@ from omegaconf import OmegaConf, DictConfig
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-from GRIME_AI.neon.NEON_API import NEON_API
-from GRIME_AI.dialogs.api_keys import APIKeyManager, APIKeyDialog
+from appcore.neon.NEON_API import NEON_API
+from appcore.dialogs.api_keys import APIKeyManager, APIKeyDialog
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-from GRIME_AI.constants import edgeMethodsClass, featureMethodsClass, modelSettingsClass
+from appcore.constants import edgeMethodsClass, featureMethodsClass, modelSettingsClass
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-from GRIME_AI.exifData import EXIFData
-from GRIME_AI.app_identity import APP_NAME, APP_DISPLAY_NAME, USER_ROOT, APP_LOGO_FILENAME, APP_REPO_URL
+from appcore.exifData import EXIFData
+from appcore.app_identity import APP_NAME, APP_DISPLAY_NAME, USER_ROOT, APP_LOGO_FILENAME, APP_REPO_URL
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -299,7 +298,7 @@ class PhenocamPreviewFetcher(QtCore.QThread):
         self.roi_name  = roi_name  # e.g. "NEON.D01.BART.DP1.00033_DB_1000"
     def run(self):
         import urllib.request, datetime as dt_mod
-        from GRIME_AI.phenocam.PhenoCam import PhenoCam
+        from appcore.phenocam.PhenoCam import PhenoCam
         today = dt_mod.date.today()
         t0, t1 = dt_mod.time(11, 0), dt_mod.time(13, 0)
         # Extract ROI type prefix for filename filtering (e.g. "DB" from "..._DB_1000")
@@ -353,67 +352,110 @@ class PhenocamDownloadWorker(QtCore.QThread):
         self._cancelled = True
 
     def run(self):
-        import urllib.request, os, datetime as dt_mod
-        from GRIME_AI.phenocam.PhenoCam import PhenoCam
+        import urllib.request, os, datetime as dt_mod, threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from appcore.phenocam.PhenoCam import PhenoCam
 
         # All PhenoCam filename timestamps are local time (both NEON via PhenoCam
         # and strictly PhenoCam sites), so the user's local start/end times are
-        # compared directly — no UTC conversion needed.
+        # compared directly - no UTC conversion needed.
         start_date, end_date = self.start_dt.date(), self.end_dt.date()
         start_time, end_time = self.start_dt.time(), self.end_dt.time()
 
-        image_list = []
-        total_days = (end_date - start_date).days + 1
-
-        current, day_idx = start_date, 0
-        while current <= end_date:
-            if self._cancelled:
-                self.finished.emit(-1)
-                return
-
-            day_idx += 1
-            t0, t1 = start_time, end_time
-
-            url = (
-                f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
-                f"{current.year}/{str(current.month).zfill(2)}/{str(current.day).zfill(2)}"
-            )
-
-            try:
-                image_list.extend(
-                    PhenoCam().getVisibleImages(url, t0, t1).getVisibleList()
-                )
-            except Exception as e:
-                print(f"[PhenocamDownloadWorker] Error scanning {current}: {e}")
-
-            self.progress.emit(day_idx, total_days, f"Scanning {current.strftime('%Y-%m-%d')}...")
-            current += dt_mod.timedelta(days=1)
-
-        if not image_list:
-            self.finished.emit(0)
-            return
-
         os.makedirs(self.save_folder, exist_ok=True)
 
-        total, downloaded = len(image_list), 0
-        for i, img in enumerate(image_list):
-            if self._cancelled:
-                self.finished.emit(-1)
-                return
+        # ------------------------------------------------------------------
+        # Pipelined scan + download: each day's images are handed to a small
+        # download pool the moment that day's scan completes, so downloading
+        # overlaps the remaining scanning instead of waiting for all of it.
+        # Scanning stays sequential (one browse-page request at a time) and
+        # the pool is kept small to stay polite to the PhenoCam server.
+        # ------------------------------------------------------------------
+        counters = {"downloaded": 0, "done": 0}
+        lock = threading.Lock()
 
+        def _fetch(img):
+            if self._cancelled:
+                return
             filename = os.path.basename(img.fullPathAndFilename)
             dest = os.path.join(self.save_folder, filename)
-
+            got = 0
             if not os.path.isfile(dest):
                 try:
                     urllib.request.urlretrieve(img.fullPathAndFilename, dest)
-                    downloaded += 1
+                    got = 1
                 except Exception as e:
                     print(f"[PhenocamDownloadWorker] Error downloading {filename}: {e}")
+            with lock:
+                counters["done"] += 1
+                counters["downloaded"] += got
 
-            self.progress.emit(i + 1, total, f"Downloading {filename}")
+        futures = []
+        total_days = (end_date - start_date).days + 1
+        pool = ThreadPoolExecutor(max_workers=4)
+        try:
+            current, day_idx = start_date, 0
+            while current <= end_date:
+                if self._cancelled:
+                    break
 
-        self.finished.emit(downloaded)
+                day_idx += 1
+                url = (
+                    f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
+                    f"{current.year}/{str(current.month).zfill(2)}/{str(current.day).zfill(2)}"
+                )
+
+                try:
+                    day_images = PhenoCam().getVisibleImages(
+                        url, start_time, end_time
+                    ).getVisibleList()
+                except Exception as e:
+                    print(f"[PhenocamDownloadWorker] Error scanning {current}: {e}")
+                    day_images = []
+
+                for img in day_images:
+                    futures.append(pool.submit(_fetch, img))
+
+                with lock:
+                    dl = counters["downloaded"]
+                self.progress.emit(
+                    day_idx, total_days,
+                    f"Scanning {current.strftime('%Y-%m-%d')}... "
+                    f"({len(futures)} images found, {dl} downloaded)"
+                )
+                current += dt_mod.timedelta(days=1)
+
+            # Scanning finished (or cancelled): report on the remaining
+            # downloads as they complete.
+            total = len(futures)
+            for f in as_completed(futures):
+                if self._cancelled:
+                    break
+                with lock:
+                    done = counters["done"]
+                self.progress.emit(done, max(total, 1),
+                                   f"Downloading... {done}/{total}")
+        finally:
+            pool.shutdown(wait=not self._cancelled, cancel_futures=self._cancelled)
+
+        if self._cancelled:
+            self.finished.emit(-1)
+            return
+
+        if not futures:
+            self.finished.emit(0)
+            return
+
+        # Generate the completeness/gap report (HTML + CSV + optional PDF)
+        # in the download folder.  PhenoCam filename timestamps are already
+        # site-local, so no timezone conversion is applied.  Never fatal.
+        try:
+            from appcore.reporting.gap_report import generate_gap_report
+            generate_gap_report(self.save_folder)
+        except Exception as e:
+            print(f"[PhenocamDownloadWorker] Gap report skipped: {e}")
+
+        self.finished.emit(counters["downloaded"])
 
 
 class NEONPreviewFetcher(QtCore.QThread):
@@ -424,7 +466,7 @@ class NEONPreviewFetcher(QtCore.QThread):
         self.domain_code = domain_code
         self.product_id = product_id
     def run(self):
-        from GRIME_AI.neon.NEON_API import NEON_API as _NEON_API
+        from appcore.neon.NEON_API import NEON_API as _NEON_API
         try:
             nErrorCode, pixmap, count = _NEON_API().DownloadLatestImage(
                 self.site_code, self.domain_code, self.product_id)
@@ -480,7 +522,7 @@ class USGSStartupFetcher(QtCore.QThread):
 
     def run(self):
         try:
-            from GRIME_AI.usgs.usgs_hivis import USGS_HIVIS
+            from appcore.usgs.usgs_hivis import USGS_HIVIS
             hivis    = USGS_HIVIS()
             cam_dict = hivis.get_camera_dictionary()
             cam_list = hivis.get_camera_list()
@@ -633,6 +675,10 @@ class MainWindow(QMainWindow):
         uic.loadUi(ui_path, self)
 
         self.setWindowTitle(f"{APP_DISPLAY_NAME}" + " " + SW_VERSION + " - John E. Stranzl Jr., PhD")
+
+        # Menu text carrying the product name is set here, not in the .ui file,
+        # so the .ui stays product-neutral.
+        self.action_About.setText(f"&About {APP_DISPLAY_NAME}")
         self.tabWidget.setTabVisible(1, False)
         #self.setWindowFlags(QtCore.Qt.Window | QtCore.Qt.CustomizeWindowHint | QtCore.Qt.WindowStaysOnTopHint)
 
@@ -717,6 +763,10 @@ class MainWindow(QMainWindow):
         self.NEON_labelLatestImage.installEventFilter(self)
         self.labelEdgeImage.installEventFilter(self)
         self.labelOriginalImage.installEventFilter(self)
+
+        # Double-clicking the USGS Sites *tab* (the tab itself, not the page)
+        # toggles the display of hidden cameras in the site list.
+        self.tabWidget.tabBar().installEventFilter(self)
         # ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
         self.pushButton_RetrieveNEONData.clicked.connect(self.pushbutton_NEONDownloadClicked)
@@ -758,17 +808,6 @@ class MainWindow(QMainWindow):
         self.action_Inspect_Annotations.triggered.connect(self.menubar_inspect_annotations)
 
         self.action_ImageOrganizer.triggered.connect(self.menubar_ImageOrganizer)
-
-        try:
-            self.action_TemporalAveraging = QAction("Temporal Averaging", self)
-            self.action_TemporalAveraging.setStatusTip("Average a folder of images together")
-            self.action_TemporalAveraging.triggered.connect(self.toolbarButtonTemporalAveraging)
-            self.menuTools.addSeparator()
-            self.menuTools.addAction(self.action_TemporalAveraging)
-            print("[INFO] Temporal Averaging added to Tools menu successfully.")
-        except Exception as e:
-            print(f"[ERROR] Failed to add Temporal Averaging to Tools menu: {e}")
-            traceback.print_exc()
 
         try:
             self.action_LaunchSAGE = QAction("SAGE", self)
@@ -815,6 +854,19 @@ class MainWindow(QMainWindow):
             print(f"[ERROR] Failed to add Site Config Editor to Tools menu: {e}")
             traceback.print_exc()
 
+        try:
+            # Tools > Plugins: drop-in plugins from <user root>/plugins/ that ask
+            # for the "tools" surface. The list is rebuilt each time the menu is
+            # opened, so a plugin can be added or removed without restarting.
+            self._menu_plugins = QMenu("Plugins", self)
+            self._menu_plugins.aboutToShow.connect(self._build_plugins_menu)
+            self.menuTools.addSeparator()
+            self.menuTools.addMenu(self._menu_plugins)
+            print("[INFO] Plugins added to Tools menu successfully.")
+        except Exception as e:
+            print(f"[ERROR] Failed to add Plugins to Tools menu: {e}")
+            traceback.print_exc()
+
 
         # ------------------------------------------------------------------------------------------------------------------
         # VIEW MENU — dark/light mode toggle
@@ -830,10 +882,22 @@ class MainWindow(QMainWindow):
         _after_file = _bar_actions[1] if len(_bar_actions) > 1 else _help_action
         self.menuBar().insertMenu(_after_file, self._menu_view)
 
+        self._action_follow_system = QAction("Follow System Theme", self)
+        self._action_follow_system.setCheckable(True)
+        self._action_follow_system.setStatusTip(
+            "Automatically match the operating system's light/dark theme")
+        self._action_follow_system.toggled.connect(self._on_follow_system_toggled)
+        self._menu_view.addAction(self._action_follow_system)
+
         self._action_toggle_theme = QAction("Dark Mode", self)
         self._action_toggle_theme.setStatusTip("Toggle between dark and light application theme")
         self._action_toggle_theme.triggered.connect(self._toggle_dark_mode)
         self._menu_view.addAction(self._action_toggle_theme)
+
+        # Re-apply the persisted theme settings from the previous run.
+        # Fresh install (nothing saved): light mode, Follow System off.
+        self._theme_poll_timer = None
+        self._restore_theme_settings()
 
         # Escape hatch for users whose window ends up mispositioned or
         # off-screen (e.g. after a VNC resolution change). Restores a sane
@@ -849,7 +913,7 @@ class MainWindow(QMainWindow):
         # MENU REORGANIZATION — split the crowded Tools menu into topic menus.
         # Actions already exist (from the .ui or created above); here they are
         # re-parented into Data Explorer / Annotations / Connectivity /
-        # Productivity / Test menus. Tools keeps only SAGE and Temporal Averaging.
+        # Productivity / Test menus. Tools keeps SAGE and the plugins.
         # ------------------------------------------------------------------------------------------------------------------
         try:
             def _move_action(attr_name, target_menu):
@@ -974,6 +1038,20 @@ class MainWindow(QMainWindow):
         self.USGS_listboxSites.itemClicked.connect(self._usgs_tree_item_clicked)
         self.pushButton_USGSDownload.clicked.connect(self.pushButton_USGSDownloadClicked)
 
+        # Correlate Sensor Data button - added programmatically next to the
+        # USGS Download button (no .ui change required).
+        try:
+            self.pushButton_USGSCorrelate = QtWidgets.QPushButton("Correlate Sensor Data")
+            self.pushButton_USGSCorrelate.setToolTip(
+                "Correlate downloaded image timestamps with co-located NWIS sensor data")
+            _dl_layout = self.pushButton_USGSDownload.parentWidget().layout()
+            if _dl_layout is not None:
+                _idx = _dl_layout.indexOf(self.pushButton_USGSDownload)
+                _dl_layout.insertWidget(_idx, self.pushButton_USGSCorrelate)
+            self.pushButton_USGSCorrelate.clicked.connect(self.pushButton_USGSCorrelate_Clicked)
+        except Exception as _e:
+            print(f"[USGS] Could not add Correlate button: {_e}")
+
         # ============================================================================
         # DEBOUNCE TIMER FOR IMAGE COUNT CHECKING
         # AUTOMATICALLY CHECKS AVAILABILITY 2 SECONDS AFTER USER STOPS CHANGING DATES
@@ -990,7 +1068,6 @@ class MainWindow(QMainWindow):
         self._usgs_startup_fetcher.result.connect(self._on_usgs_startup_result)
         self._usgs_startup_fetcher.start()
 
-        #self.edit_USGSSaveFilePath.setText("C:\\Users\\Astrid Haugen\\Documents\\GRIME-AI\\Downloads\\USGS_Test")
 
         # ------------------------------------------------------------------------------------------------------------------
         # USGS
@@ -1106,39 +1183,188 @@ class MainWindow(QMainWindow):
 
     def _toggle_dark_mode(self):
         app = QApplication.instance()
+
+        # Snapshot the light-mode look once so it can be fully restored
+        if not hasattr(self, "_light_palette"):
+            self._light_palette = QtGui.QPalette(app.palette())
+            self._light_style   = app.style().objectName()
+
         if not self._is_dark_mode:
-            # Switch to dark only if the dark theme actually loads, so the tab
-            # colors and the rest of the window can never disagree.
-            try:
-                import qdarkstyle
-                sheet = qdarkstyle.load_stylesheet(qt_api='pyqt5')
-            except Exception as e:
-                print(f"[ERROR] Dark mode unavailable: {e} (interpreter: {sys.executable})")
-                QMessageBox.warning(self, "Dark Mode",
-                                    f"Dark mode could not be loaded:\n{e}\n\n"
-                                    f"Python interpreter:\n{sys.executable}")
+            if not self._apply_dark_theme(app):
+                # Nothing was applied - stay in light mode and tell the user
+                # instead of silently doing nothing.
+                try:
+                    self.statusBar().showMessage(
+                        "Dark mode unavailable: could not apply a dark theme "
+                        "(install 'qdarkstyle' for the full theme).", 8000)
+                except Exception:
+                    pass
                 return
-            app.setStyleSheet(sheet)
             self._is_dark_mode = True
             self._action_toggle_theme.setText("Light Mode")
         else:
+            # Restore the saved light-mode style, palette, and stylesheet
             app.setStyleSheet("")
+            try:
+                app.setStyle(self._light_style)
+            except Exception:
+                pass
+            app.setPalette(self._light_palette)
             self._is_dark_mode = False
             self._action_toggle_theme.setText("Dark Mode")
+
+        self._save_theme_setting()
         try:
             self._apply_tab_style()
         except Exception as e:
             print(f"[WARN] Tab style not applied: {e}")
         # Let dialogs and panels switch their own colors.
         try:
-            from GRIME_AI.utils import theme
+            from appcore.utils import theme
             theme.set_dark(self._is_dark_mode)
         except Exception as e:
             print(f"[WARN] Theme change not broadcast: {e}")
 
+    def _apply_dark_theme(self, app) -> bool:
+        """Apply a dark theme to the whole application.
+        Prefers qdarkstyle; falls back to Qt's built-in Fusion style with a
+        dark palette when qdarkstyle is not installed. Returns True if a
+        dark theme was applied.
+        """
+        # Preferred: qdarkstyle stylesheet
+        try:
+            import qdarkstyle
+            app.setStyleSheet(qdarkstyle.load_stylesheet(qt_api='pyqt5'))
+            return True
+        except Exception as e:
+            print(f"[Theme] qdarkstyle unavailable ({e}); using built-in dark palette")
+
+        # Fallback: Fusion style + dark QPalette (no external dependency)
+        try:
+            app.setStyle("Fusion")
+            palette = QtGui.QPalette()
+            palette.setColor(QtGui.QPalette.Window,          QtGui.QColor(53, 53, 53))
+            palette.setColor(QtGui.QPalette.WindowText,      QtCore.Qt.white)
+            palette.setColor(QtGui.QPalette.Base,            QtGui.QColor(35, 35, 35))
+            palette.setColor(QtGui.QPalette.AlternateBase,   QtGui.QColor(53, 53, 53))
+            palette.setColor(QtGui.QPalette.ToolTipBase,     QtGui.QColor(53, 53, 53))
+            palette.setColor(QtGui.QPalette.ToolTipText,     QtCore.Qt.white)
+            palette.setColor(QtGui.QPalette.Text,            QtCore.Qt.white)
+            palette.setColor(QtGui.QPalette.Button,          QtGui.QColor(53, 53, 53))
+            palette.setColor(QtGui.QPalette.ButtonText,      QtCore.Qt.white)
+            palette.setColor(QtGui.QPalette.BrightText,      QtCore.Qt.red)
+            palette.setColor(QtGui.QPalette.Link,            QtGui.QColor(42, 130, 218))
+            palette.setColor(QtGui.QPalette.Highlight,       QtGui.QColor(42, 130, 218))
+            palette.setColor(QtGui.QPalette.HighlightedText, QtCore.Qt.black)
+            palette.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.Text,       QtGui.QColor(127, 127, 127))
+            palette.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.ButtonText, QtGui.QColor(127, 127, 127))
+            app.setPalette(palette)
+            app.setStyleSheet("")
+            return True
+        except Exception as e:
+            print(f"[Theme] Could not apply fallback dark palette: {e}")
+            return False
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    def _restore_theme_settings(self):
+        """Apply the theme settings persisted from the previous run.
+        Follow System takes precedence over the manual Dark_Mode setting.
+        With nothing saved (fresh install), the app starts in light mode."""
+        if self._json_flag("Dark_Mode_Follow_System"):
+            # setChecked fires _on_follow_system_toggled, which applies the
+            # OS theme and starts the polling timer.
+            self._action_follow_system.setChecked(True)
+        elif self._json_flag("Dark_Mode"):
+            self._toggle_dark_mode()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _json_flag(key) -> bool:
+        """Read a boolean setting from the application settings JSON."""
+        try:
+            value = JsonEditor().getValue(key)
+        except Exception:
+            return False
+        return str(value).strip().lower() in ("true", "1", "yes")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    def _save_theme_setting(self):
+        """Persist the current manual dark/light choice."""
+        try:
+            JsonEditor().update_json_entry("Dark_Mode", str(bool(self._is_dark_mode)))
+        except Exception as e:
+            print(f"[Theme] Could not save Dark_Mode setting: {e}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    def _detect_os_theme(self):
+        """Return True if the OS theme is dark, False if light, or None when
+        detection is unavailable (darkdetect missing or unsupported platform)."""
+        try:
+            import darkdetect
+            result = darkdetect.isDark()
+            return None if result is None else bool(result)
+        except Exception:
+            return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_follow_system_toggled(self, checked):
+        """Enable/disable following the OS theme. While enabled, the manual
+        toggle is greyed out and a timer re-checks the OS theme every 2 s."""
+        try:
+            JsonEditor().update_json_entry("Dark_Mode_Follow_System", str(bool(checked)))
+        except Exception as e:
+            print(f"[Theme] Could not save Dark_Mode_Follow_System setting: {e}")
+
+        if checked:
+            if self._detect_os_theme() is None:
+                try:
+                    self.statusBar().showMessage(
+                        "Follow System Theme requires the 'darkdetect' package "
+                        "(pip install darkdetect).", 8000)
+                except Exception:
+                    pass
+                self._action_follow_system.blockSignals(True)
+                self._action_follow_system.setChecked(False)
+                self._action_follow_system.blockSignals(False)
+                try:
+                    JsonEditor().update_json_entry("Dark_Mode_Follow_System", "False")
+                except Exception:
+                    pass
+                return
+
+            self._action_toggle_theme.setEnabled(False)
+            self._sync_to_os_theme()
+            if self._theme_poll_timer is None:
+                self._theme_poll_timer = QtCore.QTimer(self)
+                self._theme_poll_timer.timeout.connect(self._sync_to_os_theme)
+            self._theme_poll_timer.start(2000)
+        else:
+            if self._theme_poll_timer is not None:
+                self._theme_poll_timer.stop()
+            self._action_toggle_theme.setEnabled(True)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    def _sync_to_os_theme(self):
+        """Switch the application theme to match the OS theme if they differ."""
+        os_dark = self._detect_os_theme()
+        if os_dark is not None and os_dark != self._is_dark_mode:
+            self._toggle_dark_mode()
+
     def _show_about_dialog(self):
         try:
-            from GRIME_AI.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
+            from appcore.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
         except ImportError:
             SW_VERSION = globals().get('SW_VERSION', '0.0.0.0')
             RELEASE    = 'N/A'
@@ -1222,22 +1448,9 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"[USGS startup] Could not connect HIVIS to USGS service: {e}")
 
-        self.USGS_listboxSites.clear()
-        for camID in self.cameraList:
-            site_item = QTreeWidgetItem([camID])
-            site_item.setData(0, QtCore.Qt.UserRole, camID)
-            for line in self.myHIVIS.get_camera_info(camID):
-                child = QTreeWidgetItem([line])
-                child.setFlags(child.flags() & ~QtCore.Qt.ItemIsSelectable)
-                site_item.addChild(child)
-            placeholder = QTreeWidgetItem(["  Time series: loading..."])
-            placeholder.setData(0, QtCore.Qt.UserRole, "__nwis_placeholder__")
-            placeholder.setFlags(placeholder.flags() & ~QtCore.Qt.ItemIsSelectable)
-            site_item.addChild(placeholder)
-            self.USGS_listboxSites.addTopLevelItem(site_item)
+        self._populate_usgs_sites_tree()
 
         self.USGS_listboxSites.itemExpanded.connect(self._on_usgs_site_expanded)
-        self.USGS_listboxSites.collapseAll()
         self.USGS_listboxSites.show()
 
         cameraIndex = 1
@@ -1454,11 +1667,19 @@ class MainWindow(QMainWindow):
 
         # POPULATE THE MAP WITH BLUE PINS FOR SD MESONET STATIONS
         try:
-            from GRIME_AI.geomaps.SDMESONET import SDMesonet
+            from appcore.geomaps.SDMESONET import SDMesonet
             sd_df = SDMesonet().get_dataframe()
             self.osm_widget.add_sdmesonet_pins(sd_df)
         except Exception as e:
             print(f"SD Mesonet pins skipped: {e}")
+
+        # POPULATE THE MAP WITH RED PINS FOR NE MESONET STATIONS
+        try:
+            from appcore.geomaps.NEMESONET import NEMesonet
+            ne_df = NEMesonet().get_dataframe()
+            self.osm_widget.add_nemesonet_pins(ne_df)
+        except Exception as e:
+            print(f"NE Mesonet pins skipped: {e}")
 
         # ADD A PIN FOR FLAGSTAFF, AZ WHERE NORTHERN ARIZONA UNIVERSITY IS LOCATED.
         self.osm_widget.add_pin(35.1878, -111.6528, color="blue", label="Northern Arizona University")
@@ -1987,7 +2208,7 @@ class MainWindow(QMainWindow):
         ROI shapes become polygon segmentations; ROIs are applied across
         every image in the folder."""
         global dailyImagesList, imageFileFolder
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import export_roi_masks
+        from appcore.dialogs.color_segmentation.color_seg_roi_coco_export import export_roi_masks
         try:
             images_list = dailyImagesList.getVisibleList()
         except Exception:
@@ -2008,7 +2229,7 @@ class MainWindow(QMainWindow):
 
     def buildFeatureFile(self):
         global dailyImagesList
-        from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+        from appcore.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
         myFeatureExport = ColorSegFeatureExport()
         imagesList = dailyImagesList.getVisibleList()
 
@@ -2045,13 +2266,13 @@ class MainWindow(QMainWindow):
             if len(self.roiList) > 0:
                 # DIAGNOSTICS
                 #if self.checkBoxColorDiagnostics.checkState():
-                from GRIME_AI.Diagnostics import Diagnostics
+                from appcore.Diagnostics import Diagnostics
                 Diagnostics.RGB3DPlot(rgb)
                 Diagnostics.plotHSVChannelsGray(hsv)
                 Diagnostics.plotHSVChannelsColor(hsv)
 
                 # segment colors
-                rgb1 = myGRIMe_Color.segmentColors(rgb, hsv, self.roiList)
+                rgb1 = myColor.segmentColors(rgb, hsv, self.roiList)
 
     # ------------------------------------------------------------------------------------------------------------------
     #
@@ -2123,8 +2344,6 @@ class MainWindow(QMainWindow):
              "GRIME2 - Water Level Measurement", self.toolbarButtonGRIME2),
             ("Help_2.png", "Help",
              "Help and Release Notes", self.toolbarButtonReleaseNotes),
-            ("TemporalAvg.png", "Temporal Averaging",
-             "Average a folder of images together", self.toolbarButtonTemporalAveraging),
         ]
 
         # Generic creation loop
@@ -2364,6 +2583,80 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     #
     # ======================================================================================================================
+    def _populate_usgs_sites_tree(self):
+        """(Re)build the USGS site tree from self.cameraList.
+        Hidden cameras (when shown) are rendered in gray italics.
+        """
+        self.USGS_listboxSites.clear()
+        for camID in self.cameraList:
+            site_item = QTreeWidgetItem([camID])
+            site_item.setData(0, QtCore.Qt.UserRole, camID)
+
+            # Visually distinguish hidden cameras when they are displayed
+            try:
+                if self.myHIVIS.is_hidden(camID):
+                    font = site_item.font(0)
+                    font.setItalic(True)
+                    site_item.setFont(0, font)
+                    site_item.setForeground(0, QtGui.QBrush(QtGui.QColor("gray")))
+                    site_item.setToolTip(0, "Hidden camera (hideCam=True)")
+            except Exception:
+                pass
+
+            for line in self.myHIVIS.get_camera_info(camID):
+                child = QTreeWidgetItem([line])
+                child.setFlags(child.flags() & ~QtCore.Qt.ItemIsSelectable)
+                site_item.addChild(child)
+            placeholder = QTreeWidgetItem(["  Time series: loading..."])
+            placeholder.setData(0, QtCore.Qt.UserRole, "__nwis_placeholder__")
+            placeholder.setFlags(placeholder.flags() & ~QtCore.Qt.ItemIsSelectable)
+            site_item.addChild(placeholder)
+            self.USGS_listboxSites.addTopLevelItem(site_item)
+
+        self.USGS_listboxSites.collapseAll()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    def _usgs_sites_tab_index(self):
+        """Return the tabWidget index of the tab containing the USGS site list."""
+        widget = self.USGS_listboxSites
+        while widget is not None:
+            idx = self.tabWidget.indexOf(widget)
+            if idx != -1:
+                return idx
+            widget = widget.parentWidget()
+        return -1
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
+    def _toggle_usgs_hidden_cameras(self):
+        """Toggle display of hidden USGS cameras and rebuild the site tree.
+        Triggered by double-clicking the USGS Sites tab.
+        """
+        if not getattr(self, "_usgs_startup_ready", False) or self.myHIVIS is None:
+            return
+
+        show_hidden = self.myHIVIS.toggle_show_hidden()
+
+        # Refresh the cached dictionary/list to reflect the new filter
+        self.cameraDictionary = self.myHIVIS.get_camera_dictionary()
+        self.cameraList       = self.myHIVIS.get_camera_list()
+
+        self._populate_usgs_sites_tree()
+
+        state = "SHOWN" if show_hidden else "HIDDEN"
+        print(f"[USGS] Hidden cameras {state} - {len(self.cameraList)} cameras listed")
+        try:
+            self.statusBar().showMessage(
+                f"USGS hidden cameras {state.lower()} ({len(self.cameraList)} cameras)", 4000)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------------------------------------------------------
+    #
+    # ------------------------------------------------------------------------------------------------------------------
     def USGS_updateSiteInfo(self, item):
         currentItem = self.USGS_listboxSites.currentItem()
         if currentItem is None:
@@ -2747,7 +3040,7 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     def importROIMasks(self):
         global currentImage, imageFileFolder
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
+        from appcore.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
 
         parent = self.colorSegmentationDlg if self.colorSegmentationDlg is not None else self
 
@@ -3037,6 +3330,70 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     #
     # ==================================================================================================================
+    def pushButton_USGSCorrelate_Clicked(self):
+        """Correlate downloaded USGS images with the sidecar NWIS sensor file
+        and open a report of matches, misalignments, and coverage gaps."""
+        start_dir = self.edit_USGSSaveFilePath.text().strip() or (JsonEditor().getValue("USGS_Root_Folder") or "")
+
+        image_folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select the folder of downloaded USGS images", start_dir)
+        if not image_folder:
+            return
+
+        sensor_file, _filter = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select the NWIS sensor data file (.txt or .csv)",
+            os.path.dirname(image_folder),
+            "NWIS sensor data (*.txt *.csv);;All files (*.*)")
+        if not sensor_file:
+            return
+
+        # Match tolerance: seconds entered directly; 0 = automatic
+        # (half the sensor sampling interval, e.g. 450 s for 15-min data).
+        tol_seconds, ok = QtWidgets.QInputDialog.getDouble(
+            self, "Match tolerance",
+            "Maximum time difference between an image and a sensor reading\n"
+            "for them to be considered aligned, in SECONDS\n"
+            "(e.g. 90 = 1.5 minutes; 0 = automatic: half the sensor interval):",
+            0.0, 0.0, 86400.0, 1)
+        if not ok:
+            return
+        tolerance_minutes = (tol_seconds / 60.0) if tol_seconds > 0 else None
+
+        from appcore.QProgressWheel import QProgressWheel
+        progressBar = QProgressWheel(0, 1000)
+        progressBar.setWindowTitle("Correlating images with sensor data...")
+        # Keep the wheel visible above the main window
+        progressBar.setWindowFlags(progressBar.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+        progressBar.show()
+
+        def _progress(done, total, label):
+            progressBar.setValue(int(done * 1000 / max(total, 1)))
+            if label:
+                progressBar.setWindowTitle(label)
+            QApplication.processEvents()
+
+        try:
+            from appcore.SensorImageCorrelator import SensorImageCorrelator
+            correlator = SensorImageCorrelator()
+            csv_path, xlsx_path = correlator.correlate(image_folder, sensor_file,
+                                                       tolerance_minutes=tolerance_minutes,
+                                                       progress=_progress)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, "Sensor/Image Correlation",
+                f"Correlation failed:\n{e}")
+            return
+        finally:
+            # Always dismiss the progress wheel, whatever happened above
+            progressBar.close()
+
+        QtWidgets.QMessageBox.information(
+            self, "Sensor/Image Correlation",
+            "Correlation report written:\n\n"
+            f"{csv_path}\n{xlsx_path}\n\n"
+            "The xlsx contains Image Correlation, Sensor Coverage, Gaps, "
+            "and Summary worksheets. Unmatched rows are highlighted.")
+
     def pushButton_USGSDownloadClicked(self):
 
         # VERIFY THAT THE FOLDER HAS BEEN SPECIFIED
@@ -3051,7 +3408,6 @@ class MainWindow(QMainWindow):
             if response == QMessageBox.Yes:
                 #USGS_download_file_path = os.path.expanduser('~')
                 #USGS_download_file_path = os.path.join(USGS_download_file_path, 'Documents')
-                #USGS_download_file_path = os.path.join(USGS_download_file_path, 'GRIME-AI')
 
                 USGS_download_file_path = JsonEditor().getValue("USGS_Root_Folder")
 
@@ -3171,7 +3527,7 @@ class MainWindow(QMainWindow):
         _splash.show()
         QApplication.processEvents()
 
-        from GRIME_AI.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
+        from appcore.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
         hyperparameterDlg = ML_ImageProcessingDlg(frame)
 
         _splash.finish(hyperparameterDlg)
@@ -3282,7 +3638,7 @@ class MainWindow(QMainWindow):
             imageFilename = dailyImagesList.getVisibleList()[currentImageIndex].fullPathAndFilename
 
             if self.compositeSliceDlg is None:
-                from GRIME_AI.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
+                from appcore.dialogs.composite_slice.CompositeSliceDlg import CompositeSliceDlg
                 self.compositeSliceDlg = CompositeSliceDlg()
                 self.compositeSliceDlg.compositeSliceGenerateSignal.connect(self.generateCompositeSlices)
                 self.compositeSliceDlg.compositeSliceCancelSignal.connect(self.closeCompositeSlices)
@@ -3300,7 +3656,7 @@ class MainWindow(QMainWindow):
 
         slice_rect = self.compositeSliceDlg.label_Image.getSliceRectInOriginal()
 
-        from GRIME_AI.CompositeSlices import CompositeSlices
+        from appcore.CompositeSlices import CompositeSlices
         compositeSlices = CompositeSlices(slice_rect)
         compositeSlices.create_composite_image(dailyImagesList.visibleList, composite_slices_folder)
 
@@ -3355,14 +3711,17 @@ class MainWindow(QMainWindow):
                         myTriage = ImageTriage()
                         myTriage.cleanImages(folder, \
                                              False, \
-                                             TriageDlg.getBlurThreshold(), TriageDlg.getShiftSize(), \
                                              TriageDlg.getBrightnessMin(), TriageDlg.getBrightnessMax(), \
                                              TriageDlg.getCreateReport(), TriageDlg.getMoveImages(), \
                                              TriageDlg.getCorrectAlignment(), TriageDlg.getSavePolylines(),
                                              TriageDlg.getReferenceImageFilename(), TriageDlg.getRotationThreshold(),
+                                             use_fft_blur=TriageDlg.getUseFftBlur(),
+                                             use_laplacian=TriageDlg.getUseLaplacian(),
+                                             laplacian_threshold=TriageDlg.getLaplacianThreshold(),
                                              focus_roi=TriageDlg.getFocusROI(),
                                              use_color_imbalance=TriageDlg.getUseColorImbalance(),
-                                             color_imbalance_threshold=TriageDlg.getColorImbalanceThreshold())
+                                             color_imbalance_threshold=TriageDlg.getColorImbalanceThreshold(),
+                                             fft_calibration=TriageDlg.getFftCalibration())
 
                         strMessage = 'Image triage is complete!'
                         msgBox = App_QMessageBox('Image Triage', strMessage, buttons=QMessageBox.Close)
@@ -3378,7 +3737,7 @@ class MainWindow(QMainWindow):
 
 
     def menubarExtractCOCOMasks(self):
-        from GRIME_AI.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
+        from appcore.dialogs.extract_coco_masks.ExportCOCOMasksDlg import ExportCOCOMasksDlg
         self.COCOdlg = ExportCOCOMasksDlg(self)
 
         self.COCOdlg.COCO_signal_ok.connect(self.accepted_COCODlg)
@@ -3515,7 +3874,7 @@ class MainWindow(QMainWindow):
         (root, composite slices, videos/GIFs, USGS, NEON downloads) so you can
         switch study sites without editing folder paths by hand."""
         try:
-            from GRIME_AI.recipe_manager import RecipeManagerDialog
+            from appcore.recipe_manager import RecipeManagerDialog
             dlg = RecipeManagerDialog(self._get_recipe_store(), self, dark_mode=self._is_dark_mode)
             dlg.recipeActivated.connect(self.apply_recipe)
             dlg.recipeDeactivated.connect(self.clear_recipe)
@@ -3528,17 +3887,68 @@ class MainWindow(QMainWindow):
     def menubar_site_config_editor(self):
         """Open the standalone Site Config editor (Tools -> Site Config Editor)."""
         try:
-            from GRIME_AI.utils.site_config_manager import open_editor
+            from appcore.utils.site_config_manager import open_editor
             open_editor(parent=self)
         except Exception as e:
             print(f"[ERROR] Failed to open Site Config Editor: {e}")
             traceback.print_exc()
             QMessageBox.critical(self, "Site Config Editor", str(e))
 
+    def _build_plugins_menu(self):
+        """Fill Tools > Plugins with the plugins that asked for the Tools surface.
+
+        Nothing here is allowed to take the application down: a missing plugin
+        system or an unreadable plugins folder just leaves the menu empty."""
+        self._menu_plugins.clear()
+        try:
+            from appcore.plugins import discover, open_in_window, plugins_folder, SURFACE_TOOLS
+        except Exception as e:
+            print(f"[ERROR] Plugin support unavailable: {e}")
+            traceback.print_exc()
+            action = self._menu_plugins.addAction("Plugins unavailable")
+            action.setEnabled(False)
+            return
+
+        try:
+            found = discover(surface=SURFACE_TOOLS)
+        except Exception as e:
+            print(f"[ERROR] Could not read the plugins folder: {e}")
+            traceback.print_exc()
+            found = []
+
+        if not found:
+            action = self._menu_plugins.addAction("No plugins installed")
+            action.setEnabled(False)
+        else:
+            for info in found:
+                action = self._menu_plugins.addAction(info.title)
+                action.setStatusTip(info.meta.get("description", f"Open {info.title}"))
+                action.triggered.connect(
+                    lambda _checked=False, plugin=info: open_in_window(plugin, parent=self))
+
+        self._menu_plugins.addSeparator()
+        folder_action = self._menu_plugins.addAction("Open Plugins Folder\u2026")
+        folder_action.setStatusTip(plugins_folder())
+        folder_action.triggered.connect(self._open_plugins_folder)
+
+    def _open_plugins_folder(self):
+        """Show the plugins folder in the file manager, creating it if needed."""
+        from PyQt5.QtGui import QDesktopServices
+        from PyQt5.QtCore import QUrl
+        folder = ""
+        try:
+            from appcore.plugins import plugins_folder
+            folder = plugins_folder()
+            os.makedirs(folder, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        except Exception as e:
+            print(f"[ERROR] Could not open the plugins folder: {e}")
+            QMessageBox.warning(self, "Plugins", f"Could not open:\n{folder}\n\n{e}")
+
     def _get_recipe_store(self):
         """Return the single shared RecipeStore instance (created lazily), so
         the Recipe Manager and the image-folder write-back use the same store."""
-        from GRIME_AI.recipe_manager import RecipeStore
+        from appcore.recipe_manager import RecipeStore
         if not hasattr(self, "recipe_store") or self.recipe_store is None:
             self.recipe_store = RecipeStore()
         return self.recipe_store
@@ -3657,7 +4067,7 @@ class MainWindow(QMainWindow):
                 JsonEditor().update_json_entry("Model_Segmentation_Output_Folder", recipe.predictions)
                 try:
                     if hyperparameterDlg is not None:
-                        from GRIME_AI.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
+                        from appcore.dialogs.ML_image_processing.segment_images_tab import SegmentImagesTab
                         seg_tab = hyperparameterDlg.findChild(SegmentImagesTab)
                         if seg_tab is not None:
                             seg_tab.set_output_folder(recipe.predictions)
@@ -3754,7 +4164,7 @@ class MainWindow(QMainWindow):
         # Create and show new dialog
         try:
             print("[DEBUG] Creating new Image Organizer dialog")
-            from GRIME_AI.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
+            from appcore.dialogs.image_organizer.ImageOrganizerDlg import ImageOrganizerDlg
             self.imageOrganizerDlg = ImageOrganizerDlg(self)
             print("[DEBUG] Showing Image Organizer dialog")
             self.imageOrganizerDlg.show()
@@ -3763,18 +4173,6 @@ class MainWindow(QMainWindow):
             print(f"[ERROR] Failed to launch Image Organizer dialog: {e}")
             traceback.print_exc()  # full traceback to terminal
 
-
-    # ======================================================================================================================
-    # TEMPORAL AVERAGING
-    # ======================================================================================================================
-    def toolbarButtonTemporalAveraging(self):
-        """Launch the Temporal Averaging dialog."""
-        if not hasattr(self, "_temporalAvgDlg") or self._temporalAvgDlg is None:
-            from GRIME_AI.dialogs.temporal_averaging.TemporalAveragingDlg import TemporalAveragingDlg
-            self._temporalAvgDlg = TemporalAveragingDlg(self)
-        self._temporalAvgDlg.show()
-        self._temporalAvgDlg.raise_()
-        self._temporalAvgDlg.activateWindow()
 
     # ==================================================================================================================
     # SAGE — SEGMENTATION & ANNOTATION FOR GEOSPATIAL ECOHYDROLOGY
@@ -3795,7 +4193,7 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def toolbarButtonReleaseNotes(self):
         global frame
-        from GRIME_AI.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
+        from appcore.dialogs.release_notes.ReleaseNotesDlg import ReleaseNotesDlg
         releaseNotesDlg = ReleaseNotesDlg(frame)
 
         releaseNotesDlg.show()
@@ -3815,7 +4213,7 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def toolbarButtonEdgeDetection(self):
         global frame
-        from GRIME_AI.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
+        from appcore.dialogs.edge_detection.EdgeDetectionDlg import EdgeDetectionDlg
         self.edgeDetectionDlg = EdgeDetectionDlg(frame)
 
         self.edgeDetectionDlg.edgeDetectionSignal.connect(self.edgeDetectionMethod)
@@ -3876,7 +4274,7 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     def onMyToolBarFileFolder(self):
         global frame
-        from GRIME_AI.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
+        from appcore.dialogs.file_utilities.FileUtilitiesDlg import FileUtilitiesDlg
         self.fileFolderDlg = FileUtilitiesDlg(frame)
 
         self.fileFolderDlg.create_composite_slice_signal.connect(self.menubarCompositeSlices)
@@ -3922,7 +4320,7 @@ class MainWindow(QMainWindow):
             global currentImageCount
 
             if gFrameCount > 0:
-                from GRIME_AI.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
+                from appcore.dialogs.image_navigation.ImageNavigationDlg import ImageNavigationDlg
                 self.imageNavigationDlg = ImageNavigationDlg(frame)
                 self.imageNavigationDlg.imageIndexSignal.connect(self.getImageIndex)
 
@@ -3970,7 +4368,7 @@ class MainWindow(QMainWindow):
             if self.maskEditorDlg == None:
                 self.labelOriginalImage.setDrawingMode(DrawingMode.COLOR_SEGMENTATION)
 
-                from GRIME_AI.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
+                from appcore.dialogs.color_segmentation.ColorSegmentationDlg import ColorSegmentationDlg
                 self.colorSegmentationDlg = ColorSegmentationDlg()
 
                 self.colorSegmentationDlg.colorSegmentation_Signal.connect(self.colorSegmentation)
@@ -4046,7 +4444,7 @@ class MainWindow(QMainWindow):
         global dailyImagesList
         videoFileList = dailyImagesList.getVisibleList()
 
-        myGRIMe_Color = Color()
+        myColor = Color()
 
         nImageIndex = 1
 
@@ -4059,7 +4457,7 @@ class MainWindow(QMainWindow):
             if os.path.isfile(inputFrame):
                 global currentImageFilename
                 currentImageFilename = inputFrame
-                numpyImage = myGRIMe_Color.loadColorImage(inputFrame)
+                numpyImage = myColor.loadColorImage(inputFrame)
 
                 hsv = cv2.cvtColor(numpyImage, cv2.COLOR_BGR2HSV)
 
@@ -4101,7 +4499,7 @@ class MainWindow(QMainWindow):
             if self.colorSegmentationDlg == None:
                 self.labelOriginalImage.setDrawingMode(DrawingMode.MASK)
 
-                from GRIME_AI.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
+                from appcore.dialogs.mask_editor.MaskEditorDlg import MaskEditorDlg
                 self.maskEditorDlg = MaskEditorDlg()
 
                 self.maskEditorDlg.addMask_Signal.connect(self.addMask)
@@ -4230,12 +4628,12 @@ class MainWindow(QMainWindow):
                 csvFile.close()
 
                 # EXTRACT DOMINANT RGB COLORS
-                myGRIMe_Color = Color()
+                myColor = Color()
 
-                _, _, hist = myGRIMe_Color.KMeans(masked, 6)
+                _, _, hist = myColor.KMeans(masked, 6)
 
                 # EXTRACT DOMINANT HSV COLORS
-                hist, colorClusters = myGRIMe_Color.extractDominant_HSV(masked, 6)
+                hist, colorClusters = myColor.extractDominant_HSV(masked, 6)
 
                 # CREATE COLOR BAR TO DISPLAY CLUSTER COLORS
                 colorBar = Color.create_color_bar(hist, colorClusters[0:5])
@@ -4279,6 +4677,14 @@ class MainWindow(QMainWindow):
     # INFORMATION, VIEWS, POP-UP MENUS AND DRAWING REGIONS-OF-INTEREST (ROI) AROUND SPECIFIC AREAS OF AN IMAGE.
     # ==================================================================================================================
     def eventFilter(self, source, event):
+
+        # Double-click on the USGS Sites tab (the tab itself) toggles hidden cameras
+        if (event.type() == QtCore.QEvent.MouseButtonDblClick
+                and source is self.tabWidget.tabBar()):
+            idx = self.tabWidget.tabBar().tabAt(event.pos())
+            if idx != -1 and idx == self._usgs_sites_tab_index():
+                self._toggle_usgs_hidden_cameras()
+                return True
 
         if event.type() == QtCore.QEvent.MouseMove and source is self.labelEdgeImage:
             # print("A")
@@ -4788,7 +5194,7 @@ def fetchLocalImageList(self, filePath, bFetchRecursive, bCreateEXIFFile, start_
                     myEXIFData.extractEXIFData(fullPathAndFilename)
 
                     strTemp = str(myEXIFData.getEXIF()[8])
-                    timeOriginal = re.search(' \d{2}:\d{2}:\d{2}', strTemp).group(0)
+                    timeOriginal = re.search(r' \d{2}:\d{2}:\d{2}', strTemp).group(0)
 
                     nHours = int(str(timeOriginal[1:3]))
                     nMins = int(str(timeOriginal[4:6]))
@@ -4860,7 +5266,7 @@ def fetchLocalImageList(self, filePath, bFetchRecursive, bCreateEXIFFile, start_
 def processLocalImage(self, nImageIndex=0, imageFileFolder=''):
     global currentImage
 
-    myGRIMe_Color = Color()
+    myColor = Color()
 
     # videoFilePath = Path(frameFolder)
     ##JES videoFileList = [str(pp) for pp in videoFilePath.glob("**/*.jpg")]
@@ -4878,7 +5284,7 @@ def processLocalImage(self, nImageIndex=0, imageFileFolder=''):
         if os.path.isfile(inputFrame):
             global currentImageFilename
             currentImageFilename = inputFrame
-            numpyImage = myGRIMe_Color.loadColorImage(inputFrame)
+            numpyImage = myColor.loadColorImage(inputFrame)
 
             numpyImage = np.ascontiguousarray(numpyImage)
             bytes_per_line = numpyImage.strides[0]
@@ -5004,7 +5410,7 @@ def processImage(self, myImage):
     # the same elif chain gated on g_edgeMethodSettings.method, so they were only reachable
     # by accident of the dialog zeroing out the edge method first.
     # ------------------------------------------------------------------------------------
-    from GRIME_AI.ProcessImage import ProcessImage
+    from appcore.ProcessImage import ProcessImage
     myProcessImage = ProcessImage()
 
     edge_method    = g_edgeMethodSettings.method
@@ -5253,10 +5659,121 @@ def NEON_dateChangeMethod(date_widget, tableWidget, bUniqueDates):
 #
 # ======================================================================================================================
 def DP1_20002_fetchImageList(self, nProductID, nRow, start_date, end_date, start_time, end_time, downloadsFilePath):
+    """
+    Pipelined NEON (via PhenoCam) image fetch: each day's browse-page scan
+    hands its images straight to a small download pool, so downloading runs
+    in parallel with -- lagging just behind -- the remaining scanning.  The
+    function itself stays synchronous: it returns only when all images are
+    on disk, because the caller immediately processes the download folder.
+    """
+    global SITECODE, DOMAINCODE, dailyImagesList, gWebImageCount
 
-    imageList = DP1_20002_buildImageList(self, nProductID, nRow, start_date, end_date, start_time, end_time)
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
 
-    DP1_20002_downloadImages(self, imageList, downloadsFilePath)
+    if nRow <= -1:
+        return []
+
+    if not os.path.exists(downloadsFilePath):
+        os.makedirs(downloadsFilePath)
+
+    total_days = (end_date - start_date).days + 1
+
+    cancel_requested = {"value": False}
+    counters = {"downloaded": 0, "done": 0}
+    lock = threading.Lock()
+
+    def request_cancel():
+        cancel_requested["value"] = True
+
+    progressBar = QProgressWheel(on_close=request_cancel)
+    progressBar.setRange(0, total_days)
+    progressBar.setWindowTitle('Scanning & downloading images...')
+    progressBar.show()
+
+    def _fetch(img):
+        if cancel_requested["value"]:
+            return
+        filename = os.path.basename(img.fullPathAndFilename)
+        dest = os.path.join(downloadsFilePath, filename)
+        got = 0
+        if not os.path.isfile(dest):
+            try:
+                urllib.request.urlretrieve(img.fullPathAndFilename, dest)
+                got = 1
+            except Exception as e:
+                print(f"[NEON DP1.20002] Error downloading {filename}: {e}")
+        with lock:
+            counters["done"] += 1
+            counters["downloaded"] += got
+
+    dailyImagesList.clear()
+    product_str = str(nProductID).zfill(5)
+    futures = []
+    pool = ThreadPoolExecutor(max_workers=4)
+    try:
+        current, day_idx = start_date, 0
+        while current <= end_date:
+            if cancel_requested["value"] or not progressBar.isVisible():
+                cancel_requested["value"] = True
+                break
+
+            day_idx += 1
+            dailyURLvisible = (
+                f"https://phenocam.nau.edu/webcam/browse/NEON.{DOMAINCODE}.{SITECODE}.DP1.{product_str}/"
+                f"{current.year}/{str(current.month).zfill(2)}/{str(current.day).zfill(2)}"
+            )
+
+            try:
+                day_images = PhenoCam().getVisibleImages(
+                    dailyURLvisible, start_time, end_time
+                ).getVisibleList()
+            except Exception as e:
+                print(f"[NEON DP1.20002] Error scanning {current}: {e}")
+                day_images = []
+
+            dailyImagesList.setVisibleList(day_images)
+            for img in day_images:
+                futures.append(pool.submit(_fetch, img))
+
+            with lock:
+                dl = counters["downloaded"]
+            progressBar.setWindowTitle(
+                f"{current.strftime('%Y-%m-%d')} - {len(futures)} found, {dl} downloaded"
+            )
+            progressBar.setValue(day_idx)
+            QCoreApplication.processEvents()
+
+            current += datetime.timedelta(days=1)
+
+        # Scanning finished: wait for the download tail, keeping the UI alive.
+        total = len(futures)
+        while not cancel_requested["value"]:
+            with lock:
+                done = counters["done"]
+            if done >= total:
+                break
+            progressBar.setWindowTitle(f"Downloading... {done}/{total}")
+            QCoreApplication.processEvents()
+            time.sleep(0.05)
+    finally:
+        pool.shutdown(wait=not cancel_requested["value"],
+                      cancel_futures=cancel_requested["value"])
+        if progressBar and progressBar.isVisible():
+            progressBar.close()
+
+    gWebImageCount = len(dailyImagesList.getVisibleList())
+
+    # Generate the completeness/gap report (HTML + CSV + optional PDF) in the
+    # download folder.  Skipped if the user cancelled; never fatal.
+    if not cancel_requested["value"]:
+        try:
+            from appcore.reporting.gap_report import generate_gap_report
+            generate_gap_report(downloadsFilePath)
+        except Exception as e:
+            print(f"[NEON DP1.20002] Gap report skipped: {e}")
+
+    return dailyImagesList.getVisibleList()
 
 # ======================================================================================================================
 #
@@ -5347,6 +5864,17 @@ def DP1_20002_downloadImages(self, imageList, downloadsFilePath):
     if progressBarDownloads and progressBarDownloads.isVisible():
         progressBarDownloads.close()
 
+    # Generate the completeness/gap report (HTML + CSV + optional PDF) in the
+    # download folder.  NEON-via-PhenoCam filenames are site-local timestamps,
+    # same as PhenoCam proper, so no timezone conversion is applied.  Skipped
+    # if the user cancelled mid-download; never fatal.
+    if not cancel_requested["value"]:
+        try:
+            from appcore.reporting.gap_report import generate_gap_report
+            generate_gap_report(downloadsFilePath)
+        except Exception as e:
+            print(f"[NEON DP1.20002] Gap report skipped: {e}")
+
 #jes LET THE CALLING FUNCTION BE RESPONSIBLE FOR REPORTING DOWNLOAD COMPLETION.
 #jes MODIFY THIS IN A FUTURE RELEASE TO RETURN A PASS/FAIL MESSAGE TO THE FUNCTION THAT INVOKED THIS FUNCTION.
 #jes strMessage = 'Data download is complete!'
@@ -5368,7 +5896,7 @@ def downloadProductDataFiles(self, item):
     myNEON_API = NEON_API()
 
     # ----------------------------------------------------------------------------------------------------
-    # SAVE DOWNLOADED DATA TO THE USER GRIME-AI FOLDER THAT IS AUTOMATICALLY CREATED, IF IT DOES NOT EXIST,
+    # SAVE DOWNLOADED DATA TO THE USER'S APPLICATION FOLDER THAT IS AUTOMATICALLY CREATED, IF IT DOES NOT EXIST,
     # CREATE IT IN THE USER'S DOCUMENT FOLDER
     # ----------------------------------------------------------------------------------------------------
     NEON_download_file_path = self.edit_NEON_TableInput.text().strip() or self.edit_NEONSaveFilePath.text().strip()
@@ -5384,7 +5912,6 @@ def downloadProductDataFiles(self, item):
         if response == QMessageBox.Yes:
             #NEON_download_file_path = os.path.expanduser('~')
             #NEON_download_file_path = os.path.join(NEON_download_file_path, 'Documents')
-            #NEON_download_file_path = os.path.join(NEON_download_file_path, 'GRIME-AI')
 
             NEON_download_file_path = JsonEditor().getValue("NEON_Root_Folder")
 
@@ -5638,7 +6165,7 @@ def run_gui():
     global frame
 
     # If Hydra is already initialized, clear it
-    from GRIME_AI.Save_Utils import Save_Utils
+    from appcore.Save_Utils import Save_Utils
 
     settings_folder = Save_Utils().get_settings_folder()
     print(settings_folder)
@@ -5652,6 +6179,19 @@ def run_gui():
             hydra.initialize(config_path=None)
 
     # CREATE MAIN APP WINDOW
+    # High-DPI attributes MUST be set before QApplication is constructed or they
+    # have no effect. The env vars set at import time (QT_ENABLE_HIGHDPI_SCALING)
+    # are not sufficient on all PyQt5/Qt builds; without these attributes, text
+    # renders un-antialiased / jagged on scaled displays (the "dithered" look).
+    try:
+        from PyQt5.QtCore import Qt as _Qt
+        if hasattr(_Qt, "AA_EnableHighDpiScaling"):
+            QApplication.setAttribute(_Qt.AA_EnableHighDpiScaling, True)
+        if hasattr(_Qt, "AA_UseHighDpiPixmaps"):
+            QApplication.setAttribute(_Qt.AA_UseHighDpiPixmaps, True)
+    except Exception as _e:
+        print(f"[HIDPI] Could not set high-DPI attributes: {_e}")
+
     app = QApplication(sys.argv)
 
     # Light mode is the default — dark mode toggled via View menu
@@ -5728,10 +6268,6 @@ def my_main():
                                help="Rotation tolerance for considering an image over- or under-rotated.")
     triage_parser.add_argument("-i", "--image", type=str, required=False, default=None,
                                help="Image to use as ground truth for rotation angle.")
-    triage_parser.add_argument("-b", "--blurthreshold", type=float, required=False, default=17.50,
-                               help="Blur threshold for FFT.")
-    triage_parser.add_argument("-s", "--shift", type=int, required=False, default=60,
-                               help="FFT Shift size for blur estimation.")
     triage_parser.add_argument("-f", "--folder", type=str, required=True, help="A folder must be specified.")
 
     # Slice parser
@@ -5807,6 +6343,13 @@ def my_main():
                                 action='store_false',
                                 help='Do not save diagnostic panel images')
 
+    segment_parser.add_argument('--use-tta', dest='use_tta',
+                                action='store_true', default=False,
+                                help='SegFormer only: test-time augmentation (flip + average). Slower, cleaner boundaries.')
+    segment_parser.add_argument('--no-use-tta', dest='use_tta',
+                                action='store_false',
+                                help='Disable test-time augmentation (default)')
+
     # DEPRECATED aliases -- resolved in the handler below.
     segment_parser.add_argument('--no-mask',       action='store_true',
                                 help='DEPRECATED: use --no-save-masks')
@@ -5862,6 +6405,9 @@ def my_main():
                               type=int, required=False, default=None,
                               help='Number of validation images to write overlays for on each '
                                    'overlay-writing epoch. Overrides the config.')
+    train_parser.add_argument('--max-best-checkpoints', dest='max_best_checkpoints',
+                              type=int, required=False, default=None,
+                              help='How many best-scoring checkpoints to retain. Overrides the config.')
 
     # ROI Analyzer parser
     roi_parser = subparsers.add_parser(
@@ -6036,7 +6582,7 @@ def version_action(fn):
 
 def print_version(long: bool):
     try:
-        from GRIME_AI.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
+        from appcore.version import SW_VERSION, RELEASE, BUILD_DATE, SHA
     except ImportError:
         SW_VERSION = globals().get('SW_VERSION', '0.0.0.0')
         RELEASE    = 'N/A'
@@ -6064,8 +6610,6 @@ def run_cli(args):
         create_report = True
         move_images = True
         fetch_recursive = False
-        blur_threshold = 17.50
-        shift_size = 60
         #min_val = 65.0
         #max_val = 180.0
         correct_alignment = False
@@ -6079,7 +6623,6 @@ def run_cli(args):
         myTriage = ImageTriage(False)
         myTriage.cleanImages(args.folder, \
                              fetch_recursive, \
-                             blur_threshold, shift_size, \
                              args.min, args.max, \
                              create_report, move_images, \
                              correct_alignment, save_poly_lines,
@@ -6092,7 +6635,7 @@ def run_cli(args):
 
         from PyQt5.QtCore import QRect
         from PIL import Image
-        from GRIME_AI.CompositeSlices import CompositeSlices
+        from appcore.CompositeSlices import CompositeSlices
         first_image = Image.open(filenames[0].fullPathAndFilename)
         slice_rect = QRect(
             int(args.center - args.width / 2),
@@ -6102,7 +6645,7 @@ def run_cli(args):
         )
 
         compositeSlices = CompositeSlices(slice_rect, False)
-        compositeSlices.create_composite_image(filenames, args.folder+'\compositeSlices')
+        compositeSlices.create_composite_image(filenames, os.path.join(args.folder, 'compositeSlices'))
 
         print("Composite slice complete!")
 
@@ -6112,11 +6655,11 @@ def run_cli(args):
         import cv2
         from PyQt5.QtCore import QRect, QPoint
 
-        from GRIME_AI.colorSegmentationParams import colorSegmentationParamsClass
-        from GRIME_AI.vegetation_indices import Vegetation_Indices, GreennessIndex
-        from GRIME_AI.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
-        from GRIME_AI.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
+        from appcore.colorSegmentationParams import colorSegmentationParamsClass
+        from appcore.vegetation_indices import Vegetation_Indices, GreennessIndex
+        from appcore.dialogs.color_segmentation.color_seg_feature_export import ColorSegFeatureExport
+        from appcore.dialogs.color_segmentation.color_seg_roi_coco_export import load_roi_masks
+        from appcore.dialogs.color_segmentation.color_seg_roi_data import roiData, ROIShape
 
         def _csv_option(value, valid, label):
             """Parse a comma-separated option, allowing 'all' and 'none'."""
@@ -6265,7 +6808,7 @@ def run_cli(args):
         generator.generate_annotations()
 
     elif args.command == 'segment':
-        from GRIME_AI.cli_segment import run_sam2, run_segformer
+        from appcore.cli_segment import run_sam2, run_segformer
 
         # Validate inputs
         if not os.path.isfile(args.model):
@@ -6328,31 +6871,25 @@ def run_cli(args):
         print(f"[{APP_DISPLAY_NAME}] Site:          {site_config.get('siteName', '?')}")
 
         # ------------------------------------------------------------------
-        # Validation overlay overrides. Only applied when the flag was passed,
-        # so an unflagged run uses whatever the config already specifies.
+        # CLI overrides. Only applied when the flag was passed, so an
+        # unflagged run uses whatever the config already specifies.
         # ------------------------------------------------------------------
-        for _flag, _key in (
-            ('validation_overlay_mode',     'validation_overlay_mode'),
-            ('validation_overlay_interval', 'validation_overlay_interval'),
-            ('validation_overlay_samples',  'validation_overlay_samples'),
-            ('lr_scheduler_enabled',        'lr_scheduler_enabled'),
-            ('lr_scheduler_factor',         'lr_scheduler_factor'),
-            ('lr_scheduler_patience',       'lr_scheduler_patience'),
-            ('lr_scheduler_min_lr',         'lr_scheduler_min_lr'),
-        ):
-            _val = getattr(args, _flag, None)
+        for _key in ('validation_overlay_mode', 'validation_overlay_interval',
+                     'validation_overlay_samples', 'lr_scheduler_enabled',
+                     'lr_scheduler_factor', 'lr_scheduler_patience',
+                     'lr_scheduler_min_lr', 'max_best_checkpoints'):
+            _val = getattr(args, _key, None)
             if _val is not None:
                 site_config[_key] = _val
                 print(f"[{APP_DISPLAY_NAME}] Override:      {_key} = {_val}")
 
-        if (site_config.get('validation_overlay_interval') is not None
-                and int(site_config.get('validation_overlay_interval', 5)) < 1):
-            print('[ERROR] --validation-overlay-interval must be >= 1.', file=sys.stderr)
-            sys.exit(1)
-        if (site_config.get('validation_overlay_samples') is not None
-                and int(site_config.get('validation_overlay_samples', 5)) < 1):
-            print('[ERROR] --validation-overlay-samples must be >= 1.', file=sys.stderr)
-            sys.exit(1)
+        for _key, _label in (('validation_overlay_interval', '--validation-overlay-interval'),
+                             ('validation_overlay_samples', '--validation-overlay-samples'),
+                             ('max_best_checkpoints', '--max-best-checkpoints')):
+            if site_config.get(_key) is not None and int(site_config[_key]) < 1:
+                print(f'[ERROR] {_label} must be >= 1.', file=sys.stderr)
+                sys.exit(1)
+
         print(f"[{APP_DISPLAY_NAME}] Overlays:      "
               f"mode={site_config.get('validation_overlay_mode', 'last')} "
               f"interval={site_config.get('validation_overlay_interval', 5)} "
@@ -6363,7 +6900,7 @@ def run_cli(args):
         # so the CLI, the editor, and the Training tab all agree on the
         # 'id - name' format and on train_model.TRAINING_CATEGORIES.
         # ------------------------------------------------------------------
-        from GRIME_AI.utils.site_config_manager import (
+        from appcore.utils.site_config_manager import (
             collect_training_labels, get_training_categories,
             set_training_categories, parse_label,
         )
@@ -6423,7 +6960,7 @@ def run_cli(args):
             with initialize_config_dir(config_dir=cfg_dir, version_base="1.3"):
                 cfg = compose(config_name="sam2.1_hiera_l")
 
-        from GRIME_AI.ml_core.ml_model_training import MLModelTraining
+        from appcore.ml_core.ml_model_training import MLModelTraining
         dispatcher = MLModelTraining(cfg, parent_widget=None, site_config=site_config)
         dispatcher.Model_Training_Dispatcher(cfg=cfg, mode=args.mode)
 
@@ -6447,7 +6984,7 @@ def run_cli(args):
         from openpyxl import Workbook
         from openpyxl.styles import Font
 
-        from GRIME_AI.ROI_Analyzer import ROI_Analyzer
+        from appcore.ROI_Analyzer import ROI_Analyzer
 
         # ------------------------------------------------------------------
         # Validate folder
@@ -7010,7 +7547,7 @@ def train_main(cfg: DictConfig) -> None:
 
         # BEGIN TRAINING THE MODEL
         print("Instantiate MLModelTraining class...")
-        from GRIME_AI.ml_core.ml_model_training import MLModelTraining
+        from appcore.ml_core.ml_model_training import MLModelTraining
         myML_Dispatcher = MLModelTraining(cfg, parent_widget=hyperparameterDlg)
 
         print("Execute ML training...")
@@ -7047,6 +7584,8 @@ def segment_main(cfg: DictConfig) -> None:
         save_masks = hyperparameterDlg.get_saved_masks()
         save_probability_maps = hyperparameterDlg.get_save_probability_maps()
         save_diagnostic_panels = hyperparameterDlg.get_save_diagnostic_panels()
+        use_tta = (hyperparameterDlg.get_use_tta()
+                   if hasattr(hyperparameterDlg, "get_use_tta") else False)
         selected_label_categories = hyperparameterDlg.get_selected_label_categories()
         selected_segment_model = hyperparameterDlg.get_selected_segment_model()
 
@@ -7056,12 +7595,13 @@ def segment_main(cfg: DictConfig) -> None:
         except Exception:
             pass
 
-        from GRIME_AI.ml_core.ml_image_segmentation import MLImageSegmentation
+        from appcore.ml_core.ml_image_segmentation import MLImageSegmentation
         mySegmentation = MLImageSegmentation(cfg, parent_widget=hyperparameterDlg)
         mySegmentation.ML_Segmentation_Dispatcher(copy_original_image, save_masks, selected_label_categories,
                                                     mode=selected_segment_model,
                                                     save_probability_maps=save_probability_maps,
-                                                    save_diagnostic_panels=save_diagnostic_panels)
+                                                    save_diagnostic_panels=save_diagnostic_panels,
+                                                    use_tta=use_tta)
 
         # Re-enable Segment button
         try:

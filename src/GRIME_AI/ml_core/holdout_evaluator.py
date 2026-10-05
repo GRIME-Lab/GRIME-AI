@@ -28,9 +28,9 @@ from datetime import datetime
 from PIL import Image
 from typing import List, Dict, Optional, Tuple
 
-from GRIME_AI.ml_core.seasonal_only import filter_seasons_only
-from GRIME_AI.ml_core.seasonal_dropout import extract_date_from_usgs_filename, get_season
-from GRIME_AI.utils.datasetutils import DatasetUtils
+from appcore.ml_core.seasonal_only import filter_seasons_only
+from appcore.ml_core.seasonal_dropout import extract_date_from_usgs_filename, get_season
+from appcore.utils.datasetutils import DatasetUtils
 from ..app_identity import APP_DISPLAY_NAME
 
 SEASON_TYPE = "Meteorological"

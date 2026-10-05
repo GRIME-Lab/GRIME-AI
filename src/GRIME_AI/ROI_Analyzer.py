@@ -8,7 +8,6 @@
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
 import os
-import sys
 from io import BytesIO
 
 import cv2
@@ -99,19 +98,15 @@ class ROI_Analyzer:
 
     def load_data(self):
         if not os.path.exists(self.image_filename):
-            print(f"Error: Image file not found: {self.image_filename}")
-            sys.exit(1)
+            raise FileNotFoundError(f"Image file not found: {self.image_filename}")
         if not os.path.exists(self.mask_filename):
-            print(f"Error: Mask file not found: {self.mask_filename}")
-            sys.exit(1)
+            raise FileNotFoundError(f"Mask file not found: {self.mask_filename}")
         self.image = cv2.imread(self.image_filename)
         if self.image is None:
-            print(f"Error: Could not load image from: {self.image_filename}")
-            sys.exit(1)
+            raise ValueError(f"Could not read image: {self.image_filename}")
         self.mask = cv2.imread(self.mask_filename, cv2.IMREAD_GRAYSCALE)
         if self.mask is None:
-            print(f"Error: Could not load mask from: {self.mask_filename}")
-            sys.exit(1)
+            raise ValueError(f"Could not read mask: {self.mask_filename}")
 
         # Resize mask if necessary.
         if self.image.shape[:2] != self.mask.shape:
@@ -120,6 +115,8 @@ class ROI_Analyzer:
 
         # Create binary mask.
         ret, self.mask_bin = cv2.threshold(self.mask, 1, 255, cv2.THRESH_BINARY)
+        if not np.any(self.mask_bin):
+            raise ValueError(f"Mask is empty (no pixels to analyze): {self.mask_filename}")
 
 
     def compute_composite(self):
@@ -213,8 +210,7 @@ class ROI_Analyzer:
         masked_pixels = hsv_image[mask_bin_local > 0].astype(np.float32)
 
         if masked_pixels.size == 0:
-            print("Error: No pixels found under the provided mask.")
-            sys.exit(1)
+            raise ValueError(f"Mask is empty (no pixels to analyze): {self.mask_filename}")
 
         self.dominant_hsv_list = []
         self.dominant_rgb_list = []

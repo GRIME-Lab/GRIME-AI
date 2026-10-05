@@ -81,13 +81,25 @@ class TverskyLoss(nn.Module):
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def forward(self, logits: torch.Tensor, targets: torch.Tensor):
-        probs = torch.softmax(logits, dim=1)[:, 1]
-        targets_f = targets.float()
-        TP = (probs * targets_f).sum(dim=(1,2))
-        FP = (probs * (1 - targets_f)).sum(dim=(1,2))
-        FN = ((1 - probs) * targets_f).sum(dim=(1,2))
-        tversky = (TP + self.smooth) / (TP + self.alpha * FP + self.beta * FN + self.smooth)
-        return 1.0 - tversky.mean()
+        # Works for binary and multi-class. logits: [B,C,H,W]; targets: [B,H,W]
+        # with class indices. Averages the Tversky index over foreground classes
+        # (skips class 0 = background), mirroring MultiClassDiceLoss. For C==2
+        # this reduces to the original binary behavior on class 1.
+        probs = torch.softmax(logits, dim=1)
+        num_classes = probs.size(1)
+        start = 1 if num_classes > 1 else 0   # skip background when multi-class
+        losses = []
+        for c in range(start, num_classes):
+            p_c = probs[:, c]
+            t_c = (targets == c).float()
+            TP = (p_c * t_c).sum(dim=(1, 2))
+            FP = (p_c * (1 - t_c)).sum(dim=(1, 2))
+            FN = ((1 - p_c) * t_c).sum(dim=(1, 2))
+            tversky = (TP + self.smooth) / (TP + self.alpha * FP + self.beta * FN + self.smooth)
+            losses.append(1.0 - tversky.mean())
+        if not losses:
+            return logits.sum() * 0.0   # no foreground class present
+        return torch.stack(losses).mean()
 
 
 # ======================================================================================================================

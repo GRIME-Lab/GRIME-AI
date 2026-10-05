@@ -12,7 +12,7 @@ from typing import List, Dict
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtCore import Qt
 
-from GRIME_AI.AnnotatorLabel import AnnotatorLabel
+from appcore.AnnotatorLabel import AnnotatorLabel
 
 
 class ImageAnnotatorDialog(QtWidgets.QDialog):

@@ -3,8 +3,8 @@
 import traceback
 
 from datetime import datetime
-from GRIME_AI.utils.resource_utils import ui_path
-from GRIME_AI.utils import theme
+from appcore.utils.resource_utils import ui_path
+from appcore.utils import theme
 from pathlib import Path
 
 from PyQt5.uic import loadUi
@@ -13,7 +13,7 @@ from PyQt5.QtGui import QTextOption
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
 
 # ---- core (your current module) ----
-from GRIME_AI.image_organizer import (
+from appcore.image_organizer import (
     organize_images, example_filename,
     iter_images, read_image_metadata,
     move_files_to_subfolder, revert_operation,

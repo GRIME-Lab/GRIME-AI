@@ -14,12 +14,12 @@ from PyQt5.QtGui import QPixmap, QImage
 
 # WAS: `import GRIME_AI.sobelData`, which binds only the name `GRIME_AI`. The module then
 # referenced a bare `sobelData`, raising NameError on every Sobel X / Sobel Y request.
-from GRIME_AI.sobelData import sobelData
+from appcore.sobelData import sobelData
 
-from GRIME_AI.constants import edgeMethodsClass, featureMethodsClass
+from appcore.constants import edgeMethodsClass, featureMethodsClass
 
-from GRIME_AI.Image_Processing import Image_Processing
-from GRIME_AI.Image_Conversion import Image_Conversion
+from appcore.Image_Processing import Image_Processing
+from appcore.Image_Conversion import Image_Conversion
 
 
 # ======================================================================================================================

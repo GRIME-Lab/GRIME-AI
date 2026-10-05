@@ -115,6 +115,17 @@ def build_mask(coco, img_id: int, cat_id: int, height: int, width: int) -> np.nd
         mask = np.maximum(mask, m.astype(np.uint8))
     return mask
 
+def maybe_augment(img_t, mask_t, split, cfg):
+    """Augment only the training split, and only when cfg enables it.
+    Geometric transforms apply to image AND mask together; color jitter hits
+    the image only (see apply_augmentation). Call BEFORE normalize so
+    brightness/contrast operate on [0,1] pixel values."""
+    if split == "train" and cfg is not None and getattr(cfg, "use_augmentation", False):
+        # Lazy import: segformer_trainer imports this module.
+        from appcore.ml_core.segformer_trainer import apply_augmentation
+        img_t, mask_t = apply_augmentation(img_t, mask_t, cfg)
+    return img_t, mask_t
+
 # ============================================================================
 # ============================================================================
 # = = =                      class CocoWaterDataset                      = = =
@@ -123,7 +134,7 @@ def build_mask(coco, img_id: int, cat_id: int, height: int, width: int) -> np.nd
 class CocoWaterDataset(Dataset):
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def __init__(self, images_dir: str, ann_path: str, target_category_name: str, image_size: int, split: str = "train", val_ratio: float = 0.1):
+    def __init__(self, images_dir: str, ann_path: str, target_category_name: str, image_size: int, split: str = "train", val_ratio: float = 0.1, cfg=None):
         super().__init__()
         self.images_dir = images_dir
         self.coco = COCO(ann_path)
@@ -141,6 +152,8 @@ class CocoWaterDataset(Dataset):
         self.img_ids = [img_ids[i] for i in range(len(img_ids)) if (i not in val_idx if split == "train" else i in val_idx)]
 
         self.size = image_size
+        self.split = split
+        self.cfg = cfg
         self.to_tensor = T.ToTensor()
         self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 
@@ -155,8 +168,10 @@ class CocoWaterDataset(Dataset):
 
         img_resized = cv2.resize(img, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
         mask_resized = cv2.resize(mask, (self.size, self.size), interpolation=cv2.INTER_NEAREST)
-        img_t = self.normalize(self.to_tensor(img_resized).float())
+        img_t = self.to_tensor(img_resized).float()
         mask_t = torch.from_numpy(mask_resized).long()
+        img_t, mask_t = maybe_augment(img_t, mask_t, self.split, self.cfg)
+        img_t = self.normalize(img_t)
         return img_t, mask_t
 
     # ------------------------------------------------------------------------
@@ -172,10 +187,12 @@ class CocoWaterDataset(Dataset):
 class MultiCocoTargetDataset(Dataset):
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def __init__(self, images_dirs, ann_paths, target_category_name, image_size, split="train", val_ratio=0.1):
+    def __init__(self, images_dirs, ann_paths, target_category_name, image_size, split="train", val_ratio=0.1, cfg=None):
         super().__init__()
         assert len(images_dirs) == len(ann_paths)
         self.size = image_size
+        self.split = split
+        self.cfg = cfg
         self.to_tensor = T.ToTensor()
         self.normalize = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self.entries = []
@@ -209,8 +226,10 @@ class MultiCocoTargetDataset(Dataset):
 
         img_resized = cv2.resize(img, (self.size, self.size), interpolation=cv2.INTER_LINEAR)
         mask_resized = cv2.resize(mask, (self.size, self.size), interpolation=cv2.INTER_NEAREST)
-        img_t = self.normalize(self.to_tensor(img_resized).float())
+        img_t = self.to_tensor(img_resized).float()
         mask_t = torch.from_numpy(mask_resized).long()
+        img_t, mask_t = maybe_augment(img_t, mask_t, self.split, self.cfg)
+        img_t = self.normalize(img_t)
         return img_t, mask_t
 
     # ------------------------------------------------------------------------

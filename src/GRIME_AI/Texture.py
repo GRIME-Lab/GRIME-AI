@@ -31,6 +31,12 @@ from scipy.ndimage import convolve
 from skimage.color import rgb2gray
 import pywt
 
+from appcore.utils.fft_utils import fft_radial_profile, DEFAULT_RADIAL_RINGS
+
+# The four unique pixel-neighbor directions on a square grid (0, 45, 90, 135 degrees).
+# Averaging GLCM statistics over all four makes them independent of texture orientation.
+GLCM_NEIGHBOR_ANGLES = (0.0, np.pi / 4, np.pi / 2, 3 * np.pi / 4)
+
 class GLCMTexture:
     """
     Computes texture features from the Gray-Level Co-occurrence Matrix (GLCM).
@@ -40,15 +46,15 @@ class GLCMTexture:
 
     Attributes:
         distances (list): Pixel pair distance offsets.
-        angles (list): List of angles in radians.
+        angles (list): List of angles in radians. Defaults to all four neighbor directions.
         levels (int): Number of gray levels in the image.
         symmetric (bool): If True, the GLCM is symmetric.
         normed (bool): If True, normalize the GLCM.
     """
 
-    def __init__(self, distances=[1], angles=[0], levels=256, symmetric=True, normed=True):
+    def __init__(self, distances=[1], angles=GLCM_NEIGHBOR_ANGLES, levels=256, symmetric=True, normed=True):
         self.distances = distances
-        self.angles = angles
+        self.angles = list(angles)
         self.levels = levels
         self.symmetric = symmetric
         self.normed = normed
@@ -151,7 +157,9 @@ class WaveletTexture:
         coeffs = pywt.wavedec2(image, wavelet=self.wavelet, level=self.level)
         features = {}
         # Skip the approximation coefficients (coeffs[0]) and compute statistics on the detail coefficients.
-        for i, detail_coeffs in enumerate(coeffs[1:], start=1):
+        # coeffs[1] is the coarsest detail level (self.level), coeffs[-1] the finest (1).
+        for k, detail_coeffs in enumerate(coeffs[1:]):
+            i = self.level - k
             cH, cV, cD = detail_coeffs
             features[f'level_{i}_cH_mean'] = np.mean(cH)
             features[f'level_{i}_cH_var'] = np.var(cH)
@@ -166,42 +174,23 @@ class FourierTexture:
     """
     Computes texture features using the Fourier Transform.
 
-    This class calculates the 2D Fourier transform of the image,
-    shifts the zero-frequency component to the center, then computes a
-    radial profile of the magnitude spectrum. Such a radial profile can be used
-    as a feature vector characterizing the spatial frequency distribution.
+    Returns the radial profile of the magnitude spectrum: the mean magnitude in
+    equal-width rings from just above DC to the Nyquist limit. The spectrum is
+    normalized by pixel count with DC removed (see utils/fft_utils.py), so
+    profiles are comparable across images and ROIs of different sizes.
 
     Attributes:
-        num_bins (int): The number of radial bins to partition the spectrum.
+        num_bins (int): The number of radial rings.
     """
 
-    def __init__(self, num_bins=32):
+    def __init__(self, num_bins=DEFAULT_RADIAL_RINGS):
         self.num_bins = num_bins
 
     def compute_features(self, image: np.ndarray) -> np.ndarray:
         # Ensure image is grayscale.
         if image.ndim == 3:
             image = rgb2gray(image)
-        f_transform = np.fft.fft2(image)
-        f_shift = np.fft.fftshift(f_transform)
-        magnitude_spectrum = np.abs(f_shift)
-
-        # Calculate a radial profile.
-        rows, cols = image.shape
-        center_row, center_col = rows // 2, cols // 2
-        y, x = np.indices((rows, cols))
-        distances = np.sqrt((x - center_col) ** 2 + (y - center_row) ** 2)
-        max_distance = np.max(distances)
-        bin_edges = np.linspace(0, max_distance, self.num_bins + 1)
-        radial_profile = np.zeros(self.num_bins)
-
-        for i in range(self.num_bins):
-            mask = (distances >= bin_edges[i]) & (distances < bin_edges[i + 1])
-            if np.any(mask):
-                radial_profile[i] = np.mean(magnitude_spectrum[mask])
-            else:
-                radial_profile[i] = 0
-        return radial_profile
+        return fft_radial_profile(image, num_bins=self.num_bins)
 
 
 
@@ -247,7 +236,7 @@ def laws_texture_features(image: np.ndarray) -> dict:
     return feature_planes
 
 
-def haralick_features(image: np.ndarray, distances=[1], angles=[0]) -> dict:
+def haralick_features(image: np.ndarray, distances=[1], angles=GLCM_NEIGHBOR_ANGLES) -> dict:
     """
     Computes Haralick texture features using the Gray-Level Co-occurrence Matrix (GLCM).
 

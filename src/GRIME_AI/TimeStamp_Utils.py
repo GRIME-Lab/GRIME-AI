@@ -13,7 +13,7 @@ import datetime as dt
 
 import re
 
-from GRIME_AI.exifData import EXIFData
+from appcore.exifData import EXIFData
 
 FROM_FILENAME = 1
 FROM_EXIF = 2

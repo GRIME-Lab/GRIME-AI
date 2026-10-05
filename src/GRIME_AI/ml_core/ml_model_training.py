@@ -7,7 +7,7 @@
 # Created: Mar 6, 2022
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
-from GRIME_AI.ml_core.ML_Dependencies import *  # JES - Boy, do I have issues with this. :(
+from appcore.ml_core.ML_Dependencies import *  # JES - Boy, do I have issues with this. :(
 
 from torchvision.transforms import InterpolationMode
 _ = InterpolationMode.BILINEAR  # Ensures inclusion during PyInstaller freeze
@@ -17,11 +17,11 @@ os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 from datetime import datetime
 
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.JSON_Editor import JsonEditor
-from GRIME_AI.ml_core.segformer_trainer import SegFormerConfig, SegFormerTrainer
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
-from GRIME_AI.ml_core.lora_wrapper import GeneralLoRAWrapper
+from appcore.Save_Utils import Save_Utils
+from appcore.JSON_Editor import JsonEditor
+from appcore.ml_core.segformer_trainer import SegFormerConfig, SegFormerTrainer
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.ml_core.lora_wrapper import GeneralLoRAWrapper
 
 # ----------------------------------------------------------------------------------------------------------------------
 # WARNING AND ERROR LOGGING
@@ -91,15 +91,19 @@ class MLModelTraining:
 
         self.site_name = self.site_config['siteName']
         self.learning_rates = self.site_config['learningRates']
-        self.optimizer_type = self.site_config['optimizer']
-        self.loss_function = self.site_config['loss_function']
+        # Stale config keys: optimizer/loss selection was removed from the UI.
+        # Each trainer hardcodes its own (SAM2 -> AdamW, BCE + Dice + Score).
+        self.optimizer_type = "AdamW"
+        self.loss_function = self.site_config.get('loss_function', 'BCE + Dice + Score')
         self.weight_decay = self.site_config['weight_decay']
         self.num_epochs = self.site_config['number_of_epochs']
         self.max_best_checkpoints = self.site_config.get(
             'max_best_checkpoints', ModelConfigManager.get_default('max_best_checkpoints'))
         self.early_stopping = self.site_config['early_stopping']
         self.patience = self.site_config['patience']
-        self.device = self.site_config.get('device', str(device))
+        # Device is auto-detected, never read from config: a stale "cpu"
+        # in an old site_config.json must not override the detected GPU.
+        self.device = str(device)
 
         self.folders = None
         self.annotation_files = None
@@ -117,11 +121,11 @@ class MLModelTraining:
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def _sam3_checkpoint_path(self):
-        """Local SAM3 base checkpoint (Documents/GRIME-AI/sam3.pt). Returns the
+        """Local SAM3 base checkpoint (<user root>/sam3.pt). Returns the
         path if it exists so training loads from disk (no HF download/auth);
         None otherwise, letting the trainer fall back to HuggingFace."""
         try:
-            from GRIME_AI import PROJECT_ROOT
+            from appcore import PROJECT_ROOT
             p = os.path.join(str(PROJECT_ROOT), "sam3.pt")
             return p if os.path.exists(p) else None
         except Exception:
@@ -158,7 +162,7 @@ class MLModelTraining:
         #      SAM2   ---   SAM2   ---   SAM2   ---   SAM2   ---   SAM2
         # --------------------------------------------------------------------
         if mode.lower() == "sam2":
-            from GRIME_AI.ml_core.sam2_trainer import SAM2Trainer
+            from appcore.ml_core.sam2_trainer import SAM2Trainer
             # Pass self.site_config (loaded at dispatch time from the user's
             # Train-click write) directly into the trainer. This eliminates
             # any race window where another code path could rewrite
@@ -187,11 +191,11 @@ class MLModelTraining:
             # SAM3 LoRA fine-tuning via the Sompote/SAM3_LoRA trainer, driven as a
             # subprocess (SAM3LoRATrainer). Uses the same COCO training data and
             # LoRA/hyperparameter fields the tab already collects.
-            from GRIME_AI.ml_core.sam3_lora_trainer import SAM3LoRATrainer
+            from appcore.ml_core.sam3_lora_trainer import SAM3LoRATrainer
 
             # Resolve the COCO data root. SAM3_LoRA expects
-            # <data_dir>/train/_annotations.coco.json (and optional valid/). GRIME
-            # provides a list of training folders; use the first as the root.
+            # <data_dir>/train/_annotations.coco.json (and optional valid/). The
+            # app provides a list of training folders; use the first as the root.
             paths = self.site_config.get('Path', [])
             data_dir = None
             for path in paths:
@@ -253,6 +257,17 @@ class MLModelTraining:
                 num_epochs=self.num_epochs,
                 batch_size=self.site_config.get(
                     'batch_size', ModelConfigManager.get_default('batch_size')),
+                backbone_size=self.site_config.get('backbone_size', 'b0'),
+                loss_function=self.site_config.get('loss_function', 'ce_dice'),
+                tversky_alpha=self.site_config.get('tversky_alpha', 0.5),
+                tversky_beta=self.site_config.get('tversky_beta', 0.5),
+                focal_gamma=self.site_config.get('focal_gamma', 2.0),
+                use_augmentation=self.site_config.get('use_augmentation', False),
+                aug_horizontal_flip=self.site_config.get('aug_horizontal_flip', 0.5),
+                aug_vertical_flip=self.site_config.get('aug_vertical_flip', 0.0),
+                aug_rotation=self.site_config.get('aug_rotation', 15.0),
+                aug_brightness=self.site_config.get('aug_brightness', 0.2),
+                aug_contrast=self.site_config.get('aug_contrast', 0.2),
                 lr=(self.learning_rates[0] if self.learning_rates
                     else ModelConfigManager.get_default('learningRates')[0]),
                 weight_decay=self.weight_decay,
@@ -285,7 +300,7 @@ class MLModelTraining:
 
             print("Begin SegFormer Training...")
             self.run_segformer(self.all_folders, self.all_annotations, cfg,
-                          use_lora=True,
+                          use_lora=self.site_config.get('use_lora', True),
                           lora_target_modules=["query", "key", "value"],
                           modules_to_save=["decode_head.classifier"])
             print("Completed SegFormer Training...")
@@ -318,7 +333,8 @@ class MLModelTraining:
             in_features_mask = model.roi_heads.mask_predictor.conv5_mask.in_channels
             model.roi_heads.mask_predictor = MaskRCNNPredictor(in_features_mask, 256, cfg.num_classes)
 
-            optimizer = torch.optim.SGD(model.parameters(), lr=cfg.lr, momentum=0.9, weight_decay=1e-4)
+            # AdamW is the only optimizer used project-wide (matches SAM2/SegFormer paths)
+            optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=1e-4)
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
             trainer = MaskRCNNTrainer(model, train_loader, val_loader, optimizer, device)
@@ -343,7 +359,7 @@ class MLModelTraining:
                 )
                 return
 
-            from GRIME_AI.ml_core.yolo_trainer import YOLOTrainer
+            from appcore.ml_core.yolo_trainer import YOLOTrainer
             myYOLO_pipeline = YOLOTrainer(self.cfg, parent_widget=self.parent_widget)
             myYOLO_pipeline.run_training_pipeline()
             return
@@ -391,10 +407,14 @@ class MLModelTraining:
             )
             model = lora.apply(base_model, device=cfg.device)
             optimizer = lora.configure_optimizer(lr=cfg.lr, weight_decay=cfg.weight_decay)
+            # Single source of truth for the adapter geometry: persisted in the
+            # checkpoint so inference reconstructs the identical LoRA structure.
+            lora_config = lora.to_dict()
             trained = trainer.train(
                 image_dirs, ann_paths,
                 model=model, optimizer=optimizer,
-                categories=cfg.categories, site_name=site_name_lora
+                categories=cfg.categories, site_name=site_name_lora,
+                lora_config=lora_config
             )
             # Optionally save adapters: lora.save_adapters(cfg.output_dir)
             return trained

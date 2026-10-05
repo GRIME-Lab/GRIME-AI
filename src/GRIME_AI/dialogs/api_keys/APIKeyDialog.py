@@ -1,7 +1,7 @@
 """
 APIKeyDialog.py
 ---------------
-PyQt5 dialog for managing NEON and USGS API keys in GRIME AI.
+PyQt5 dialog for managing NEON and USGS API keys.
 """
 
 from __future__ import annotations

@@ -19,7 +19,7 @@ try:
 except Exception:
     piexif = None  # we'll guard writes that need piexif
 
-from GRIME_AI.App_logger import info as _info, debug as _debug, err as _err, warn as _warn
+from appcore.App_logger import info as _info, debug as _debug, err as _err, warn as _warn
 
 # =========================
 # Constants / EXIF tags

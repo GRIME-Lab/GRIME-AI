@@ -43,16 +43,16 @@ from sam2.modeling import sam2_base
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.Save_Utils import Save_Utils
-from GRIME_AI.ml_core.model_training_visualization import ModelTrainingVisualization
-from GRIME_AI.App_QMessageBox import App_QMessageBox
-from GRIME_AI.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.QProgressWheel import QProgressWheel
+from appcore.Save_Utils import Save_Utils
+from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
-from GRIME_AI.utils.datasetutils import DatasetUtils
-from GRIME_AI.ml_core.ml_helpers import (build_centroid_point_prompts, sample_pooled_prompts,
+from appcore.utils.datasetutils import DatasetUtils
+from appcore.ml_core.ml_helpers import (build_centroid_point_prompts, sample_pooled_prompts,
                                          DEFAULT_MAX_POSITIVES as _DEFAULT_MAX_POSITIVES,
                                          DEFAULT_NEGATIVE_BALANCE as _DEFAULT_NEGATIVE_BALANCE)
 
@@ -381,7 +381,7 @@ class SAM2Trainer:
         season_type = self.site_config.get("season_type", "Meteorological")
 
         if holdout_seasons:
-            from GRIME_AI.ml_core.seasonal_dropout import (
+            from appcore.ml_core.seasonal_dropout import (
                 filter_seasons, extract_date_from_usgs_filename, get_season_date_range, get_season
             )
 
@@ -523,7 +523,8 @@ class SAM2Trainer:
 
         # Re‑initialize Hydra
         #with initialize(config_path=config_dir, version_base=None):
-        with initialize(config_module="GRIME_AI.sam2.sam2.configs.sam2.1", version_base=None):
+        #with initialize(config_module="GRIME_AI.sam2.sam2.configs.sam2.1", version_base=None):
+        with initialize(config_module=f"{__package__.split('.')[0]}.sam2.sam2.configs.sam2.1", version_base=None):
             cfg_intern = compose(config_name="sam2.1_hiera_l.yaml")
             raw_model_cfg = OmegaConf.to_container(cfg_intern.model, resolve=True)
 
@@ -2169,27 +2170,48 @@ class SAM2Trainer:
                           f"no prompts for category '{target_label}' (ID {target_id}).")
                     continue
 
+                # ---- Derive logits via the SAME forward path as training ----
+                # Previously this called predictor.predict(), whose returned
+                # low_res_logits are post-processed by the high-level API and sit
+                # on a different scale than the raw decoder logits training scores
+                # against. That scale shift pins the F1-optimal threshold at 1.00
+                # and makes val loss / mIoU / Dice unreliable while training looks
+                # fine. Run the prompt encoder + mask decoder directly, exactly as
+                # the training loop does (same decoder_kwargs / selected_backend),
+                # so val logits are calibrated identically.
                 try:
-                    masks, scores, low_res_logits = predictor.predict(
-                        point_coords=point_coords,
-                        point_labels=point_labels,
-                        multimask_output=False
+                    c_t = predictor._transforms.transform_coords(
+                        torch.tensor(point_coords, dtype=torch.float32),
+                        normalize=True, orig_hw=(h_img, w_img),
+                    ).to(device).unsqueeze(0)
+                    l_t = torch.tensor(point_labels, dtype=torch.int64,
+                                       device=device).unsqueeze(0)
+
+                    sparse_embeddings, dense_embeddings = predictor.model.sam_prompt_encoder(
+                        points=(c_t, l_t), boxes=None, masks=None,
                     )
-
-                    if masks.size == 0 or scores.size == 0:
-                        print(f"Warning: No masks predicted for {cached['file']}")
-                        continue
-
+                    decoder_kwargs = dict(
+                        image_embeddings=predictor._features["image_embed"],
+                        image_pe=predictor.model.sam_prompt_encoder.get_dense_pe(),
+                        sparse_prompt_embeddings=sparse_embeddings,
+                        dense_prompt_embeddings=dense_embeddings,
+                        multimask_output=False,
+                        repeat_image=False,
+                        high_res_features=predictor._features["high_res_feats"],
+                    )
+                    if hasattr(self, 'selected_backend') and self.selected_backend is not None:
+                        with sdpa_kernel([self.selected_backend, SDPBackend.MATH]):
+                            low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(**decoder_kwargs)
+                    else:
+                        low_res_masks, prd_scores, _, _ = predictor.model.sam_mask_decoder(**decoder_kwargs)
                 except Exception as e:
                     print(f"Error during prediction for {cached['file']}: {e}")
                     continue
 
-                best_idx = int(np.argmax(scores))
-                best_logits = low_res_logits[best_idx]
+                scores = prd_scores[0].detach().cpu().numpy()
+                best_idx = 0
 
-                logit_tensor = torch.tensor(
-                    best_logits, dtype=torch.float32, device=device
-                ).unsqueeze(0).unsqueeze(0)
+                logit_tensor = low_res_masks[0:1, 0:1].to(torch.float32)
 
                 if len(val_true_mask.shape) > 2:
                     val_true_mask = val_true_mask[:, :, 0]

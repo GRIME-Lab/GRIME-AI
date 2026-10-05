@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import torchvision.transforms as T
 from transformers import SegformerForSemanticSegmentation
 from peft import LoraConfig, get_peft_model
-from GRIME_AI.ml_core.ml_helpers import (init_coco_structure, add_coco_entries, save_coco_json)
+from appcore.ml_core.ml_helpers import (init_coco_structure, add_coco_entries, save_coco_json)
 
 
 # ======================================================================================================================
@@ -279,8 +279,11 @@ class SegFormerInferenceEngine:
             image_id += 1
             annotation_id += 1
 
-        if progressBar is not None and progressBar.isVisible():
-            progressBar.close()
+        # NOTE: do NOT close the progress bar here. The dispatcher owns its
+        # lifecycle and closes it after all folders. Closing it from the engine
+        # fires the dispatcher's on_close callback (progress_bar_closed=True),
+        # which the post-loop logic then misreads as a user cancellation — the
+        # "Segmentation was cancelled by user" dialog on a run that finished.
 
         save_coco_json(coco_data, self.predictions_output_path)
         # Return a stats dict (not self) so ML_Segmentation_Dispatcher's

@@ -11,7 +11,7 @@ theme.py  (GRIME_AI.utils.theme)
 One place that knows whether GRIME AI is in dark mode, and the colors to use
 in each theme.
 
-    from GRIME_AI.utils import theme
+    from appcore.utils import theme
 
     theme.is_dark()                        # current theme
     theme.color("text_secondary")          # a named color for the current theme

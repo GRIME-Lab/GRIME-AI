@@ -24,8 +24,74 @@ from PyQt5.QtWidgets import (QWidget, QFileDialog, QListWidgetItem, QMessageBox,
                              QTableWidgetItem)
 from PyQt5.QtGui import QPixmap, QIcon, QImage
 
-from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.JSON_Editor import JsonEditor
+# Host imports are optional so this file also runs on its own
+# (python sandbar_analyzer.py). Standalone, the settings live in a JSON file
+# beside the plugin and the file dialogs start in the user's home folder.
+try:
+    from appcore import PROJECT_ROOT
+    from appcore.JSON_Editor import JsonEditor
+except ImportError:
+    from pathlib import Path
+    import json
+
+    PROJECT_ROOT = Path.home()
+
+    class JsonEditor:
+        """Minimal stand-in for the host's settings store, same two methods."""
+
+        _PATH = Path(__file__).resolve().parent / "sandbar_analyzer_settings.json"
+
+        def _load(self):
+            try:
+                with open(self._PATH, "r") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+
+        def getValue(self, key, default=""):
+            return self._load().get(key, default)
+
+        def update_json_entry(self, key, value):
+            data = self._load()
+            data[key] = value
+            try:
+                with open(self._PATH, "w") as f:
+                    json.dump(data, f, indent=4)
+            except Exception as err:
+                print(f"[sandbar_analyzer] Could not save settings: {err}")
+
+
+def _load_analyzer():
+    """
+    The Sandbar_Analyzer class, from the host package or from a copy beside this
+    plugin when it runs standalone.
+    """
+    try:
+        from appcore.Sandbar_Analyzer import Sandbar_Analyzer
+    except ImportError:
+        try:
+            from Sandbar_Analyzer import Sandbar_Analyzer      # beside this file
+        except ImportError as err:
+            raise ImportError(
+                "Sandbar_Analyzer was not found. Running outside the application, "
+                "place Sandbar_Analyzer.py beside this plugin. Original error: "
+                f"{err}") from err
+    return Sandbar_Analyzer
+
+
+PLUGIN = {
+    "title":       "Sandbar Analyzer",
+    "class":       "SandbarAnalyzerPlugin",
+    "description": "Edge statistics and inundation thresholds for sandbar imagery",
+    "surface":     "tools",
+    "size":        [1400, 900],     # opening size; the panels are empty until a folder is chosen
+    "api_version": 2,
+}
+
+# The .ui belongs to the edge analysis tab, and is loaded by the container below
+# rather than by the host, which now builds the tab bar.
+EDGE_ANALYSIS_UI = "sandbar_analyzer_tab.ui"
+EDGE_ANALYSIS_POST = ["configure_filmstrip", "wire_connections"]
 
 
 class SandbarAnalyzerTab(QWidget):
@@ -149,7 +215,7 @@ class SandbarAnalyzerTab(QWidget):
             return
         JsonEditor().update_json_entry("Sandbar_Analyzer_Images_Folder", folder)
 
-        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
+        Sandbar_Analyzer = _load_analyzer()
         self._pairs = Sandbar_Analyzer.generate_file_pairs(folder)
         if not self._pairs:
             QMessageBox.warning(self, "Sandbar Analyzer", "No image/mask pairs found.")
@@ -220,7 +286,7 @@ class SandbarAnalyzerTab(QWidget):
             return
         orig_path, mask_path = self._pairs[self._current_idx]
 
-        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
+        Sandbar_Analyzer = _load_analyzer()
         try:
             analyzer = Sandbar_Analyzer(orig_path, mask_path)
             analyzer.run(**self._edge_kwargs())
@@ -398,7 +464,7 @@ class SandbarAnalyzerTab(QWidget):
         if not out_path:
             return
 
-        from GRIME_AI.Sandbar_Analyzer import Sandbar_Analyzer
+        Sandbar_Analyzer = _load_analyzer()
         import csv
         kwargs = self._edge_kwargs()
         with open(out_path, "w", newline="") as fh:
@@ -418,3 +484,69 @@ class SandbarAnalyzerTab(QWidget):
                                      os.path.basename(mask_path), f"ERROR: {err}"])
         QMessageBox.information(self, "Sandbar Analyzer",
                                 f"Edge features written to:\n{out_path}")
+
+
+# ======================================================================================================================
+# Plugin container: the analysis tabs
+# ======================================================================================================================
+def _build_edge_analysis_tab(parent=None):
+    """The original tab: its .ui loaded and its post methods called."""
+    from PyQt5.uic import loadUi
+    widget = SandbarAnalyzerTab(parent)
+    loadUi(os.path.join(os.path.dirname(os.path.abspath(__file__)), EDGE_ANALYSIS_UI), widget)
+    for method in EDGE_ANALYSIS_POST:
+        getattr(widget, method)()
+    return widget
+
+
+class SandbarAnalyzerPlugin(QWidget):
+    """
+    Holds the sandbar analyses: per-image edge statistics, and inundation
+    thresholds computed across a stack of masks and their gage heights.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtWidgets import QTabWidget, QVBoxLayout
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._tabs = QTabWidget(self)
+        layout.addWidget(self._tabs)
+
+        self.edge_tab = _build_edge_analysis_tab(self)
+        self._tabs.addTab(self.edge_tab, "Edge Analysis")
+
+        # The second tab is optional: if its module or its dependencies are
+        # missing, the edge analysis still opens.
+        try:
+            from sandbar_inundation import InundationThresholdTab
+            self.inundation_tab = InundationThresholdTab(self)
+            self._tabs.addTab(self.inundation_tab, "Inundation Thresholds")
+        except Exception as err:
+            self.inundation_tab = None
+            print(f"[sandbar_analyzer] Inundation Thresholds unavailable: "
+                  f"{type(err).__name__}: {err}")
+
+
+# ======================================================================================================================
+# Standalone use: python sandbar_analyzer.py
+# ======================================================================================================================
+def main(argv=None):
+    """Open the analyzer in its own window, outside the host application."""
+    import sys
+    from PyQt5.QtWidgets import QApplication
+
+    argv = list(sys.argv if argv is None else argv)
+    app = QApplication.instance() or QApplication(argv)
+
+    window = SandbarAnalyzerPlugin()
+    window.setWindowTitle(PLUGIN["title"])
+    window.resize(1400, 900)
+    window.show()
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

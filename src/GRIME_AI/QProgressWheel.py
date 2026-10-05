@@ -110,7 +110,7 @@ class QProgressWheel(QWidget):
         self.setAttribute(Qt.WA_NoSystemBackground, True)
         # qdarkstyle does not change the palette, so pick the colors explicitly.
         try:
-            from GRIME_AI.utils import theme
+            from appcore.utils import theme
             _dark = theme.is_dark()
         except Exception:
             _dark = False

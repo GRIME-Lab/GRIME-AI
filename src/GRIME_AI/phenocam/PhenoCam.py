@@ -15,12 +15,12 @@ import urllib.request
 
 # --- Third-party imports ---
 import requests
-from GRIME_AI.http_client import get as http_get, DEFAULT_TIMEOUT
+from appcore.http_client import get as http_get, DEFAULT_TIMEOUT
 from bs4 import BeautifulSoup
 
 # --- Local application imports ---
-from GRIME_AI.QProgressWheel import QProgressWheel
-from GRIME_AI.ImageData import imageData
+from appcore.QProgressWheel import QProgressWheel
+from appcore.ImageData import imageData
 
 # --- Module-level globals ---
 bChromeDriverLoaded = False

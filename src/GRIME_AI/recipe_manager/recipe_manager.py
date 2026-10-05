@@ -36,7 +36,7 @@ from PyQt5.QtWidgets import (
     QMessageBox, QWidget, QCheckBox, QDialogButtonBox, QScrollArea,
     QStackedWidget,
 )
-from GRIME_AI.app_identity import APP_DISPLAY_NAME
+from appcore.app_identity import APP_DISPLAY_NAME
 
 # Editable path fields, in display order, mapped to their default sub-folder name.
 # Input-folder fields (set manually; NOT auto-derived/rebased from root).
@@ -241,9 +241,9 @@ class RecipeStore:
     def _default_path() -> str:
         # Keep recipes alongside the rest of GRIME AI's config, in the visible
         # Documents/GRIME-AI/Settings folder (NOT a hidden AppData location).
-        from GRIME_AI.app_identity import SETTINGS_DIR, APP_RECIPES_FILENAME
+        from appcore.app_identity import SETTINGS_DIR, APP_RECIPES_FILENAME
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             settings = Save_Utils().get_settings_folder()
         except Exception:
             settings = str(SETTINGS_DIR)

@@ -56,7 +56,7 @@
    </property>
    <widget class="QWidget" name="tab">
     <attribute name="title">
-     <string>GRIME AI Copyright &amp;&amp; License</string>
+     <string>Copyright &amp; License</string>
     </attribute>
     <widget class="QTextBrowser" name="textBrowser">
      <property name="geometry">

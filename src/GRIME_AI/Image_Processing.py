@@ -14,7 +14,7 @@ import re
 
 #from PySide6.QtGui import QPixmap
 
-from GRIME_AI.Image_Conversion import Image_Conversion
+from appcore.Image_Conversion import Image_Conversion
 
 class Image_Processing:
     def __init__(self):

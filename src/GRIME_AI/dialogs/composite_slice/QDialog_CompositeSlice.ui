@@ -203,7 +203,7 @@
   <customwidget>
    <class>App_QLabel</class>
    <extends>QLabel</extends>
-   <header location="global">GRIME_AI.App_QLabel</header>
+   <header location="global">appcore.App_QLabel</header>
   </customwidget>
  </customwidgets>
  <resources/>

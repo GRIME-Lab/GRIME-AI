@@ -7,9 +7,9 @@
 # Created: Mar 6, 2022
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
-from GRIME_AI.utils.resource_utils import ui_path
-from GRIME_AI.utils import theme
-from GRIME_AI.JSON_Editor import JsonEditor
+from appcore.utils.resource_utils import ui_path
+from appcore.utils import theme
+from appcore.JSON_Editor import JsonEditor
 
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5 import QtCore

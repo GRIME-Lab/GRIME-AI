@@ -12,9 +12,9 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QWidget, QFileDialog, QListWidgetItem, QMessageBox
 from PyQt5.uic import loadUi
 
-from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.utils.resource_utils import ui_path
-from GRIME_AI.ImageAnnotatorDlg import ImageAnnotatorDialog
+from appcore import PROJECT_ROOT
+from appcore.utils.resource_utils import ui_path
+from appcore.ImageAnnotatorDlg import ImageAnnotatorDialog
 
 
 class AnnotationTab(QWidget):
@@ -438,4 +438,3 @@ class AnnotationTab(QWidget):
             for idx, shape in enumerate(shapes, start=1):
                 pts = shape['points']
                 print(f"  {idx}. {shape['type']} with {len(pts)} points → {pts}")
-

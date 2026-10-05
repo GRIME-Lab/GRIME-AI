@@ -33,7 +33,7 @@
        </property>
        <layout class="QVBoxLayout" name="verticalLayoutOptions">
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayoutOptions">
+         <layout class="QHBoxLayout" name="horizontalLayoutOptions" stretch="0,1,0">
           <item>
            <widget class="QGroupBox" name="groupBox_modelSelection_segment">
             <property name="font">
@@ -109,9 +109,10 @@
             <property name="title">
              <string>Output Options</string>
             </property>
-            <layout class="QVBoxLayout" name="verticalLayout_outputOptions_segment">
+            <layout class="QGridLayout" name="gridLayout_outputOptions_segment">
+             <property name="horizontalSpacing"><number>18</number></property>
              <property name="topMargin"><number>6</number></property>
-             <item>
+             <item row="0" column="0">
               <widget class="QCheckBox" name="checkBox_save_predicted_masks">
                <property name="font">
                 <font>
@@ -127,7 +128,7 @@
                </property>
               </widget>
              </item>
-             <item>
+             <item row="1" column="0">
               <widget class="QCheckBox" name="checkBox_save_probability_maps">
                <property name="font">
                 <font>
@@ -140,7 +141,7 @@
                </property>
               </widget>
              </item>
-             <item>
+             <item row="2" column="0">
               <widget class="QCheckBox" name="checkBox_copyOriginalModelImage">
                <property name="font">
                 <font>
@@ -156,7 +157,7 @@
                </property>
               </widget>
              </item>
-             <item>
+             <item row="0" column="1">
               <widget class="QCheckBox" name="checkBox_save_diagnostic_panels">
                <property name="font">
                 <font>
@@ -172,7 +173,7 @@
                </property>
               </widget>
              </item>
-             <item>
+             <item row="1" column="1">
               <widget class="QCheckBox" name="checkBox_use_tta">
                <property name="font">
                 <font>
@@ -191,6 +192,84 @@
                </property>
               </widget>
              </item>
+             <item row="3" column="1">
+              <layout class="QHBoxLayout" name="horizontalLayout_correlateSensorData">
+               <item>
+                <widget class="QCheckBox" name="checkBox_correlate_sensor_data">
+                 <property name="font">
+                  <font>
+                   <family>Arial</family>
+                   <pointsize>11</pointsize>
+                  <bold>false</bold></font>
+                 </property>
+                 <property name="toolTip">
+                  <string>Add the nearest NWIS sensor readings to the exported features. The file is taken from the data folder beside the images; if it is not there you are asked for it.</string>
+                 </property>
+                 <property name="text">
+                  <string>Correlate Sensor Data</string>
+                 </property>
+                 <property name="checked">
+                  <bool>false</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="pushButton_sensor_options_segment">
+                 <property name="toolTip">
+                  <string>Where the NWIS sensor file comes from, and how close in time a reading must be to an image.</string>
+                 </property>
+                 <property name="text">
+                  <string>Sensor Data Options</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="spacer_correlateSensorData">
+                 <property name="orientation"><enum>Qt::Horizontal</enum></property>
+                 <property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property>
+                </spacer>
+               </item>
+              </layout>
+             </item>
+             <item row="2" column="1">
+              <layout class="QHBoxLayout" name="horizontalLayout_exportRoiFeatures">
+               <item>
+                <widget class="QCheckBox" name="checkBox_export_roi_features">
+                 <property name="font">
+                  <font>
+                   <family>Arial</family>
+                   <pointsize>11</pointsize>
+                  <bold>false</bold></font>
+                 </property>
+                 <property name="toolTip">
+                  <string>After segmentation finishes, extract ROI features from each image and its mask into a date/time-stamped CSV and Excel file, written beside the first image folder. Requires Save Predicted Masks.</string>
+                 </property>
+                 <property name="text">
+                  <string>Export ROI Features</string>
+                 </property>
+                 <property name="checked">
+                  <bool>false</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="pushButton_feature_options_segment">
+                 <property name="toolTip">
+                  <string>Clustering and texture options, shared with the ROI Analyzer tab.</string>
+                 </property>
+                 <property name="text">
+                  <string>Options</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="spacer_exportRoiFeatures">
+                 <property name="orientation"><enum>Qt::Horizontal</enum></property>
+                 <property name="sizeHint" stdset="0"><size><width>0</width><height>0</height></size></property>
+                </spacer>
+               </item>
+              </layout>
+             </item>
             </layout>
            </widget>
           </item>
@@ -199,13 +278,13 @@
             <property name="font"><font><family>Arial</family><pointsize>11</pointsize></font></property>
             <property name="title"><string>Spatial Filter (SAM2)</string></property>
             <property name="toolTip"><string>Post-processing filter applied to SAM2 masks. Mahalanobis uses the trained centroid distribution; Circular uses the radius; None disables filtering (raw model mask).</string></property>
-            <layout class="QHBoxLayout" name="horizontalLayout_blobFilter_segment">
+            <layout class="QVBoxLayout" name="verticalLayout_blobFilter_segment">
              <property name="topMargin"><number>6</number></property>
              <item><widget class="QRadioButton" name="radioButton_blob_mahalanobis"><property name="font"><font><family>Arial</family><pointsize>11</pointsize><bold>false</bold></font></property><property name="toolTip"><string>Keep regions within the trained Mahalanobis centroid distribution.</string></property><property name="text"><string>Mahalanobis</string></property><property name="checked"><bool>true</bool></property></widget></item>
              <item><widget class="QRadioButton" name="radioButton_blob_circular"><property name="font"><font><family>Arial</family><pointsize>11</pointsize><bold>false</bold></font></property><property name="toolTip"><string>Keep regions within the scalar radius of a prompt centroid.</string></property><property name="text"><string>Circular</string></property></widget></item>
              <item><widget class="QRadioButton" name="radioButton_blob_knn"><property name="font"><font><family>Arial</family><pointsize>11</pointsize><bold>false</bold></font></property><property name="toolTip"><string>Keep regions within the k-th nearest training-centroid distance (handles multimodal targets).</string></property><property name="text"><string>kNN</string></property></widget></item>
              <item><widget class="QRadioButton" name="radioButton_blob_none"><property name="font"><font><family>Arial</family><pointsize>11</pointsize><bold>false</bold></font></property><property name="toolTip"><string>Disable spatial filtering — use the raw model mask.</string></property><property name="text"><string>None</string></property></widget></item>
-             <item><spacer name="horizontalSpacer_blobFilter_segment"><property name="orientation"><enum>Qt::Horizontal</enum></property><property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property></spacer></item>
+             <item><spacer name="verticalSpacer_blobFilter_segment"><property name="orientation"><enum>Qt::Vertical</enum></property><property name="sizeHint" stdset="0"><size><width>20</width><height>0</height></size></property></spacer></item>
             </layout>
            </widget>
           </item>

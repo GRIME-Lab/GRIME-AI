@@ -201,6 +201,8 @@
             <widget class="QLabel" name="label_image_left">
              <property name="text"><string></string></property>
              <property name="alignment"><set>Qt::AlignCenter</set></property>
+             <!-- Claim room before any image is loaded, so the panel opens usable -->
+             <property name="minimumSize"><size><width>360</width><height>270</height></size></property>
              <property name="sizePolicy">
               <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
                <horstretch>0</horstretch><verstretch>0</verstretch>
@@ -212,6 +214,7 @@
             <widget class="QLabel" name="label_image_right">
              <property name="text"><string></string></property>
              <property name="alignment"><set>Qt::AlignCenter</set></property>
+             <property name="minimumSize"><size><width>360</width><height>270</height></size></property>
              <property name="sizePolicy">
               <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
                <horstretch>0</horstretch><verstretch>0</verstretch>

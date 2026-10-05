@@ -15,15 +15,13 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QIntValidator, QDoubleValidator
 from PyQt5.uic import loadUi
 
-from GRIME_AI.dialogs.triage.TriageCalibrateDlg import TriageCalibrateDlg
+from appcore.dialogs.triage.TriageCalibrateDlg import TriageCalibrateDlg
 from ...app_identity import APP_CONFIG_FILENAME
 
 BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;}'
 
 SLIDER_RANGES = {
     "lap":  (0,   500, 150),
-    "fft":  (0,    30,  21),
-    "uaf":  (1,   100,  40),
     "bmin": (0,   255,  40),
     "bmax": (0,   255, 215),
 }
@@ -57,8 +55,6 @@ class TriageOptionsDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def _setup_validators(self):
         self.lineEdit_lap_value.setValidator(QIntValidator(0, 500))
-        self.lineEdit_fft_value.setValidator(QDoubleValidator(0.0, 30.0, 1))
-        self.lineEdit_uaf_value.setValidator(QIntValidator(1, 100))
         self.lineEdit_bmin_value.setValidator(QIntValidator(0, 255))
         self.lineEdit_bmax_value.setValidator(QIntValidator(0, 255))
 
@@ -67,22 +63,16 @@ class TriageOptionsDlg(QDialog):
         self.pushButton_SelectReferenceImage.clicked.connect(self.selectReferenceImage)
         self.pushButton_Calibrate.clicked.connect(self._open_calibration_dialog)
 
-        self.checkBox_UseFftBlur.toggled.connect(self._on_fft_toggled)
         self.checkBox_UseLaplacian.toggled.connect(self._on_laplacian_toggled)
 
         self.sliderLaplacian.valueChanged.connect(self._on_lap_slider_changed)
-        self.sliderFftBlur.valueChanged.connect(self._on_fft_slider_changed)
-        self.sliderUniformArea.valueChanged.connect(self._on_uaf_slider_changed)
         self.sliderBrightnessMin.valueChanged.connect(self._on_bmin_slider_changed)
         self.sliderBrightnessMax.valueChanged.connect(self._on_bmax_slider_changed)
 
         self.lineEdit_lap_value.editingFinished.connect(self._on_lap_edit_finished)
-        self.lineEdit_fft_value.editingFinished.connect(self._on_fft_edit_finished)
-        self.lineEdit_uaf_value.editingFinished.connect(self._on_uaf_edit_finished)
         self.lineEdit_bmin_value.editingFinished.connect(self._on_bmin_edit_finished)
         self.lineEdit_bmax_value.editingFinished.connect(self._on_bmax_edit_finished)
 
-        self._on_fft_toggled(self.checkBox_UseFftBlur.isChecked())
         self._on_laplacian_toggled(self.checkBox_UseLaplacian.isChecked())
         self.checkBox_UseFocusROI.toggled.connect(self._on_focus_roi_toggled)
         self.checkBox_UseColorImbalance.toggled.connect(self._on_color_imbalance_toggled)
@@ -96,20 +86,10 @@ class TriageOptionsDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def _sync_all_displays(self):
         self._on_lap_slider_changed(self.sliderLaplacian.value())
-        self._on_fft_slider_changed(self.sliderFftBlur.value())
-        self._on_uaf_slider_changed(self.sliderUniformArea.value())
         self._on_bmin_slider_changed(self.sliderBrightnessMin.value())
         self._on_bmax_slider_changed(self.sliderBrightnessMax.value())
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_fft_toggled(self, checked):
-        for w in [self.sliderFftBlur, self.sliderUniformArea,
-                  self.labelFftLeft, self.labelFftMiddle, self.labelFftRight,
-                  self.labelUniformLeft, self.labelUniformMiddle, self.labelUniformRight,
-                  self.lineEdit_fft_value, self.lineEdit_uaf_value,
-                  self.doubleSpinBoxBlurThreshhold, self.spinBoxShiftSize]:
-            w.setEnabled(checked)
-
     def _on_laplacian_toggled(self, checked):
         for w in [self.sliderLaplacian,
                   self.labelLapLeft, self.labelLapMiddle, self.labelLapRight,
@@ -121,14 +101,6 @@ class TriageOptionsDlg(QDialog):
     def _on_lap_slider_changed(self, val):
         self.lineEdit_lap_value.setText(str(val))
         self.doubleSpinBoxLaplacianThreshold.setValue(float(val))
-
-    def _on_fft_slider_changed(self, val):
-        self.lineEdit_fft_value.setText(str(val))
-        self.doubleSpinBoxBlurThreshhold.setValue(float(val))
-
-    def _on_uaf_slider_changed(self, val):
-        self.lineEdit_uaf_value.setText(str(val))
-        self.spinBoxShiftSize.setValue(val)
 
     def _on_bmin_slider_changed(self, val):
         self.lineEdit_bmin_value.setText(str(val))
@@ -148,20 +120,6 @@ class TriageOptionsDlg(QDialog):
             self.sliderLaplacian.setValue(val)
         except ValueError:
             self._on_lap_slider_changed(self.sliderLaplacian.value())
-
-    def _on_fft_edit_finished(self):
-        try:
-            val = self._clamp(int(round(float(self.lineEdit_fft_value.text()))), 0, 30)
-            self.sliderFftBlur.setValue(val)
-        except ValueError:
-            self._on_fft_slider_changed(self.sliderFftBlur.value())
-
-    def _on_uaf_edit_finished(self):
-        try:
-            val = self._clamp(int(self.lineEdit_uaf_value.text()), 1, 100)
-            self.sliderUniformArea.setValue(val)
-        except ValueError:
-            self._on_uaf_slider_changed(self.sliderUniformArea.value())
 
     def _on_bmin_edit_finished(self):
         try:
@@ -197,8 +155,6 @@ class TriageOptionsDlg(QDialog):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _apply_calibration(self, result):
-        self.sliderFftBlur.setValue(int(round(result.fft_blur_threshold)))
-        self.sliderUniformArea.setValue(int(round(result.fft_shift_radius)))
         self.sliderLaplacian.setValue(int(round(result.laplacian_threshold)))
         self.sliderBrightnessMin.setValue(int(round(result.brightness_min)))
         self.sliderBrightnessMax.setValue(int(round(result.brightness_max)))
@@ -208,7 +164,7 @@ class TriageOptionsDlg(QDialog):
         if not checked:
             return
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             config_path = os.path.join(
                 Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
             if not os.path.exists(config_path):
@@ -255,7 +211,7 @@ class TriageOptionsDlg(QDialog):
             print(f"[TriageOptionsDlg] Could not save color imbalance settings: {e}")
 
     def _get_settings_folder(self):
-        from GRIME_AI.Save_Utils import Save_Utils
+        from appcore.Save_Utils import Save_Utils
         return Save_Utils().get_settings_folder()
 
     def _update_focus_roi_checkbox(self):
@@ -268,9 +224,9 @@ class TriageOptionsDlg(QDialog):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _read_focus_roi_from_config(self):
-        """Return the saved focus_roi list from GRIME-AI.json or None."""
+        """Return the saved focus_roi list from <application>.json or None."""
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             config_path = os.path.join(
                 Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
             if not os.path.exists(config_path):
@@ -284,7 +240,7 @@ class TriageOptionsDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def _load_calibration_from_config(self):
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             settings_folder = Save_Utils().get_settings_folder()
             config_path     = os.path.join(settings_folder, APP_CONFIG_FILENAME)
             if not os.path.exists(config_path):
@@ -294,10 +250,6 @@ class TriageOptionsDlg(QDialog):
             triage = config.get("triage", {})
             if not triage:
                 return
-            if "fft_blur_threshold"  in triage:
-                self.sliderFftBlur.setValue(int(round(triage["fft_blur_threshold"])))
-            if "fft_shift_radius"    in triage:
-                self.sliderUniformArea.setValue(int(round(triage["fft_shift_radius"])))
             if "laplacian_threshold" in triage:
                 self.sliderLaplacian.setValue(int(round(triage["laplacian_threshold"])))
             if "brightness_min"      in triage:
@@ -335,14 +287,8 @@ class TriageOptionsDlg(QDialog):
     def getUseLaplacian(self):
         return self.checkBox_UseLaplacian.isChecked()
 
-    def getBlurThreshold(self):
-        return self.doubleSpinBoxBlurThreshhold.value()
-
     def getLaplacianThreshold(self):
         return self.doubleSpinBoxLaplacianThreshold.value()
-
-    def getShiftSize(self):
-        return self.spinBoxShiftSize.value()
 
     def getBrightnessMin(self):
         return self.doubleSpinBoxBrightnessMin.value()
@@ -368,6 +314,21 @@ class TriageOptionsDlg(QDialog):
     def getColorImbalanceThreshold(self):
         return self.doubleSpinBox_ColorImbalanceThreshold.value()
 
+    def getFftCalibration(self):
+        """Return the saved FFT blur calibration dict, or None. ImageQualityAnalyzer
+        uses it only if it matches the current focus region."""
+        try:
+            from appcore.Save_Utils import Save_Utils
+            config_path = os.path.join(
+                Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
+            if not os.path.exists(config_path):
+                return None
+            with open(config_path, "r") as f:
+                config = json.load(f)
+            return config.get("triage", {}).get("fft_calibration")
+        except Exception:
+            return None
+
     def getFocusROI(self):
         """Return normalised [x, y, w, h] if Use Focus Region is checked, else None."""
         if not self.checkBox_UseFocusROI.isChecked():
@@ -375,7 +336,7 @@ class TriageOptionsDlg(QDialog):
         roi = self._read_focus_roi_from_config()
         # Persist the checked state
         try:
-            from GRIME_AI.Save_Utils import Save_Utils
+            from appcore.Save_Utils import Save_Utils
             config_path = os.path.join(
                 Save_Utils().get_settings_folder(), APP_CONFIG_FILENAME)
             if os.path.exists(config_path):

@@ -7,8 +7,8 @@ from openpyxl import Workbook
 from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtWidgets import QFileDialog, QListWidgetItem, QMessageBox
 
-from GRIME_AI import PROJECT_ROOT
-from GRIME_AI.Save_Utils import Save_Utils
+from appcore import PROJECT_ROOT
+from appcore.Save_Utils import Save_Utils
 
 
 # ======================================================================================================================
@@ -186,7 +186,7 @@ class AnnotationAnalyzerTab(QtWidgets.QWidget):
         """
         Generate an XLSX file with dataset folder names in the first column,
         followed by id, label pairs for each category.
-        Output goes into analysis_outputs folder inside the user's GRIME AI folder.
+        Output goes into analysis_outputs folder inside the user's application folder.
         """
         # Get user's GRIME AI folder
         user_root_folder = Save_Utils().get_user_root_folder()

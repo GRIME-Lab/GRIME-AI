@@ -1,5 +1,5 @@
 # chain_link_resources.py
-# Icons are stored in src/GRIME_AI/resources/app_icons/
+# Icons are stored in src/<application>/resources/app_icons/
 # Drop chain_linked.png and chain_unlinked.png there.
 
 import os
