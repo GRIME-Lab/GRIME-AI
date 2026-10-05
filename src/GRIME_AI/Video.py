@@ -15,6 +15,7 @@ import traceback
 # VIDEO CREATION PACKAGES
 # ----------------------------------------------------------------------------------------------------------------------
 import imageio as iio
+from PIL import Image
 
 # ----------------------------------------------------------------------------------------------------------------------
 from PyQt5.QtWidgets import QApplication
@@ -48,6 +49,36 @@ def estimate_gif_write_time(filenames):
     pixel_time = 4.5e-7    # sec per pixel per frame
     return base_time + (w * h * pixel_time * n)
 
+
+def get_canvas_size(filenames):
+    """
+    Reads only the image headers and returns (width, height) of the canvas:
+    the largest width and largest height found across all images.
+    """
+    canvas_w = 0
+    canvas_h = 0
+    for fname in filenames:
+        with Image.open(fname) as im:
+            w, h = im.size
+        canvas_w = max(canvas_w, w)
+        canvas_h = max(canvas_h, h)
+    return canvas_w, canvas_h
+
+
+def center_on_canvas(frame, canvas_w, canvas_h, border_color):
+    """
+    Centers frame on a canvas of (canvas_w, canvas_h), filling the border with border_color.
+    Frames already at canvas size are returned unchanged.
+    """
+    h, w = frame.shape[:2]
+    if (w, h) == (canvas_w, canvas_h):
+        return frame
+    top = (canvas_h - h) // 2
+    left = (canvas_w - w) // 2
+    bottom = canvas_h - h - top
+    right = canvas_w - w - left
+    return cv2.copyMakeBorder(frame, top, bottom, left, right, cv2.BORDER_CONSTANT, value=border_color)
+
 # ======================================================================================================================
 # ======================================================================================================================
 # =====     =====     =====     =====     ===== class ProgressWheelThread  =====     =====     =====     =====     =====
@@ -62,11 +93,13 @@ class GIFWriterWorker(QThread):
     finished = pyqtSignal()
     error    = pyqtSignal(str)
 
-    def __init__(self, filenames, output_path, duration=0.25):
+    def __init__(self, filenames, output_path, duration=0.25, canvas_size=None, border_color=(0, 0, 0)):
         super().__init__()
-        self.filenames   = filenames
-        self.output_path = output_path
-        self.duration    = duration
+        self.filenames    = filenames
+        self.output_path  = output_path
+        self.duration     = duration
+        self.canvas_size  = canvas_size      # (width, height); None = no centering
+        self.border_color = border_color     # RGB
 
     def run(self):
         try:
@@ -76,6 +109,8 @@ class GIFWriterWorker(QThread):
             # Phase-1: append each frame
             for idx, fname in enumerate(self.filenames, start=1):
                 frame = iio.imread(fname)
+                if self.canvas_size is not None:
+                    frame = center_on_canvas(frame, self.canvas_size[0], self.canvas_size[1], self.border_color)
                 writer.append_data(frame)
                 self.progress.emit(idx)
                 QApplication.processEvents()
@@ -128,7 +163,10 @@ class Video:
     # ======================================================================================================================
     #
     # ======================================================================================================================
-    def createVideo(self, rootFolder):
+    def createVideo(self, rootFolder, border_color=(0, 0, 0)):
+        """
+        border_color: RGB fill for the border around images smaller than the canvas.
+        """
 
         # Guard: a source image folder is required (mirrors createGIF).
         if not rootFolder or not os.path.isdir(rootFolder):
@@ -150,6 +188,15 @@ class Video:
         myApp_utils = App_Utils()
         imageCount = myApp_utils.get_image_count(rootFolder, extensions)
 
+        # CANVAS = LARGEST WIDTH x LARGEST HEIGHT ACROSS ALL IMAGES. SMALLER IMAGES ARE CENTERED ON IT SO THAT
+        # cv2.VideoWriter DOES NOT SILENTLY DROP FRAMES WHOSE SIZE DIFFERS FROM THE SIZE IT WAS OPENED WITH.
+        imageFiles = [os.path.join(rootFolder, f) for f in sorted(os.listdir(rootFolder))
+                      if os.path.splitext(f)[-1].lower() in extensions]
+        canvas_w, canvas_h = get_canvas_size(imageFiles)
+
+        # IMAGES ARE CONVERTED TO BGR BEFORE WRITING, SO THE BORDER COLOR IS TOO
+        border_color_bgr = tuple(reversed(border_color))
+
         progressBar = QProgressWheel(0, imageCount)
         progressBar.show()
 
@@ -161,13 +208,11 @@ class Video:
 
                 img = myGRIMe_Color.loadColorImage(os.path.join(rootFolder, file))
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                height, width, layers = img.shape
+                img = center_on_canvas(img, canvas_w, canvas_h, border_color_bgr)
 
-                # WE CAN'T OPEN THE VIDEO STREAM UNTIL WE KNOW THE SIZE OF ONE OF THE IMAGES WHICH ALSO ASSUMES THAT
-                # ALL IMAGES ARE OF THE SAME SIZE.
                 if out == None:
                     videoFile = 'Original_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + '.avi'
-                    out = cv2.VideoWriter(filePath + '/' + videoFile, cv2.VideoWriter_fourcc(*'mp4v'), 15, (width, height))
+                    out = cv2.VideoWriter(filePath + '/' + videoFile, cv2.VideoWriter_fourcc(*'mp4v'), 15, (canvas_w, canvas_h))
 
                 out.write(img)
 
@@ -180,8 +225,10 @@ class Video:
     # ======================================================================================================================
     #
     # ======================================================================================================================
-    def createGIF(self, rootFolder):
+    def createGIF(self, rootFolder, border_color=(0, 0, 0)):
         """
+        border_color: RGB fill for the border around images smaller than the canvas.
+
         Scans rootFolder for .jpg/.jpeg/.png images, writes a GIF in a QThread,
         and drives a two-phase QProgressWheel:
           • Phase-1 (0 → 100 - final_steps)% by actual frames written
@@ -232,7 +279,9 @@ class Video:
                 self._final_est = None
 
         # 6) Phase-1: GIFWriterWorker (writes frames + actual finalize())
-        self._gif_worker = gw = GIFWriterWorker(filenames, gif_file, duration=0.25)
+        canvas_size = get_canvas_size(filenames)
+        self._gif_worker = gw = GIFWriterWorker(filenames, gif_file, duration=0.25,
+                                                canvas_size=canvas_size, border_color=border_color)
         # Map frame progress → 0…frame_pct_max
         gw.progress.connect(lambda i: progressBar.setValue(
             int(i / total_frames * frame_pct_max)

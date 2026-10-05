@@ -314,6 +314,52 @@ class OpenStreetMapWidget(QWidget):
             )
             self.add_pin(lat, lon, color="blue", label=label)
 
+    def add_nemesonet_pins(self, df):
+        """Drop a red pin per NE Mesonet station; popup shows full station info."""
+        if df is None or df.empty:
+            return
+        import html
+        for _, r in df.iterrows():
+            lat, lon = r.get("lat"), r.get("lon")
+            if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+                continue
+
+            station = html.escape(str(r.get("station") or "NE Mesonet"), quote=False)
+            url = r.get("station_url") or ""
+            if url:
+                station_html = f'<a href="{url}" title="Open NE Mesonet page">{station}</a>'
+            else:
+                station_html = station
+
+            elev_m, elev_ft = r.get("elevation_m"), r.get("elevation_ft")
+            elevation = (f"{elev_m:.0f} m ({elev_ft:.0f} ft)"
+                         if isinstance(elev_m, (int, float)) and isinstance(elev_ft, (int, float)) else "")
+
+            fields = [
+                ("Station", station_html),
+                ("Station ID", r.get("station_id")),
+                ("NWSLI", r.get("nwsli")),
+                ("County", r.get("county")),
+                ("NRD", r.get("nrd")),
+                ("HUC6", r.get("huc6")),
+                ("HUC8", r.get("huc8")),
+                ("River Forecast Center", r.get("rfc_region")),
+                ("Lat", r.get("lat")),
+                ("Lon", r.get("lon")),
+                ("Elevation", elevation),
+                ("Time Zone", r.get("timezone")),
+                ("10 m Temp/Humidity", "Yes" if r.get("has_10m_temp_humidity") else "No"),
+                ("10 m Wind", "Yes" if r.get("has_10m_wind") else "No"),
+                ("Soil Sensor Depths (in)", r.get("soil_sensor_depths_in")),
+                ("Sponsored By", r.get("sponsored_by")),
+            ]
+            label = "<br>".join(
+                f"<b>{k}:</b> {v if k == 'Station' else html.escape(str(v), quote=False)}"
+                for k, v in fields
+                if v not in ("", None) and str(v) != "nan"
+            )
+            self.add_pin(lat, lon, color="red", label=label)
+
     def add_geojson(self, geojson_str):
         def _impl(geojson_str):
             safe_geojson = geojson_str.replace("\\", "\\\\").replace("'", "\\'")
