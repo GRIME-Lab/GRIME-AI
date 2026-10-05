@@ -1668,6 +1668,14 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print(f"SD Mesonet pins skipped: {e}")
 
+        # POPULATE THE MAP WITH RED PINS FOR NE MESONET STATIONS
+        try:
+            from appcore.geomaps.NEMESONET import NEMesonet
+            ne_df = NEMesonet().get_dataframe()
+            self.osm_widget.add_nemesonet_pins(ne_df)
+        except Exception as e:
+            print(f"NE Mesonet pins skipped: {e}")
+
         # ADD A PIN FOR FLAGSTAFF, AZ WHERE NORTHERN ARIZONA UNIVERSITY IS LOCATED.
         self.osm_widget.add_pin(35.1878, -111.6528, color="blue", label="Northern Arizona University")
 
