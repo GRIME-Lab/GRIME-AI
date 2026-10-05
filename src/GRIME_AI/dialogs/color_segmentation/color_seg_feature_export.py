@@ -714,7 +714,14 @@ class ColorSegFeatureExport:
         from concurrent.futures import ProcessPoolExecutor
         import os as _os
         results = [None] * len(tasks)
-        workers = max(1, (_os.cpu_count() or 2) - 1)
+        try:
+            # Linux (and some other Unix systems): respects affinity/cpuset limits
+            cpu_count = len(_os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            # Windows and macOS don't have sched_getaffinity (AttributeError);
+            # OSError covers rare failures from the underlying system call
+            cpu_count = _os.cpu_count() or 2
+        workers = max(1, cpu_count - 1)
         chunk = max(1, len(tasks) // (workers * 4))
         print(f'[feature-export] PARALLEL: {workers} workers, {len(tasks)} images, '
               f'whole image {"on" if flags["wholeImage"] else "off"}, {len(roi_specs)} ROIs'
