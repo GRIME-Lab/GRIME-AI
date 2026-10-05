@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# ne_mesonet_plugin.py
-# EXPERIMENTAL plugin: downloads weather, soil and wind time series and the latest camera images from the
-# Nebraska MESONET website, using internal, unpublished endpoints that may change without notice.
+# sd_mesonet_plugin.py
+# EXPERIMENTAL plugin: downloads the last 48 hours of 5-minute weather data and the latest camera images from the
+# South Dakota MESONET website, using internal, unpublished endpoints that may change without notice.
 #
 # Author: John Edward Stranzl, Jr.
 # Affiliation(s): University of Nebraska-Lincoln, Blade Vision Systems, LLC
@@ -15,20 +15,21 @@ import json
 import time
 import datetime
 import traceback
+from email.utils import parsedate_to_datetime
 
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QDate, QAbstractTableModel, QModelIndex
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QAbstractTableModel, QModelIndex
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QComboBox, QCheckBox,
     QGroupBox, QProgressBar, QFileDialog, QMessageBox, QLineEdit, QListWidget, QListWidgetItem,
-    QTabWidget, QTableView, QPlainTextEdit, QDateEdit, QScrollArea, QWidget, QSizePolicy, QFrame
+    QTabWidget, QTableView, QPlainTextEdit, QScrollArea, QWidget, QFrame
 )
 
 try:
-    from appcore.geomaps.NEMESONET import NEMesonet, PERIODS_BY_RESOLUTION, EARLIEST_DATA_DATE
+    from appcore.geomaps.SDMESONET import SDMesonet
 except ImportError:
-    from GRIME_AI.geomaps.NEMESONET import NEMesonet, PERIODS_BY_RESOLUTION, EARLIEST_DATA_DATE
+    from GRIME_AI.geomaps.SDMESONET import SDMesonet
 
 # The host's settings helper, with a local stand-in so this plugin still runs
 # on its own. Same behavior either way: one JSON file named after the plugin.
@@ -51,7 +52,7 @@ except ImportError:
                 with open(self.path, "w") as handle:
                     json.dump(dict(self), handle, indent=4)
             except Exception as err:
-                print(f"[ne_mesonet_plugin] Could not save settings: {err}")
+                print(f"[sd_mesonet_plugin] Could not save settings: {err}")
 
         def bind(self, widget, key, default=None):
             from PyQt5.QtWidgets import (QLineEdit, QCheckBox, QComboBox,
@@ -79,15 +80,17 @@ except ImportError:
             folder, os.path.splitext(os.path.basename(plugin_file))[0] + ".json"))
 
 PLUGIN = {
-    "title":       "Nebraska MESONET (UNOFFICIAL API, EXPERIMENTAL)",
-    "class":       "NEMesonetPlugin",
-    "description": "Download Nebraska MESONET weather, soil, wind and camera images (unofficial, experimental)",
+    "title":       "South Dakota MESONET (UNOFFICIAL API, EXPERIMENTAL)",
+    "class":       "SDMesonetPlugin",
+    "description": "Download South Dakota MESONET 48-hour weather data and camera images (unofficial, experimental)",
     "surface":     "tools",
     "size":        [1280, 860],
     "api_version": 2,
 }
 
-WARNING_TEXT = "Uses internal, unpublished Nebraska MESONET website endpoints that may change without notice."
+WARNING_TEXT = "Uses internal, unpublished South Dakota MESONET website endpoints that may change without notice."
+TERMS_TEXT = ("SD Mesonet terms: credit required; redistribution not allowed; commercial use not allowed; "
+              "data are provisional.")
 
 # ----------------------------------------------------------------------------------------------------------------------
 # SETTINGS (prototype: module level, not saved to the settings file)
@@ -95,27 +98,11 @@ WARNING_TEXT = "Uses internal, unpublished Nebraska MESONET website endpoints th
 REQUEST_TIMEOUT_SEC  = 30
 REQUEST_DELAY_SEC    = 0.5     # pause between requests to the MESONET site
 LEFT_PANEL_WIDTH     = 340
-VARIABLE_LIST_CHARS  = 40      # width of the chart Variable list, in characters
 THUMB_WIDTH          = 300
 THUMB_COLUMNS        = 2       # camera thumbnails per row in the Camera tab
-STATION_LIST_HEIGHT  = 170
+STATION_LIST_HEIGHT  = 220
+VARIABLE_LIST_CHARS  = 40      # width of the chart Variable list, in characters
 TABLE_PREVIEW_ROWS   = 5000    # rows shown in the Table tab (files always get every row)
-
-# Resolutions offered (minute is left out: untested, and 5-minute covers the need).
-RESOLUTION_LABELS = {"5-minute": "5 minutes", "10-minute": "10 minutes", "hourly": "Hourly", "daily": "Daily"}
-PERIOD_LABELS = {
-    "past-hour": "Past hour", "today": "Today", "yesterday": "Yesterday", "last-3-days": "Last 3 days",
-    "last-7-days": "Last 7 days", "last-30-days": "Last 30 days", "this-month": "This month",
-    "last-month": "Last month", "last-year": "Last year", "year-to-date": "Year to date",
-    "season-to-date": "Season to date", "custom": "Custom dates",
-}
-AGGREGATE_LABELS = {"avg": "Average", "min": "Minimum", "max": "Maximum"}
-SOIL_INDENT_PX = 18      # indent of the soil measurement checkboxes under "Soil"
-SOIL_LABELS = {"soil-moisture": "Soil moisture", "bare-soil-temperature": "Bare soil temperature",
-               "vegetated-soil-temperature": "Vegetated soil temperature"}
-WIND_LABELS = {"wind-3m": "Wind 3 m", "gust-3m": "Gust 3 m", "wind-10m": "Wind 10 m", "gust-10m": "Gust 10 m"}
-TEN_METER_WIND_SOURCES = ("wind-10m", "gust-10m")
-WIND_COLUMN_NAMES = {"wind": "speed", "windRange": "speed_range", "gust": "gust"}
 
 MSG_NO_CAMERAS      = "Cameras not supported on this site."
 MSG_CAMERAS_OFFLINE = "The cameras are currently not accessible."
@@ -126,11 +113,6 @@ MSG_NO_ROWS         = "No data returned. See the Log tab."
 # ======================================================================================================================
 # Helpers
 # ======================================================================================================================
-def snake(name):
-    """camelCase -> snake_case (tenMeterTemperature -> ten_meter_temperature)."""
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
-
-
 def slug(text):
     return re.sub(r"[^a-z0-9]+", "_", str(text).lower()).strip("_")
 
@@ -140,6 +122,15 @@ def sheet_name(text):
     return re.sub(r"[\[\]:*?/\\]", "-", str(text))[:31]
 
 
+def stamp_from_last_modified(value):
+    """HTTP Last-Modified -> 20261005T222005Z, or the download time if the header is missing."""
+    try:
+        dt = parsedate_to_datetime(value).astimezone(datetime.timezone.utc)
+    except Exception:
+        dt = datetime.datetime.now(datetime.timezone.utc)
+    return dt.strftime("%Y%m%dT%H%M%SZ")
+
+
 def wall_clock(series):
     """Time-zone-aware timestamps (one zone or several) -> naive wall-clock datetimes."""
     import pandas as pd
@@ -147,7 +138,6 @@ def wall_clock(series):
 
 
 def image_from_bytes(data):
-    """QImage from bytes; falls back to Pillow when Qt has no WebP plugin."""
     img = QImage()
     if img.loadFromData(data):
         return img
@@ -177,19 +167,16 @@ class CallWorker(QThread):
             self.error.emit(f"{e.__class__.__name__}: {e}")
 
 
-class MesonetDataWorker(QThread):
-    """
-    Fetches the selected data types for every selected station, merges them on timestamp per station, and
-    (for Download) writes the files and the latest camera images.
-    """
-    progress = pyqtSignal(int, int)
-    log      = pyqtSignal(str)
+class SDDataWorker(QThread):
+    """Fetches 48-hour history for every selected station and, for Download, writes files and camera images."""
+    progress    = pyqtSignal(int, int)
+    log         = pyqtSignal(str)
     finished_ok = pyqtSignal(dict)
-    error    = pyqtSignal(str)
+    error       = pyqtSignal(str)
 
-    def __init__(self, ne, request, write_output):
+    def __init__(self, sd, request, write_output):
         super().__init__()
-        self.ne = ne
+        self.sd = sd
         self.req = request
         self.write_output = write_output
         self._abort = False
@@ -203,72 +190,45 @@ class MesonetDataWorker(QThread):
         except Exception as e:
             self.error.emit(f"{e}\n{traceback.format_exc()}")
 
-    # ------------------------------------------------------------------------------------------------------------------
     def _process(self):
         import pandas as pd
         req = self.req
         stations = req["stations"]
-        steps = len(stations) * (int(req["weather"]) + len(req["soil_measurements"]) + int(req["wind"]))
-        if self.write_output and req["camera"]:
-            steps += len(stations)
-        step = 0
-        units = {}
-        station_frames = {}
+        want_images = self.write_output and (req["stills"] or req["timelapse"])
+        steps = len(stations) * (int(req["weather"]) + int(want_images))
+        step, units, station_frames = 0, {}, {}
 
         for st in stations:
-            sid, name = st["station_id"], st["station"]
-            frames = []
-            frames_have_precip = False        # soil responses all carry the same precipitation; keep it once
-            jobs = (([("weather", None)] if req["weather"] else [])
-                    + [("soil", m) for m in req["soil_measurements"]]
-                    + ([("wind", None)] if req["wind"] else []))
-            for kind, measurement in jobs:
-                label = f"{kind} ({measurement})" if measurement else kind
+            code, name = st["code"], st["station"]
+            df = pd.DataFrame(columns=["timestamp_utc", "timestamp_local"])
+            if req["weather"]:
                 if self._abort:
                     raise RuntimeError("Aborted by user.")
                 step += 1
                 self.progress.emit(step, steps)
-
-                if kind == "soil" and not st["soil_sensor_depths_in"]:
-                    self.log.emit(f"{name} ({sid}): no soil sensors; {measurement} columns left empty.")
-                    continue
-                if kind == "wind" and req["wind_source"] in TEN_METER_WIND_SOURCES and not st["has_10m_wind"]:
-                    self.log.emit(f"{name} ({sid}): no 10 m wind sensor; wind columns left empty.")
-                    continue
-
                 time.sleep(REQUEST_DELAY_SEC)
                 try:
-                    df = self._fetch(kind, sid, measurement)
+                    df = self.sd.get_history(code, st["timezone"])
+                    units.update(df.attrs.get("units", {}))
+                    self.log.emit(f"{name} ({st['nwsli']}): {len(df)} rows.")
                 except Exception as e:
-                    self.log.emit(f"{name} ({sid}): {label} request failed: {e}")
-                    continue
-                for k, v in df.attrs.get("units", {}).items():
-                    units[f"unit_{kind}_{snake(k[:-len('Unit')] if k.endswith('Unit') else k)}"] = v
-                n = len(df)
-                self.log.emit(f"{name} ({sid}): {label} {n} rows.")
-                if n:
-                    frames.append(self._rename(kind, df, keep_precipitation=not frames_have_precip)
-                                  .set_index("timestamp_utc"))
-                    frames_have_precip = frames_have_precip or kind == "soil"
+                    self.log.emit(f"{name} ({st['nwsli']}): history request failed: {e}")
+            station_frames[code] = df
 
-            if frames:
-                merged = pd.concat(frames, axis=1).sort_index()
-                merged = merged.loc[:, ~merged.columns.duplicated()]
-                merged.index.name = "timestamp_utc"
-                merged = merged.reset_index()
-                merged.insert(1, "timestamp_local", merged["timestamp_utc"].dt.tz_convert(st["timezone"]))
-            else:
-                merged = pd.DataFrame(columns=["timestamp_utc", "timestamp_local"])
-            station_frames[sid] = merged
-
-        all_stations = self._all_stations(stations, station_frames)
+        parts = []
+        for st in stations:
+            d = station_frames[st["code"]].copy()
+            d.insert(0, "station", st["station"])
+            d.insert(0, "nwsli", st["nwsli"])
+            parts.append(d)
+        all_stations = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
         info = self._info(stations, units)
         result = {"stations": stations, "station_frames": station_frames, "all_stations": all_stations,
                   "info": info, "output_dir": None}
 
         if self.write_output:
             out_dir = self._write(result)
-            if req["camera"]:
+            if want_images:
                 for st in stations:
                     step += 1
                     self.progress.emit(step, steps)
@@ -277,104 +237,55 @@ class MesonetDataWorker(QThread):
         self.progress.emit(steps, steps)
         return result
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _fetch(self, kind, sid, measurement=None):
-        r = self.req
-        common = dict(resolution=r["resolution"], period=r["period"], aggregate=r["aggregate"],
-                      start=r["start"], end=r["end"])
-        if kind == "weather":
-            return self.ne.get_station_history(sid, **common)
-        if kind == "soil":
-            return self.ne.get_soil_history(sid, measurement=measurement, **common)
-        return self.ne.get_wind_history(sid, wind_source=r["wind_source"], **common)
-
-    def _rename(self, kind, df, keep_precipitation=True):
-        keep = ["timestamp_utc"]
-        cols = {}
-        for c in df.columns:
-            if c in ("timestamp_utc", "timestamp_local"):
-                continue
-            if kind == "weather":
-                cols[c] = f"weather_{snake(c)}"
-            elif kind == "soil":
-                if c == "precipitation":
-                    if self.req["weather"] or not keep_precipitation:
-                        continue                      # weather_precipitation_total, or an earlier soil set, has it
-                    cols[c] = "precipitation_total"
-                else:
-                    cols[c] = c                       # e.g. soil_moisture_2in
-            else:
-                base, _, suffix = c.partition("_")
-                mapped = WIND_COLUMN_NAMES.get(base, snake(base)) + (f"_{suffix}" if suffix else "")
-                cols[c] = f"{self.req['wind_source'].replace('-', '_')}_{mapped}"
-        return df[keep + list(cols)].rename(columns=cols)
-
-    def _all_stations(self, stations, station_frames):
-        import pandas as pd
-        parts = []
-        for st in stations:
-            df = station_frames[st["station_id"]].copy()
-            df.insert(0, "station", st["station"])
-            df.insert(0, "station_id", st["station_id"])
-            parts.append(df)
-        return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
-
     def _info(self, stations, units):
-        r = self.req
         rows = [
             ("generated_local", datetime.datetime.now().isoformat(timespec="seconds")),
-            ("source", "Nebraska MESONET (nemesonet.unl.edu)"),
+            ("source", "South Dakota MESONET (climate.sdstate.edu)"),
             ("warning", WARNING_TEXT),
-            ("resolution", r["resolution"]),
-            ("period", r["period"]),
-            ("start", r["start"] or ""),
-            ("end", r["end"] or ""),
-            ("aggregate", r["aggregate"]),
-            ("data_types", ", ".join(k for k, on in (("weather", r["weather"]), ("soil", r["soil_measurements"]),
-                                                     ("wind", r["wind"])) if on)),
-            ("soil_measurements", ", ".join(r["soil_measurements"])),
-            ("wind_source", r["wind_source"] if r["wind"] else ""),
-            ("stations", "; ".join(f"{s['station']} ({s['station_id']})" for s in stations)),
+            ("terms", TERMS_TEXT),
+            ("period", "last 48 hours"),
+            ("resolution", "5 minutes"),
+            ("stations", "; ".join(f"{s['station']} ({s['nwsli']})" for s in stations)),
             ("timestamp_utc", "UTC"),
-            ("timestamp_local", "each station's local time zone"),
-            ("empty_cells", "no data, or the station lacks that sensor; see download_log.txt"),
+            ("timestamp_local", "each station's local time zone (Central or Mountain, with daylight saving time)"),
+            ("empty_cells", "no data for that time (e.g. no gust, no wind chill or heat index, night-time "
+                            "clear-sky radiation); see download_log.txt"),
         ]
-        rows += sorted(units.items())
+        rows += [(f"unit_{k}", v) for k, v in sorted(units.items())]
         return rows
 
-    # ------------------------------------------------------------------------------------------------------------------
     def _write(self, result):
         import pandas as pd
         r = self.req
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_dir = os.path.join(r["output_folder"], f"NE_MESONET_{ts}")
+        out_dir = os.path.join(r["output_folder"], f"SD_MESONET_{ts}")
         os.makedirs(out_dir, exist_ok=True)
         stations = result["stations"]
         info_df = pd.DataFrame(result["info"], columns=["item", "value"])
 
-        def label(st):
-            return f"{st['station']} ({st['station_id']})"
+        if not r["weather"]:
+            return out_dir
 
         if "csv" in r["formats"]:
             for st in stations:
-                path = os.path.join(out_dir, f"{slug(st['station'])}_{st['station_id']}.csv")
-                result["station_frames"][st["station_id"]].to_csv(path, index=False)
+                path = os.path.join(out_dir, f"{slug(st['station'])}_{st['nwsli']}.csv")
+                result["station_frames"][st["code"]].to_csv(path, index=False)
             result["all_stations"].to_csv(os.path.join(out_dir, "all_stations.csv"), index=False)
             info_df.to_csv(os.path.join(out_dir, "info.csv"), index=False)
             self.log.emit("Wrote CSV files.")
 
         if "xlsx" in r["formats"]:
-            path = os.path.join(out_dir, f"NE_MESONET_{ts}.xlsx")
+            path = os.path.join(out_dir, f"SD_MESONET_{ts}.xlsx")
             try:
                 with pd.ExcelWriter(path) as xw:
                     self._excel_ready(result["all_stations"]).to_excel(xw, sheet_name="All Stations", index=False)
                     used = {"All Stations", "Info"}
                     for st in stations:
-                        name = sheet_name(label(st))
+                        name = sheet_name(f"{st['station']} ({st['nwsli']})")
                         while name in used:
-                            name = sheet_name(f"{st['station_id']} {name}")
+                            name = sheet_name(f"{st['code']} {name}")
                         used.add(name)
-                        self._excel_ready(result["station_frames"][st["station_id"]]).to_excel(
+                        self._excel_ready(result["station_frames"][st["code"]]).to_excel(
                             xw, sheet_name=name, index=False)
                     info_df.to_excel(xw, sheet_name="Info", index=False)
                 self.log.emit("Wrote XLSX workbook.")
@@ -387,11 +298,11 @@ class MesonetDataWorker(QThread):
             payload = {
                 "info": dict(result["info"]),
                 "all_stations": records(result["all_stations"]),
-                "stations": {str(st["station_id"]): {"station": st["station"],
-                                                     "data": records(result["station_frames"][st["station_id"]])}
+                "stations": {st["nwsli"]: {"station": st["station"],
+                                           "data": records(result["station_frames"][st["code"]])}
                              for st in stations},
             }
-            with open(os.path.join(out_dir, f"NE_MESONET_{ts}.json"), "w", encoding="utf-8") as fh:
+            with open(os.path.join(out_dir, f"SD_MESONET_{ts}.json"), "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=1)
             self.log.emit("Wrote JSON file.")
         return out_dir
@@ -407,27 +318,37 @@ class MesonetDataWorker(QThread):
         return df
 
     def _download_images(self, st, out_dir):
-        images = self.req["camera_table"]
-        sid, name = st["station_id"], st["station"]
-        if images is None:
-            self.log.emit(f"{name} ({sid}): {MSG_CAMERAS_OFFLINE}")
-            return
-        items = images.get(sid, [])
-        if not items:
-            self.log.emit(f"{name} ({sid}): {MSG_NO_CAMERAS}")
+        name, nwsli = st["station"], st["nwsli"]
+        views = self.req["camera_table"].get(st["code"])
+        if views is None:
+            try:
+                views = self.sd.get_station_images(st["code"])
+            except Exception as e:
+                self.log.emit(f"{name} ({nwsli}): {MSG_CAMERAS_OFFLINE} ({e})")
+                return
+        if not views:
+            self.log.emit(f"{name} ({nwsli}): {MSG_NO_CAMERAS}")
             return
         img_dir = os.path.join(out_dir, "images")
         os.makedirs(img_dir, exist_ok=True)
-        for it in items:
-            stamp = re.sub(r"[^0-9T]", "", it["last_modified_utc"].split(".")[0]) + "Z"
-            path = os.path.join(img_dir, f"{slug(name)}_{sid}_{it['direction_code']}_{stamp}.webp")
-            try:
-                time.sleep(REQUEST_DELAY_SEC)
-                with open(path, "wb") as fh:
-                    fh.write(self.ne.download_bytes(it["url"]))
-                self.log.emit(f"{name} ({sid}): saved {it['direction']} image.")
-            except Exception as e:
-                self.log.emit(f"{name} ({sid}): {it['direction']} image not downloaded ({e}). {MSG_CAMERAS_OFFLINE}")
+        kinds = (([("still_url", "jpg", "still image")] if self.req["stills"] else [])
+                 + ([("timelapse_url", "gif", "time-lapse loop")] if self.req["timelapse"] else []))
+        for v in views:
+            for key, ext, label in kinds:
+                url = v.get(key)
+                if not url:
+                    continue
+                try:
+                    time.sleep(REQUEST_DELAY_SEC)
+                    data, last_modified = self.sd.download_file(url, REQUEST_TIMEOUT_SEC)
+                    path = os.path.join(img_dir, f"{slug(name)}_{nwsli}_{slug(v['direction'])}_"
+                                                 f"{stamp_from_last_modified(last_modified)}.{ext}")
+                    with open(path, "wb") as fh:
+                        fh.write(data)
+                    self.log.emit(f"{name} ({nwsli}): saved {v['direction']} {label}.")
+                except Exception as e:
+                    self.log.emit(f"{name} ({nwsli}): {v['direction']} {label} not downloaded ({e}). "
+                                  f"{MSG_CAMERAS_OFFLINE}")
 
 
 # ======================================================================================================================
@@ -464,23 +385,24 @@ class DataFrameModel(QAbstractTableModel):
 # ======================================================================================================================
 # Main dialog
 # ======================================================================================================================
-class NEMesonetDlg(QDialog):
+class SDMesonetDlg(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(PLUGIN["title"])
         self.resize(*PLUGIN["size"])
 
-        self.ne = NEMesonet(timeout_sec=REQUEST_TIMEOUT_SEC)
+        self.sd = SDMesonet()
         self.stations_df = None
-        self.camera_table = None           # {station_id: [image, ...]}; None = not loaded or not reachable
-        self.camera_table_failed = False
+        self.camera_table = {}            # code -> list of views ([] = no cameras)
+        self.camera_failed = set()        # codes whose dashboard could not be read
+        self.camera_pending = set()
         self.result = None
         self._workers = []
         self._data_worker = None
-
+        self._log_lines = []
         self._settings = plugin_settings(__file__)
-        self._settings_ready = False          # True once saved values are restored
+
         self._build_ui()
         self._bind_settings()
         self._load_stations()
@@ -492,8 +414,7 @@ class NEMesonetDlg(QDialog):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-
-        banner = QLabel(WARNING_TEXT)
+        banner = QLabel(f"{WARNING_TEXT}<br>{TERMS_TEXT}")
         banner.setWordWrap(True)
         banner.setStyleSheet("background:#fde7b0; color:#111; padding:6px 10px; font-weight:600;"
                              "border-bottom:1px solid #d9b65a;")
@@ -502,23 +423,16 @@ class NEMesonetDlg(QDialog):
         body = QHBoxLayout()
         body.setContentsMargins(8, 8, 8, 8)
         root.addLayout(body, stretch=1)
-
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(LEFT_PANEL_WIDTH)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         panel = self._build_left_panel()
         panel.setFixedWidth(LEFT_PANEL_WIDTH - self.style().pixelMetric(QtWidgets.QStyle.PM_ScrollBarExtent))
         scroll.setWidget(panel)
+        scroll.setFixedWidth(LEFT_PANEL_WIDTH)
         body.addWidget(scroll)
         body.addWidget(self._build_tabs(), stretch=1)
-
-    @staticmethod
-    def _shrinkable(combo):
-        combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        combo.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        return combo
 
     def _form_grid(self):
         g = QGridLayout()
@@ -533,12 +447,12 @@ class NEMesonetDlg(QDialog):
         lv.setContentsMargins(0, 0, 4, 0)
 
         # Stations
-        grp = QGroupBox("Stations")
+        grp = QGroupBox("Stations (active)")
         v = QVBoxLayout(grp)
         g = self._form_grid()
         g.addWidget(QLabel("Search"), 0, 0)
         self.txt_search = QLineEdit()
-        self.txt_search.setPlaceholderText("Name, county, NRD, or ID")
+        self.txt_search.setPlaceholderText("Name, county, or NWS ID")
         self.txt_search.textChanged.connect(self._filter_stations)
         g.addWidget(self.txt_search, 0, 1)
         v.addLayout(g)
@@ -565,68 +479,23 @@ class NEMesonetDlg(QDialog):
 
         # Data
         grp = QGroupBox("Data")
-        g = self._form_grid()
-        self.chk_weather = QCheckBox("Weather")
+        v = QVBoxLayout(grp)
+        self.chk_weather = QCheckBox("Weather (all variables)")
         self.chk_weather.setChecked(True)
-        g.addWidget(self.chk_weather, 0, 0, 1, 2)
-        g.addWidget(QLabel("Soil"), 1, 0, 1, 2)
-        soil_box = QVBoxLayout()
-        soil_box.setContentsMargins(SOIL_INDENT_PX, 0, 0, 0)
-        self.soil_checks = {}
-        for k, lab in SOIL_LABELS.items():
-            self.soil_checks[k] = QCheckBox(lab)
-            soil_box.addWidget(self.soil_checks[k])
-        g.addLayout(soil_box, 2, 0, 1, 2)
-        self.chk_wind = QCheckBox("Wind")
-        self.cmb_wind = self._shrinkable(QComboBox())
-        for k, lab in WIND_LABELS.items():
-            self.cmb_wind.addItem(lab, k)
-        g.addWidget(self.chk_wind, 3, 0)
-        g.addWidget(self.cmb_wind, 3, 1)
-
-        g.addWidget(QLabel("Resolution"), 4, 0)
-        self.cmb_resolution = self._shrinkable(QComboBox())
-        for k, lab in RESOLUTION_LABELS.items():
-            self.cmb_resolution.addItem(lab, k)
-        self.cmb_resolution.setCurrentIndex(list(RESOLUTION_LABELS).index("hourly"))
-        self.cmb_resolution.currentIndexChanged.connect(self._refresh_periods)
-        g.addWidget(self.cmb_resolution, 4, 1)
-
-        g.addWidget(QLabel("Period"), 5, 0)
-        self.cmb_period = self._shrinkable(QComboBox())
-        self.cmb_period.currentIndexChanged.connect(self._refresh_dates)
-        g.addWidget(self.cmb_period, 5, 1)
-
-        g.addWidget(QLabel("Aggregate"), 6, 0)
-        self.cmb_aggregate = self._shrinkable(QComboBox())
-        for k, lab in AGGREGATE_LABELS.items():
-            self.cmb_aggregate.addItem(lab, k)
-        g.addWidget(self.cmb_aggregate, 6, 1)
-
-        earliest = QDate.fromString(EARLIEST_DATA_DATE, "yyyy-MM-dd")
-        today = QDate.currentDate()
-        g.addWidget(QLabel("Start"), 7, 0)
-        self.date_start = QDateEdit(today.addDays(-7))
-        g.addWidget(QLabel("End"), 8, 0)
-        self.date_end = QDateEdit(today.addDays(-1))
-        for d, row_i in ((self.date_start, 7), (self.date_end, 8)):
-            d.setCalendarPopup(True)
-            d.setDisplayFormat("yyyy-MM-dd")
-            d.setDateRange(earliest, today)
-            g.addWidget(d, row_i, 1)
-
-        note = QLabel(f"Custom dates: daily only, from {EARLIEST_DATA_DATE}. "
-                      "Sub-daily data: last 7 days (10 minutes: last 30 days).")
+        v.addWidget(self.chk_weather)
+        note = QLabel("Last 48 hours at 5-minute steps; the site offers no longer range. "
+                      "Daily history needs the site's Daily Data Request form.")
         note.setWordWrap(True)
-        g.addWidget(note, 9, 0, 1, 2)
-        grp.setLayout(g)
+        v.addWidget(note)
         lv.addWidget(grp)
 
         # Camera images
         self.grp_camera = QGroupBox("Camera Images")
         v = QVBoxLayout(self.grp_camera)
-        self.chk_camera = QCheckBox("Download latest images")
-        v.addWidget(self.chk_camera)
+        self.chk_stills = QCheckBox("Latest still images")
+        self.chk_timelapse = QCheckBox("Time-lapse loops (GIF)")
+        v.addWidget(self.chk_stills)
+        v.addWidget(self.chk_timelapse)
         self.lbl_camera = QLabel("")
         self.lbl_camera.setWordWrap(True)
         self.lbl_camera.setStyleSheet("font-weight:600;")
@@ -675,14 +544,12 @@ class NEMesonetDlg(QDialog):
         lv.addWidget(self.lbl_status)
         lv.addStretch()
 
-        self._refresh_periods()
-        self._refresh_availability()
+        self._refresh_camera_state()
         return panel
 
     def _build_tabs(self):
         self.tabs = QTabWidget()
 
-        # Chart
         chart = QWidget()
         cv = QVBoxLayout(chart)
         row = QHBoxLayout()
@@ -706,7 +573,6 @@ class NEMesonetDlg(QDialog):
             cv.addWidget(QLabel("Charts need matplotlib, which is not installed."), stretch=1)
         self.tabs.addTab(chart, "Chart")
 
-        # Table
         table_tab = QWidget()
         tv = QVBoxLayout(table_tab)
         self.lbl_table = QLabel(MSG_NO_DATA_YET)
@@ -718,7 +584,6 @@ class NEMesonetDlg(QDialog):
         tv.addWidget(self.table, stretch=1)
         self.tabs.addTab(table_tab, "Table")
 
-        # Camera
         cam = QWidget()
         self.camera_layout = QVBoxLayout(cam)
         self.lbl_camera_title = QLabel("Select a station.")
@@ -728,13 +593,12 @@ class NEMesonetDlg(QDialog):
         cam_scroll.setWidgetResizable(True)
         cam_scroll.setFrameShape(QFrame.NoFrame)
         cam_body = QWidget()
-        self.camera_row = QGridLayout(cam_body)
-        self.camera_row.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.camera_grid = QGridLayout(cam_body)
+        self.camera_grid.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         cam_scroll.setWidget(cam_body)
         self.camera_layout.addWidget(cam_scroll, stretch=1)
         self.tabs.addTab(cam, "Camera")
 
-        # Log
         self.txt_log = QPlainTextEdit()
         self.txt_log.setReadOnly(True)
         self.tabs.addTab(self.txt_log, "Log")
@@ -744,48 +608,18 @@ class NEMesonetDlg(QDialog):
     # Settings
     # ------------------------------------------------------------------------------------------------------------------
     def _bind_settings(self):
-        """Choices come back the next time the plugin is opened. Data and images are not stored: they are live."""
         st = self._settings
         st.bind(self.chk_weather, "weather")
-        for k, chk in self.soil_checks.items():
-            st.bind(chk, f"soil_{k.replace('-', '_')}")
-        st.bind(self.chk_wind, "wind")
-        st.bind(self.cmb_wind, "wind_source_index")
-        st.bind(self.cmb_resolution, "resolution_index")     # refills the Period list
-        st.bind(self.cmb_aggregate, "aggregate_index")
-        st.bind(self.chk_camera, "download_camera_images")
+        st.bind(self.chk_stills, "camera_stills")
+        st.bind(self.chk_timelapse, "camera_timelapse")
         st.bind(self.txt_folder, "output_folder")
         st.bind(self.chk_csv, "format_csv")
         st.bind(self.chk_xlsx, "format_xlsx")
         st.bind(self.chk_json, "format_json")
 
-        # Period depends on resolution, so it is stored by value rather than list position.
-        idx = self.cmb_period.findData(st.get("period"))
-        if idx >= 0:
-            self.cmb_period.setCurrentIndex(idx)
-        self.cmb_period.currentIndexChanged.connect(lambda _: self._save("period", self.cmb_period.currentData()))
-
-        for widget, key in ((self.date_start, "custom_start"), (self.date_end, "custom_end")):
-            saved = QDate.fromString(st.get(key) or "", "yyyy-MM-dd")
-            if saved.isValid():
-                widget.setDate(saved)
-            widget.dateChanged.connect(lambda d, k=key: self._save(k, d.toString("yyyy-MM-dd")))
-        self._settings_ready = True
-
     def _save(self, key, value):
         self._settings[key] = value
         self._settings.save()
-
-    def _restore_station_checks(self):
-        saved = set(self._settings.get("stations", []))
-        if not saved:
-            return
-        self.lst_stations.blockSignals(True)
-        for i in range(self.lst_stations.count()):
-            item = self.lst_stations.item(i)
-            if item.data(Qt.UserRole) in saved:
-                item.setCheckState(Qt.Checked)
-        self.lst_stations.blockSignals(False)
 
     # ------------------------------------------------------------------------------------------------------------------
     # Background loading
@@ -798,47 +632,42 @@ class NEMesonetDlg(QDialog):
         worker.start()
 
     def _load_stations(self):
-        self._start(CallWorker(self.ne.get_dataframe), self._on_stations_loaded,
-                    lambda e: self._set_status(f"Station list not loaded: {e}"))
+        self._start(CallWorker(self.sd.get_dataframe), self._on_stations_loaded,
+                    lambda e: self.lbl_status.setText(f"Station list not loaded: {e}"))
 
     def _on_stations_loaded(self, df):
+        df = df[df["status"] == "Active"].copy()
+        df["code"] = df["station_url"].apply(SDMesonet.station_code)
+        df["timezone"] = df["utc_offset"].apply(SDMesonet.timezone_for)
+        skipped = df[df["code"].isna() | df["timezone"].isna()]
+        for _, r in skipped.iterrows():
+            self._log(f"{r['station']} ({r['nwsli']}): no station code or time zone; not listed.")
+        df = df.drop(skipped.index)
+        df["code"] = df["code"].astype(int)
         self.stations_df = df.sort_values("station").reset_index(drop=True)
+
+        saved = set(self._settings.get("stations", []))
         self.lst_stations.blockSignals(True)
         self.lst_stations.clear()
         for _, r in self.stations_df.iterrows():
-            item = QListWidgetItem(f"{r['station']} ({r['station_id']})")
-            item.setData(Qt.UserRole, int(r["station_id"]))
+            item = QListWidgetItem(f"{r['station'].strip()} ({r['nwsli']})")
+            item.setData(Qt.UserRole, int(r["code"]))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
+            item.setCheckState(Qt.Checked if int(r["code"]) in saved else Qt.Unchecked)
             self.lst_stations.addItem(item)
         self.lst_stations.blockSignals(False)
-        self._restore_station_checks()
-        self._on_station_checked(None)
-        self.lbl_station_info.setText(f"{len(self.stations_df)} stations. Check stations to download; "
+        self.lbl_station_info.setText(f"{len(self.stations_df)} active stations. Check stations to download; "
                                       "click one to see its details.")
-        self._log(f"Loaded {len(self.stations_df)} stations.")
-        # Camera table: any station's page carries it.
-        self._start(CallWorker(self.ne.get_station_images, int(self.stations_df.iloc[0]["station_id"])),
-                    self._on_camera_table_loaded, self._on_camera_table_failed)
-
-    def _on_camera_table_loaded(self, table):
-        self.camera_table = table
-        n = sum(1 for v in table.values() if v)
-        self._log(f"Camera table loaded: {n} station(s) with cameras.")
-        self._refresh_camera_state()
-
-    def _on_camera_table_failed(self, err):
-        self.camera_table_failed = True
-        self._log(f"Camera table not loaded: {err}")
-        self._refresh_camera_state()
+        self._log(f"Loaded {len(self.stations_df)} active stations.")
+        self._on_station_checked(None)
 
     # ------------------------------------------------------------------------------------------------------------------
-    # Station selection
+    # Stations
     # ------------------------------------------------------------------------------------------------------------------
-    def _station_row(self, sid):
-        return self.stations_df[self.stations_df["station_id"] == sid].iloc[0]
+    def _row(self, code):
+        return self.stations_df[self.stations_df["code"] == code].iloc[0]
 
-    def _selected_ids(self):
+    def _selected_codes(self):
         return [self.lst_stations.item(i).data(Qt.UserRole) for i in range(self.lst_stations.count())
                 if self.lst_stations.item(i).checkState() == Qt.Checked]
 
@@ -846,8 +675,8 @@ class NEMesonetDlg(QDialog):
         text = text.strip().lower()
         for i in range(self.lst_stations.count()):
             item = self.lst_stations.item(i)
-            r = self._station_row(item.data(Qt.UserRole))
-            hay = f"{r['station']} {r['station_id']} {r['county']} {r['nrd']}".lower()
+            r = self._row(item.data(Qt.UserRole))
+            hay = f"{r['station']} {r['nwsli']} {r['county']}".lower()
             item.setHidden(bool(text) and text not in hay)
 
     def _clear_selection(self):
@@ -858,138 +687,120 @@ class NEMesonetDlg(QDialog):
         self._on_station_checked(None)
 
     def _on_station_checked(self, _item):
-        ids = self._selected_ids()
-        self.lbl_selected.setText(f"{len(ids)} selected")
-        if _item is not None or not ids:
-            self._save("stations", ids)
-        self._refresh_availability()
+        codes = self._selected_codes()
+        self.lbl_selected.setText(f"{len(codes)} selected")
+        if _item is not None or not codes:
+            self._save("stations", codes)
+        for code in codes:
+            self._check_cameras(code)
         self._refresh_camera_state()
 
     def _on_station_highlighted(self, item, _prev):
         if item is None or self.stations_df is None:
             return
-        r = self._station_row(item.data(Qt.UserRole))
-        cams = self._camera_items(int(r["station_id"]))
-        cam_text = ", ".join(c["direction"] for c in cams) if cams else "None"
-        if self.camera_table is None:
-            cam_text = "Unknown" if not self.camera_table_failed else "Not accessible"
+        code = item.data(Qt.UserRole)
+        r = self._row(code)
         self.lbl_station_info.setText(
-            f"<b>{r['station']} ({r['station_id']})</b><br>"
+            f"<b>{r['station'].strip()} ({r['nwsli']})</b><br>"
             f"<b>County:</b> {r['county']}<br>"
-            f"<b>NRD:</b> {r['nrd']}<br>"
-            f"<b>Soil depths (in):</b> {r['soil_sensor_depths_in'] or 'None'}<br>"
-            f"<b>10 m wind:</b> {'Yes' if r['has_10m_wind'] else 'No'}<br>"
-            f"<b>Cameras:</b> {cam_text}<br>"
+            f"<b>Location:</b> {r['detail']}<br>"
+            f"<b>Time zone:</b> {r['timezone']}<br>"
+            f"<b>Elevation:</b> {r['elv_ft']} ft<br>"
             f"<a href=\"{r['station_url']}\">Open station page</a>")
-        self._show_camera_preview(int(r["station_id"]), r["station"])
+        self._check_cameras(code)
+        self._show_camera_preview(code)
 
     # ------------------------------------------------------------------------------------------------------------------
-    # Availability rules
+    # Cameras
     # ------------------------------------------------------------------------------------------------------------------
-    def _refresh_periods(self):
-        resolution = self.cmb_resolution.currentData()
-        current = self.cmb_period.currentData()
-        allowed = PERIODS_BY_RESOLUTION.get(resolution, tuple(PERIOD_LABELS))
-        self.cmb_period.blockSignals(True)
-        self.cmb_period.clear()
-        for p in allowed:
-            self.cmb_period.addItem(PERIOD_LABELS.get(p, p), p)
-        idx = self.cmb_period.findData(current)
-        self.cmb_period.setCurrentIndex(idx if idx >= 0 else 0)
-        self.cmb_period.blockSignals(False)
-        if getattr(self, "_settings_ready", False):
-            self._save("period", self.cmb_period.currentData())
-        self._refresh_dates()
+    def _check_cameras(self, code):
+        """Read the station dashboard once to learn its camera views."""
+        if code in self.camera_table or code in self.camera_pending:
+            return
+        self.camera_pending.add(code)
+        self._start(CallWorker(self.sd.get_station_images, code),
+                    lambda views, c=code: self._on_cameras(c, views, None),
+                    lambda err, c=code: self._on_cameras(c, None, err))
 
-    def _refresh_dates(self):
-        custom = self.cmb_period.currentData() == "custom"
-        self.date_start.setEnabled(custom)
-        self.date_end.setEnabled(custom)
-
-    def _refresh_availability(self):
-        """A data type is disabled only when none of the selected stations has it."""
-        ids = self._selected_ids()
-        rows = [self._station_row(sid) for sid in ids] if self.stations_df is not None else []
-        any_soil = any(bool(r["soil_sensor_depths_in"]) for r in rows)
-        any_10m = any(bool(r["has_10m_wind"]) for r in rows)
-
-        for chk in self.soil_checks.values():
-            chk.setEnabled(any_soil)
-
-        model = self.cmb_wind.model()
-        for i in range(self.cmb_wind.count()):
-            ten_m = self.cmb_wind.itemData(i) in TEN_METER_WIND_SOURCES
-            model.item(i).setEnabled(any_10m or not ten_m)
-
-        has_any = bool(rows)
-        for w in (self.chk_weather, self.chk_wind, self.cmb_wind):
-            w.setEnabled(has_any)
-        if not has_any:
-            for chk in self.soil_checks.values():
-                chk.setEnabled(False)
-
-    def _camera_items(self, sid):
-        return (self.camera_table or {}).get(sid, [])
+    def _on_cameras(self, code, views, err):
+        self.camera_pending.discard(code)
+        if err is None:
+            self.camera_table[code] = views
+            self.camera_failed.discard(code)
+        else:
+            self.camera_failed.add(code)
+            self._log(f"Camera check failed for station code {code}: {err}")
+        self._refresh_camera_state()
+        cur = self.lst_stations.currentItem()
+        if cur is not None and cur.data(Qt.UserRole) == code:
+            self._show_camera_preview(code)
 
     def _refresh_camera_state(self):
-        ids = self._selected_ids()
-        if not ids:
+        codes = self._selected_codes() if self.stations_df is not None else []
+        if not codes:
             self.grp_camera.setEnabled(False)
             self.lbl_camera.setText("Select one or more stations.")
             return
-        if self.camera_table is None:
-            self.grp_camera.setEnabled(False)
-            self.lbl_camera.setText(MSG_CAMERAS_OFFLINE if self.camera_table_failed else "Checking cameras…")
+        with_cams = [c for c in codes if self.camera_table.get(c)]
+        if with_cams:
+            self.grp_camera.setEnabled(True)
+            self.lbl_camera.setText(f"Latest only; no image archive is available. Cameras at "
+                                    f"{len(with_cams)} of {len(codes)} selected station(s).")
             return
-        with_cams = [sid for sid in ids if self._camera_items(sid)]
-        if not with_cams:
-            self.grp_camera.setEnabled(False)
+        self.grp_camera.setEnabled(False)
+        if any(c in self.camera_pending for c in codes):
+            self.lbl_camera.setText("Checking cameras…")
+        elif any(c in self.camera_failed for c in codes):
+            self.lbl_camera.setText(MSG_CAMERAS_OFFLINE)
+        else:
             self.lbl_camera.setText(MSG_NO_CAMERAS)
-            return
-        self.grp_camera.setEnabled(True)
-        names = ", ".join(self._station_row(s)["station"] for s in with_cams)
-        self.lbl_camera.setText(f"Latest only; no image archive is available. Cameras at: {names}.")
 
-    # ------------------------------------------------------------------------------------------------------------------
-    # Camera preview (highlighted station)
-    # ------------------------------------------------------------------------------------------------------------------
-    def _clear_camera_row(self):
-        while self.camera_row.count():
-            w = self.camera_row.takeAt(0).widget()
+    def _clear_camera_grid(self):
+        while self.camera_grid.count():
+            w = self.camera_grid.takeAt(0).widget()
             if w is not None:
                 w.deleteLater()
 
-    def _show_camera_preview(self, sid, name):
-        self._clear_camera_row()
-        if self.camera_table is None:
-            self.lbl_camera_title.setText(f"{name} ({sid}): "
-                                          f"{MSG_CAMERAS_OFFLINE if self.camera_table_failed else 'Checking cameras…'}")
+    def _show_camera_preview(self, code):
+        self._clear_camera_grid()
+        r = self._row(code)
+        label = f"{r['station'].strip()} ({r['nwsli']})"
+        if code in self.camera_pending or (code not in self.camera_table and code not in self.camera_failed):
+            self.lbl_camera_title.setText(f"{label}: Checking cameras…")
             return
-        items = self._camera_items(sid)
-        if not items:
-            self.lbl_camera_title.setText(f"{name} ({sid}): {MSG_NO_CAMERAS}")
+        if code in self.camera_failed:
+            self.lbl_camera_title.setText(f"{label}: {MSG_CAMERAS_OFFLINE}")
             return
-        self.lbl_camera_title.setText(f"Latest camera images: {name} ({sid})")
-        for n, it in enumerate(items):
-            box = QVBoxLayout()
+        views = self.camera_table.get(code) or []
+        if not views:
+            self.lbl_camera_title.setText(f"{label}: {MSG_NO_CAMERAS}")
+            return
+        self.lbl_camera_title.setText(f"Latest camera images: {label}")
+        for n, v in enumerate(views):
             frame = QWidget()
-            frame.setLayout(box)
+            box = QVBoxLayout(frame)
             pic = QLabel("Loading…")
             pic.setFixedWidth(THUMB_WIDTH)
             pic.setAlignment(Qt.AlignCenter)
-            cap = QLabel(f"<b>{it['direction']}</b>, published {it['last_modified_utc'][:19].replace('T', ' ')} UTC")
+            cap = QLabel(f"<b>{v['direction']}</b>")
             box.addWidget(pic)
             box.addWidget(cap)
-            self.camera_row.addWidget(frame, n // THUMB_COLUMNS, n % THUMB_COLUMNS)
-            self._start(CallWorker(self.ne.download_bytes, it["url"]),
-                        lambda data, p=pic: self._set_thumb(p, data),
-                        lambda e, p=pic: p.setText(MSG_CAMERAS_OFFLINE))
+            self.camera_grid.addWidget(frame, n // THUMB_COLUMNS, n % THUMB_COLUMNS)
+            if v.get("still_url"):
+                self._start(CallWorker(self.sd.download_file, v["still_url"], REQUEST_TIMEOUT_SEC),
+                            lambda res, p=pic, c=cap, d=v["direction"]: self._set_thumb(p, c, d, res),
+                            lambda e, p=pic: p.setText(MSG_CAMERAS_OFFLINE))
+            else:
+                pic.setText("No still image for this view.")
 
     @staticmethod
-    def _set_thumb(label, data):
+    def _set_thumb(label, caption, direction, result):
+        data, last_modified = result
         try:
-            img = image_from_bytes(data)
-            label.setPixmap(QPixmap.fromImage(img).scaledToWidth(THUMB_WIDTH, Qt.SmoothTransformation))
+            label.setPixmap(QPixmap.fromImage(image_from_bytes(data)).scaledToWidth(THUMB_WIDTH,
+                                                                                    Qt.SmoothTransformation))
+            if last_modified:
+                caption.setText(f"<b>{direction}</b>, published {last_modified}")
         except Exception:
             label.setText(MSG_CAMERAS_OFFLINE)
 
@@ -1003,43 +814,27 @@ class NEMesonetDlg(QDialog):
             self._save("output_folder", folder)
 
     def _request(self, write_output):
-        ids = self._selected_ids()
-        if not ids:
+        codes = self._selected_codes()
+        if not codes:
             raise ValueError("Select at least one station.")
-        soil_measurements = [k for k, chk in self.soil_checks.items() if chk.isChecked() and chk.isEnabled()]
-        if not (self.chk_weather.isChecked() or soil_measurements or self.chk_wind.isChecked()):
-            raise ValueError("Select at least one data type.")
+        cams_on = self.grp_camera.isEnabled()
+        stills = cams_on and self.chk_stills.isChecked()
+        timelapse = cams_on and self.chk_timelapse.isChecked()
+        if not self.chk_weather.isChecked() and not (write_output and (stills or timelapse)):
+            raise ValueError("Select Weather, or camera images for Download.")
         formats = [f for f, c in (("csv", self.chk_csv), ("xlsx", self.chk_xlsx), ("json", self.chk_json))
                    if c.isChecked()]
         if write_output:
             if not self.txt_folder.text().strip():
                 raise ValueError("Select an output folder.")
-            if not formats and not self.chk_camera.isChecked():
+            if self.chk_weather.isChecked() and not formats:
                 raise ValueError("Select at least one output format.")
-        period = self.cmb_period.currentData()
-        start = end = None
-        if period == "custom":
-            if self.date_start.date() > self.date_end.date():
-                raise ValueError("Start date is after end date.")
-            start = self.date_start.date().toString("yyyy-MM-dd")
-            end = self.date_end.date().toString("yyyy-MM-dd")
-        stations = [self._station_row(sid).to_dict() for sid in ids]
-        return {
-            "stations": stations,
-            "weather": self.chk_weather.isChecked(),
-            "soil_measurements": soil_measurements,
-            "wind": self.chk_wind.isChecked(),
-            "wind_source": self.cmb_wind.currentData(),
-            "resolution": self.cmb_resolution.currentData(),
-            "period": period,
-            "aggregate": self.cmb_aggregate.currentData(),
-            "start": start,
-            "end": end,
-            "camera": self.chk_camera.isChecked() and self.grp_camera.isEnabled(),  # disabled group = no cameras
-            "camera_table": self.camera_table,
-            "formats": formats,
-            "output_folder": self.txt_folder.text().strip(),
-        }
+        stations = [self._row(c).to_dict() for c in codes]
+        for s in stations:
+            s["station"] = s["station"].strip()
+        return {"stations": stations, "weather": self.chk_weather.isChecked(), "stills": stills,
+                "timelapse": timelapse, "camera_table": dict(self.camera_table), "formats": formats,
+                "output_folder": self.txt_folder.text().strip()}
 
     def _run(self, write_output):
         try:
@@ -1049,10 +844,9 @@ class NEMesonetDlg(QDialog):
             return
         self._log_lines = []
         self._log("-" * 60)
-        self._log(f"{'Download' if write_output else 'Preview'}: {len(req['stations'])} station(s), "
-                  f"{req['resolution']}, {req['period']}.")
+        self._log(f"{'Download' if write_output else 'Preview'}: {len(req['stations'])} station(s), last 48 hours.")
         self._set_busy(True)
-        self._data_worker = w = MesonetDataWorker(self.ne, req, write_output)
+        self._data_worker = w = SDDataWorker(self.sd, req, write_output)
         w.progress.connect(lambda i, n: (self.progress.setMaximum(max(n, 1)), self.progress.setValue(i)))
         w.log.connect(self._log)
         w.finished_ok.connect(self._on_data_done)
@@ -1067,7 +861,7 @@ class NEMesonetDlg(QDialog):
         for b in (self.btn_preview, self.btn_download):
             b.setEnabled(not busy)
         self.btn_abort.setEnabled(busy)
-        self._set_status("Working…" if busy else "Ready.")
+        self.lbl_status.setText("Working…" if busy else "Ready.")
 
     def _on_data_done(self, result):
         self._set_busy(False)
@@ -1076,23 +870,23 @@ class NEMesonetDlg(QDialog):
         self.table_model.set_frame(df.head(TABLE_PREVIEW_ROWS))
         self.lbl_table.setVisible(len(df) == 0)
         self.lbl_table.setText(MSG_NO_ROWS)
-        numeric = [c for c in df.columns if c not in ("station_id",) and str(df[c].dtype).startswith(("float", "int"))]
+        numeric = [c for c in df.columns if str(df[c].dtype).startswith(("float", "int"))]
         self.cmb_variable.blockSignals(True)
         self.cmb_variable.clear()
         self.cmb_variable.addItems(numeric)
         self.cmb_variable.blockSignals(False)
         self._draw_chart()
         if result["output_dir"]:
-            self._write_log_file(result["output_dir"])
-            self._set_status(f"Saved to {result['output_dir']}")
             self._log(f"Saved to {result['output_dir']}")
+            self._write_log_file(result["output_dir"])
+            self.lbl_status.setText(f"Saved to {result['output_dir']}")
         else:
-            self._set_status(f"Preview: {len(df)} rows.")
+            self.lbl_status.setText(f"Preview: {len(df)} rows.")
 
     def _on_data_error(self, msg):
         self._set_busy(False)
         self._log(msg)
-        self._set_status("Stopped. See the Log tab.")
+        self.lbl_status.setText("Stopped. See the Log tab.")
 
     def _chart_message(self, text):
         self.figure.clear()
@@ -1109,18 +903,17 @@ class NEMesonetDlg(QDialog):
         self.figure.clear()
         ax = self.figure.add_subplot(111)
         df = self.result["all_stations"]
-        if var and var in df.columns:
-            for st in self.result["stations"]:
-                part = df[df["station_id"] == st["station_id"]]
-                if part[var].notna().any():
-                    ax.plot(wall_clock(part["timestamp_local"]), part[var],
-                            label=f"{st['station']} ({st['station_id']})")
-            ax.set_ylabel(var, color="#111")
-            ax.set_xlabel("Local time", color="#111")
-            ax.tick_params(colors="#111")
-            if ax.lines:
-                ax.legend()
-            ax.grid(True, alpha=0.3)
+        for st in self.result["stations"]:
+            part = df[df["nwsli"] == st["nwsli"]]
+            if var in part.columns and part[var].notna().any():
+                ax.plot(part["timestamp_utc"].dt.tz_localize(None), part[var],
+                        label=f"{st['station']} ({st['nwsli']})")
+        ax.set_ylabel(var, color="#111")
+        ax.set_xlabel("Time (UTC)", color="#111")
+        ax.tick_params(colors="#111")
+        if ax.lines:
+            ax.legend()
+        ax.grid(True, alpha=0.3)
         self.figure.autofmt_xdate()
         self.canvas.draw()
 
@@ -1130,19 +923,14 @@ class NEMesonetDlg(QDialog):
     def _log(self, text):
         line = f"{datetime.datetime.now().strftime('%H:%M:%S')}  {text}"
         self.txt_log.appendPlainText(line)
-        if not hasattr(self, "_log_lines"):
-            self._log_lines = []
         self._log_lines.append(line)
 
     def _write_log_file(self, out_dir):
         try:
             with open(os.path.join(out_dir, "download_log.txt"), "w", encoding="utf-8") as fh:
-                fh.write(WARNING_TEXT + "\n\n" + "\n".join(self._log_lines) + "\n")
+                fh.write(f"{WARNING_TEXT}\n{TERMS_TEXT}\n\n" + "\n".join(self._log_lines) + "\n")
         except OSError as e:
             self._log(f"Log file not written: {e}")
-
-    def _set_status(self, text):
-        self.lbl_status.setText(text)
 
     def closeEvent(self, event):
         if self._data_worker is not None and self._data_worker.isRunning():
@@ -1156,14 +944,14 @@ class NEMesonetDlg(QDialog):
 # ======================================================================================================================
 # Plugin wrapper
 # ======================================================================================================================
-class NEMesonetPlugin(QtWidgets.QWidget):
+class SDMesonetPlugin(QtWidgets.QWidget):
     """Hosts the dialog inside a plugin window, the same way as the other plugins."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self._dialog = NEMesonetDlg(self)
+        self._dialog = SDMesonetDlg(self)
         self._dialog.setWindowFlags(Qt.Widget)
         layout.addWidget(self._dialog)
 
@@ -1176,7 +964,7 @@ def main(argv=None):
     import sys
     argv = list(sys.argv if argv is None else argv)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(argv)
-    dlg = NEMesonetDlg()
+    dlg = SDMesonetDlg()
     dlg.show()
     return app.exec_()
 

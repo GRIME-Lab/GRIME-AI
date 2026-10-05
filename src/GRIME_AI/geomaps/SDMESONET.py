@@ -5,12 +5,44 @@ SD Mesonet station table scraper.
 Scrapes the live SD State Mesonet station page and returns a pandas DataFrame
 of stations (station, nwsli, county, lat, lon, elv_ft, status) for map pins.
 Self-contained: does not depend on the dataset manager.
+
+Also reads, for the SD Mesonet plugin, the 48-hour 5-minute history behind each station's History page
+(/history/h.asp?num=<code>) and the camera images listed on each station's dashboard. These are internal,
+unpublished website endpoints that may change without notice. SD Mesonet terms: credit required, no
+redistribution, no commercial use, data provisional.
 """
 import re
+import json
 
 from ..app_identity import APP_NAME
 
-MESONET_STATIONS_URL = "https://climate.sdstate.edu/information/stations/"
+SD_MESONET_BASE_URL  = "https://climate.sdstate.edu"
+MESONET_STATIONS_URL = f"{SD_MESONET_BASE_URL}/information/stations/"
+SD_HISTORY_URL       = f"{SD_MESONET_BASE_URL}/history/h.asp"
+SD_DASHBOARD_URL     = f"{SD_MESONET_BASE_URL}/weather/"
+
+# The station table gives standard-time UTC offsets; both zones observe daylight saving time.
+TIMEZONE_BY_UTC_OFFSET = {"-6": "America/Chicago", "-7": "America/Denver"}
+
+# History series key -> column name. Units are appended from each series' own "unit" field.
+HISTORY_COLUMN_NAMES = {
+    "temp":        "air_temperature",
+    "appTemp":     "apparent_temperature",          # wind chill or heat index; empty when neither applies
+    "dewpoint":    "dew_point",
+    "rh":          "relative_humidity",
+    "windspeed":   "wind_speed",
+    "windgust":    "wind_gust",
+    "rainfall":    "precipitation",
+    "accrainfall": "precipitation_accumulated",
+    "radiation":   "solar_radiation",
+    "rso":         "clear_sky_radiation",
+    "skyPercent":  "sky_percent_of_clear",
+    "stnpressure": "station_pressure",
+    "sd":          "snow_depth",
+    "inversion":   "inversion",
+    "xinversion":  "inversion_x",                   # second inversion series; the site does not explain it
+}
+UNIT_SUFFIX = {"f": "F", "%": "pct", "mph": "mph", "inches": "in", "w/m2": "W_m2", "in hg": "inHg"}
 
 
 class SDMesonet:
@@ -29,6 +61,92 @@ class SDMesonet:
             df = df[df["lon"].apply(lambda v: isinstance(v, (int, float)))]
             df = df.reset_index(drop=True)
         return df
+
+    # ---- station codes and time zones ----
+    @staticmethod
+    def station_code(station_url):
+        """Numeric code used by the dashboard, history and camera pages (…/weather/?num=778 -> 778)."""
+        m = re.search(r"[?&]num=(\d+)", station_url or "")
+        return int(m.group(1)) if m else None
+
+    @staticmethod
+    def timezone_for(utc_offset):
+        return TIMEZONE_BY_UTC_OFFSET.get(str(utc_offset).strip())
+
+    # ---- 48-hour history ----
+    def get_history_raw(self, code):
+        """Raw JSON behind the station History page: the last 48 hours at 5-minute steps."""
+        return json.loads(self._fetch_html(f"{SD_HISTORY_URL}?num={code}"))
+
+    def get_history(self, code, timezone):
+        """
+        48-hour history as a DataFrame: timestamp_utc, timestamp_local, one column per series named
+        <variable>_<unit>, e.g. air_temperature_F, precipitation_in. Empty series values become empty cells.
+        The site's timestamps are the station's local clock time written as if UTC, so they are localized
+        to `timezone` (America/Chicago or America/Denver) before conversion to UTC.
+        Units and the station generation are in df.attrs.
+        """
+        payload = self.get_history_raw(code)
+        return self._history_to_dataframe(payload, timezone)
+
+    @staticmethod
+    def _column_name(key, unit):
+        base = HISTORY_COLUMN_NAMES.get(key, re.sub(r"(?<!^)(?=[A-Z])", "_", key).lower())
+        suffix = UNIT_SUFFIX.get(str(unit or "").strip().lower(), re.sub(r"[^A-Za-z0-9]+", "_", str(unit or "")))
+        return f"{base}_{suffix}".rstrip("_")
+
+    def _history_to_dataframe(self, payload, timezone):
+        import pandas as pd
+        sets = (payload.get("datasets") or [{}])[0] or {}
+        columns, units = {}, {}
+        for key, series in sets.items():
+            points = series.get("data") or []
+            if not points:
+                continue
+            name = self._column_name(key, series.get("unit"))
+            units[name] = series.get("unit", "")
+            columns[name] = pd.Series([p[1] for p in points], index=[p[0] for p in points])
+        df = pd.DataFrame(columns).sort_index()
+        local_naive = pd.to_datetime(df.index, unit="ms")
+        try:
+            local = local_naive.tz_localize(timezone, ambiguous="infer", nonexistent="shift_forward")
+        except Exception:
+            local = local_naive.tz_localize(timezone, ambiguous="NaT", nonexistent="shift_forward")
+        df.insert(0, "timestamp_local", local)
+        df.insert(0, "timestamp_utc", local.tz_convert("UTC"))
+        df = df.reset_index(drop=True)
+        df.attrs["units"] = units
+        df.attrs["station_generation"] = payload.get("gen")
+        return df
+
+    # ---- camera images ----
+    def get_station_images(self, code):
+        """
+        Camera views listed on the station dashboard. Returns a list (empty = no cameras):
+          {"view": 1, "direction": "Southwest", "still_url": ".../mostrecent1.jpg", "timelapse_url": ".../current1.gif"}
+        Stills update every 5 minutes, time-lapse loops every 30 minutes; latest only, no archive.
+        """
+        page = self._fetch_html(f"{SD_DASHBOARD_URL}?num={code}")
+        stills = {int(n): f"{SD_MESONET_BASE_URL}{path}" for path, n in
+                  re.findall(r"(/pictures/[^/'\"?]+/mostrecent(\d+)\.jpg)", page)}
+        loops = {}
+        for path, n, label in re.findall(r"href=['\"](/pictures/[^/'\"?]+/current(\d+)\.gif)[^'\"]*['\"]>\s*([^<]*?)\s*Time Lapse",
+                                         page, re.I):
+            loops[int(n)] = (f"{SD_MESONET_BASE_URL}{path}", label.strip())
+        views = []
+        for n in sorted(set(stills) | set(loops)):
+            gif, label = loops.get(n, ("", ""))
+            views.append({"view": n, "direction": label or f"View {n}",
+                          "still_url": stills.get(n, ""), "timelapse_url": gif})
+        return views
+
+    def download_file(self, url, timeout_sec=30):
+        """(bytes, Last-Modified header or "") for an image or time-lapse file."""
+        import requests
+        headers = {"User-Agent": f"Mozilla/5.0 ({APP_NAME} geomaps)"}
+        resp = requests.get(url, headers=headers, timeout=timeout_sec)
+        resp.raise_for_status()
+        return resp.content, resp.headers.get("Last-Modified", "")
 
     # ---- fetch ----
     def _fetch_html(self, url):
