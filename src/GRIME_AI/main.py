@@ -1460,7 +1460,7 @@ class MainWindow(QMainWindow):
             try:
                 self.osm_widget.add_pin(
                     coords["lat"], coords["lng"], color="usgs_green",
-                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)))
+                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)), group="USGS")
             except Exception as _e:
                 print(f"[WARN] USGS pin {name!r} skipped: {_e}")
 
@@ -1501,7 +1501,7 @@ class MainWindow(QMainWindow):
 
             # Add NEON map pins
             for coords in self.NEON_siteList:
-                self.osm_widget.add_pin(coords.latitude, coords.longitude, color="gold", label=coords.siteName)
+                self.osm_widget.add_pin(coords.latitude, coords.longitude, color="gold", label=coords.siteName, group="NEON")
 
             try:
                 default_item = self.NEON_listboxSites.topLevelItem(2)
@@ -1545,7 +1545,7 @@ class MainWindow(QMainWindow):
                 href = urljoin(_pc_base, _link) if _link else f"{_pc_base}/webcam/sites/{site_id}/"
                 self.osm_widget.add_pin(
                     info["lat"], info["lon"], color="yellow",
-                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base))
+                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base), group="PhenoCam")
             except Exception as _e:
                 print(f"[WARN] PhenoCam pin {site_id!r} skipped: {_e}")
         self.populate_phenocam_tree()
@@ -1636,7 +1636,7 @@ class MainWindow(QMainWindow):
             for name, coords in self.cameraDictionary.items():
                 self.osm_widget.add_pin(
                     coords["lat"], coords["lng"], color="usgs_green",
-                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)))
+                    label=self._osm_pin_label(name, coords, href=self._usgs_href(coords)), group="USGS")
         except Exception as _e:
             print(f"[WARN] USGS pins skipped: {_e}")
 
@@ -1649,14 +1649,14 @@ class MainWindow(QMainWindow):
                 href = urljoin(_pc_base, _link) if _link else f"{_pc_base}/webcam/sites/{site_id}/"
                 self.osm_widget.add_pin(
                     info["lat"], info["lon"], color="gold",
-                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base))
+                    label=self._osm_pin_label(site_id, info, href=href, base_url=_pc_base), group="PhenoCam")
         except Exception as _e:
             print(f"[WARN] PhenoCam pins skipped: {_e}")
 
         # POPULATE THE MAP WITH PINS FOR NEON FIELD SITES
         try:
             for coords in self.NEON_siteList:
-                self.osm_widget.add_pin(coords.latitude, coords.longitude, color="yellow")
+                self.osm_widget.add_pin(coords.latitude, coords.longitude, color="yellow", group="NEON")
         except Exception as _e:
             print(f"[WARN] NEON pins skipped: {_e}")
 
@@ -1664,17 +1664,41 @@ class MainWindow(QMainWindow):
         try:
             from appcore.geomaps.SDMESONET import SDMesonet
             sd_df = SDMesonet().get_dataframe()
-            self.osm_widget.add_sdmesonet_pins(sd_df)
+            self.osm_widget.add_sdmesonet_pins(sd_df, group="MESONET")
         except Exception as e:
             print(f"SD Mesonet pins skipped: {e}")
 
-        # POPULATE THE MAP WITH RED PINS FOR NE MESONET STATIONS
+        # POPULATE THE MAP WITH EAR-OF-CORN PINS (RED HUSKS, YELLOW CORN) FOR NE MESONET STATIONS
         try:
-            from appcore.geomaps.NEMESONET import NEMesonet
+            from appcore.geomaps.NEMESONET import NEMesonet, CORN_SVG
             ne_df = NEMesonet().get_dataframe()
-            self.osm_widget.add_nemesonet_pins(ne_df)
+            self.osm_widget.add_nemesonet_pins(ne_df, CORN_SVG, group="MESONET")
         except Exception as e:
             print(f"NE Mesonet pins skipped: {e}")
+
+        # POPULATE THE MAP WITH SAGUARO PINS FOR ARIZONA AZMET STATIONS
+        try:
+            from appcore.geomaps.AZMET import AZMet, SAGUARO_SVG
+            az_df = AZMet().get_dataframe()
+            self.osm_widget.add_azmet_pins(az_df, SAGUARO_SVG, group="MESONET")
+        except Exception as e:
+            print(f"AZMet pins skipped: {e}")
+
+        # POPULATE THE MAP WITH SUNFLOWER PINS FOR KANSAS MESONET STATIONS
+        try:
+            from appcore.geomaps.KSMESONET import KSMesonet, SUNFLOWER_SVG
+            ks_df = KSMesonet().get_dataframe()
+            self.osm_widget.add_kansas_pins(ks_df, SUNFLOWER_SVG, group="MESONET")
+        except Exception as e:
+            print(f"Kansas Mesonet pins skipped: {e}")
+
+        # POPULATE THE MAP WITH BLACK-AND-GOLD CORN PINS FOR ISU SOIL MOISTURE (IOWA) STATIONS
+        try:
+            from appcore.geomaps.ISUSM import ISUSoilMoisture, IOWA_CORN_SVG
+            ia_df = ISUSoilMoisture().get_dataframe()
+            self.osm_widget.add_isusm_pins(ia_df, IOWA_CORN_SVG, group="MESONET")
+        except Exception as e:
+            print(f"ISU Soil Moisture pins skipped: {e}")
 
         # ADD A PIN FOR FLAGSTAFF, AZ WHERE NORTHERN ARIZONA UNIVERSITY IS LOCATED.
         self.osm_widget.add_pin(35.1878, -111.6528, color="blue", label="Northern Arizona University")

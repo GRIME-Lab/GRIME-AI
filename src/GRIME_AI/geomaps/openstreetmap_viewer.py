@@ -7,7 +7,7 @@ from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings, QWebEng
 from PyQt5.QtCore import QUrl, QTimer, pyqtSignal
 from PyQt5.QtGui import QDesktopServices
 import json
-from PyQt5.QtCore import QObject, pyqtSlot
+from PyQt5.QtCore import QObject, pyqtSlot, QStandardPaths
 from PyQt5.QtWebChannel import QWebChannel
 
 
@@ -35,6 +35,10 @@ class _MapBridge(QObject):
     def boundsChanged(self, south, west, north, east):
         self._widget.boundsChanged.emit(south, west, north, east)
 
+    @pyqtSlot(str, bool)
+    def overlayToggled(self, name, visible):
+        self._widget._on_overlay_toggled(name, visible)
+
     @pyqtSlot(str)
     def boxSelected(self, ids_json):
         try:
@@ -49,8 +53,19 @@ class OpenStreetMapWidget(QWidget):
     markerClicked = pyqtSignal(str)                       # id of a pin added via add_marker_layer
     boundsChanged = pyqtSignal(float, float, float, float)  # south, west, north, east (after enable_bounds_events)
     boxSelected = pyqtSignal(list)                        # ids inside a shift+drag rectangle (after enable_box_select)
+    overlayToggled = pyqtSignal(str, bool)                # a pin group was switched on/off in the map's layer panel
+
+    # Pin groups listed in the map's layer panel, in this order. Pins added with group=<name> belong to it.
+    OVERLAY_ORDER = ("MESONET", "PhenoCam", "USGS", "NEON")
+    OVERLAY_SETTINGS_FILE = "map_layers.json"             # remembers which groups are shown, per user
+
+    # Clustering (Leaflet.markercluster): each network clusters only with itself; clusters split apart on zoom-in.
+    CLUSTER_RADIUS_PX = 60          # pins closer than this (screen pixels) merge into one cluster
+    CLUSTER_OFF_AT_ZOOM = 11        # at this zoom level and closer, only overlapping pins stay merged...
+    CLUSTER_OVERLAP_PX = 2          # ...pins within this many pixels; clicking such a cluster fans them out
 
     def __init__(self, parent=None, timeout_ms=10000, bounds_debounce_ms=0):
+        self._overlay_visible = self._load_overlay_settings()
         super().__init__(parent)
         self.view = QWebEngineView(self)
         self.view.setPage(_ExternalLinkPage(self.view))
@@ -278,7 +293,7 @@ class OpenStreetMapWidget(QWidget):
             self.view.page().runJavaScript(js)
         self._queue_or_run(_impl, lat, lng, zoom, add_marker, label, color)
 
-    def add_sdmesonet_pins(self, df):
+    def add_sdmesonet_pins(self, df, group=None):
         """Drop a blue pin per SD Mesonet station; popup shows full station info."""
         if df is None or df.empty:
             return
@@ -312,13 +327,15 @@ class OpenStreetMapWidget(QWidget):
                 f"<b>{k}:</b> {v}" for k, v in fields
                 if v not in ("", None) and str(v) != "nan"
             )
-            self.add_pin(lat, lon, color="blue", label=label)
+            self.add_pin(lat, lon, color="blue", label=label, group=group, cluster="SD MESONET")
 
-    def add_nemesonet_pins(self, df):
-        """Drop a red pin per NE Mesonet station; popup shows full station info."""
+    def add_nemesonet_pins(self, df, icon_svg=None, group=None):
+        """Drop a pin per NE Mesonet station; popup shows full station info.
+        icon_svg: draw each station with this SVG icon (the ear of corn); None keeps the standard red pin."""
         if df is None or df.empty:
             return
         import html
+        markers = []
         for _, r in df.iterrows():
             lat, lon = r.get("lat"), r.get("lon")
             if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
@@ -358,7 +375,144 @@ class OpenStreetMapWidget(QWidget):
                 for k, v in fields
                 if v not in ("", None) and str(v) != "nan"
             )
-            self.add_pin(lat, lon, color="red", label=label)
+            if icon_svg:
+                markers.append([float(lat), float(lon), label])
+            else:
+                self.add_pin(lat, lon, color="red", label=label, group=group, cluster="NE MESONET")
+        if icon_svg and markers:
+            self._add_svg_icon_markers("cornIcon", icon_svg, markers, group=group)
+
+    def add_azmet_pins(self, df, icon_svg, group=None):
+        """Drop a saguaro pin per AZMet station; popup shows station info (opens on click, like SD and NE)."""
+        if df is None or df.empty:
+            return
+        import html
+        markers = []
+        for _, r in df.iterrows():
+            lat, lon = r.get("lat"), r.get("lon")
+            if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+                continue
+            station = html.escape(str(r.get("station") or "AZMet"), quote=False)
+            url = r.get("station_url") or ""
+            station_html = (f'<a href="{html.escape(url)}" title="Open AZMet station page">{station}</a>'
+                            if url else station)
+            fields = [
+                ("Station", station_html),
+                ("Symbol", r.get("symbol")),
+                ("Station ID", r.get("station_id")),
+                ("County", r.get("county")),
+                ("Lat", lat),
+                ("Lon", lon),
+                ("Elevation", f"{r.get('elev_m')} m ({r.get('elev_ft')} ft)"),
+                ("Status", r.get("status")),
+                ("Data since", r.get("start_date")),
+            ]
+            label = "<br>".join(f"<b>{k}:</b> {v if k == 'Station' else html.escape(str(v), quote=False)}"
+                                for k, v in fields if v not in ("", None) and str(v) != "nan")
+            markers.append([float(lat), float(lon), label])
+        self._add_svg_icon_markers("saguaroIcon", icon_svg, markers, group=group)
+
+    def add_kansas_pins(self, df, icon_svg, group=None):
+        """Drop a sunflower per Kansas Mesonet station; popup shows station info (opens on click)."""
+        if df is None or df.empty:
+            return
+        import html
+        markers = []
+        for _, r in df.iterrows():
+            lat, lon = r.get("lat"), r.get("lon")
+            if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+                continue
+            fields = [
+                ("Station", r.get("station")),
+                ("Abbreviation", r.get("abbreviation")),
+                ("County", r.get("county")),
+                ("Network", r.get("network")),
+                ("Lat", lat),
+                ("Lon", lon),
+                ("Elevation (m)", r.get("elevation_m")),
+                ("5-minute data", f"{r.get('data_start_5min', '')} to {r.get('data_end_5min', '')}"
+                                  if r.get("data_start_5min") not in ("", None) and str(r.get("data_start_5min")) != "nan"
+                                  else ""),
+            ]
+            label = "<br>".join(f"<b>{k}:</b> {html.escape(str(v), quote=False)}"
+                                for k, v in fields if v not in ("", None) and str(v) != "nan")
+            url = r.get("station_url") or ""
+            if url:   # the Kansas site has no per-station address; the station is chosen on that page
+                label += (f'<br><a href="{html.escape(url)}" title="Open Kansas Mesonet station metadata">'
+                          f'Station metadata</a> (choose {html.escape(str(r.get("station")), quote=False)} there)')
+            markers.append([float(lat), float(lon), label])
+        self._add_svg_icon_markers("sunflowerIcon", icon_svg, markers, size=(30, 30), anchor="center", group=group)
+
+    def add_isusm_pins(self, df, icon_svg, group=None):
+        """Drop a black-and-gold ear of corn per ISU Soil Moisture station; popup shows station info."""
+        if df is None or df.empty:
+            return
+        import html
+        markers = []
+        for _, r in df.iterrows():
+            lat, lon = r.get("lat"), r.get("lon")
+            if not isinstance(lat, (int, float)) or not isinstance(lon, (int, float)):
+                continue
+            station = html.escape(str(r.get("station") or "ISU Soil Moisture"), quote=False)
+            url = r.get("station_url") or ""
+            station_html = (f'<a href="{html.escape(url)}" title="Open IEM station page">{station}</a>'
+                            if url else station)
+            fields = [
+                ("Station", station_html),
+                ("Station ID", r.get("station_id")),
+                ("County", r.get("county")),
+                ("Lat", lat),
+                ("Lon", lon),
+                ("Elevation (m)", r.get("elevation_m")),
+                ("Status", "Online" if r.get("online") else "Offline"),
+                ("Data since", r.get("archive_begin")),
+                ("Data until", r.get("archive_end")),
+            ]
+            label = "<br>".join(f"<b>{k}:</b> {v if k == 'Station' else html.escape(str(v), quote=False)}"
+                                for k, v in fields if v not in ("", None) and str(v) != "nan")
+            markers.append([float(lat), float(lon), label])
+        self._add_svg_icon_markers("iowaCornIcon", icon_svg, markers, group=group)
+
+    def _add_svg_icon_markers(self, icon_name, icon_svg, markers, size=(24, 40), anchor="bottom", group=None,
+                              cluster=None):
+        """
+        Add markers drawn with an SVG icon; popups open on click.
+        markers: [[lat, lon, popup_html], ...]. icon_name: JS name the icon is stored under (defined once).
+        anchor: "bottom" puts the icon's bottom center on the station (standing icons such as the corn),
+                "center" puts its middle on the station (round icons such as the sunflower).
+        group:  name of a pin group in the map's layer panel; None adds the markers to the map directly.
+        cluster: name of the cluster these markers join; defaults to icon_name, so each network clusters
+                 only with itself. Clusters are used only when the markers belong to a group.
+        """
+        cluster = cluster or icon_name
+        import json
+        import urllib.parse
+        icon_url = "data:image/svg+xml;charset=utf-8," + urllib.parse.quote(icon_svg)
+        w, h = size
+        anchor_y, popup_y = (h // 2, h // 2) if anchor == "center" else (h - 2, h - 6)
+
+        def _impl(markers, icon_url):
+            js = f"""
+                (function() {{
+                    if (!window.map) {{ console.error('Map not ready yet'); return; }}
+                    if (!window[{json.dumps(icon_name)}]) {{
+                        window[{json.dumps(icon_name)}] = L.icon({{iconUrl: {json.dumps(icon_url)},
+                                                                   iconSize: [{w}, {h}],
+                                                                   iconAnchor: [{w // 2}, {anchor_y}],
+                                                                   popupAnchor: [0, -{popup_y}]}});
+                    }}
+                    var icon = window[{json.dumps(icon_name)}];
+                    var target = {f"window.gaCluster({json.dumps(group)}, {json.dumps(cluster)}, icon)"
+                                  if group else "window.map"};
+                    var markers = {json.dumps(markers)};
+                    markers.forEach(function(m) {{
+                        if (!window.gaFirstTime({json.dumps((group or '') + '|' + cluster)}, m[0], m[1], m[2])) return;
+                        L.marker([m[0], m[1]], {{icon: icon}}).addTo(target).bindPopup(m[2]);
+                    }});
+                }})();
+            """
+            self.view.page().runJavaScript(js)
+        self._queue_or_run(_impl, markers, icon_url)
 
     def add_geojson(self, geojson_str):
         def _impl(geojson_str):
@@ -378,23 +532,31 @@ class OpenStreetMapWidget(QWidget):
             self.view.page().runJavaScript(js)
         self._queue_or_run(_impl, geojson_str)
 
-    def add_pin(self, lat, lng, color="blue", label=None):
-        def _impl(lat, lng, color, label):
+    def add_pin(self, lat, lng, color="blue", label=None, group=None, cluster=None):
+        """
+        group:   name of a pin group in the map's layer panel (e.g. "USGS"); None adds the pin to the map directly.
+        cluster: name of the cluster this pin joins (one per network/source). Defaults to the group name, so each
+                 group's pins cluster only with each other. Ungrouped pins without a cluster are never clustered.
+        """
+        def _impl(lat, lng, color, label, group, cluster):
             label = (label or f"{color.capitalize()} Pin: {lat}, {lng}").replace("'", "\\'")
+            cluster = cluster or group
             js = f"""
                 (function() {{
                     if (!window.map) {{ console.error('Map not ready yet'); return; }}
                     var iconVar = window['{color}Icon'];
                     if (!iconVar) {{
                         console.warn('Icon for color {color} not defined; using default.');
-                        L.marker([{lat}, {lng}]).addTo(window.map).bindPopup('{label}');
-                        return;
                     }}
-                    L.marker([{lat}, {lng}], {{icon: iconVar}}).addTo(window.map).bindPopup('{label}');
+                    var target = {f"window.gaCluster({json.dumps(group)}, {json.dumps(cluster)}, iconVar)"
+                                  if cluster else "window.map"};
+                    if (!window.gaFirstTime({json.dumps((group or '') + '|' + (cluster or 'map'))}, {lat}, {lng}, '{label}')) return;
+                    var opts = iconVar ? {{icon: iconVar}} : {{}};
+                    L.marker([{lat}, {lng}], opts).addTo(target).bindPopup('{label}');
                 }})();
             """
             self.view.page().runJavaScript(js)
-        self._queue_or_run(_impl, lat, lng, color, label)
+        self._queue_or_run(_impl, lat, lng, color, label, group, cluster)
 
     # --------------------------------------------------------------------------------------------------------------
     # Public API: interactive marker layers (clickable, hover tooltips, removable, recolorable)
@@ -451,6 +613,32 @@ class OpenStreetMapWidget(QWidget):
                 f"window.gaBoundsEnabled = {json.dumps(bool(enabled))}; if (window.gaBoundsEnabled) window.gaEmitBounds();")
         self._queue_or_run(_impl, enabled)
 
+    # --------------------------------------------------------------------------------------------------------------
+    # Pin groups: layer panel visibility, remembered per user
+    # --------------------------------------------------------------------------------------------------------------
+    def _overlay_settings_path(self):
+        folder = QStandardPaths.writableLocation(QStandardPaths.AppConfigLocation)
+        return os.path.join(folder, self.OVERLAY_SETTINGS_FILE)
+
+    def _load_overlay_settings(self):
+        try:
+            with open(self._overlay_settings_path(), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return {str(k): bool(v) for k, v in data.items()}
+        except Exception:
+            return {}
+
+    def _on_overlay_toggled(self, name, visible):
+        self._overlay_visible[name] = bool(visible)
+        try:
+            path = self._overlay_settings_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(self._overlay_visible, fh, indent=2)
+        except OSError as e:
+            print(f"Map layer choices not saved: {e}")
+        self.overlayToggled.emit(name, bool(visible))
+
     def _event_js(self):
         """Page-side support for the marker-layer, box-select and bounds API."""
         js = """
@@ -476,6 +664,79 @@ class OpenStreetMapWidget(QWidget):
                     function mapReady() {
                         return typeof L !== 'undefined' && window.map instanceof L.Map;
                     }
+
+                    // Pin groups shown as checkboxes in Leaflet's layer panel. Visibility is remembered by Python.
+                    window.gaOverlayOrder = __OVERLAY_ORDER__;
+                    window.gaOverlayVisible = __OVERLAY_VISIBLE__;
+                    window.gaOverlays = {};
+                    window.gaLayerControl = null;
+                    window.gaOverlay = function (name) {
+                        if (window.gaOverlays[name]) return window.gaOverlays[name];
+                        var group = L.layerGroup();
+                        window.gaOverlays[name] = group;
+                        if (!window.gaLayerControl) {
+                            window.gaLayerControl = L.control.layers(null, {}, {
+                                collapsed: false,
+                                sortLayers: true,
+                                sortFunction: function (a, b, nameA, nameB) {
+                                    var ia = window.gaOverlayOrder.indexOf(nameA), ib = window.gaOverlayOrder.indexOf(nameB);
+                                    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                                }
+                            }).addTo(window.map);
+                            window.map.on('overlayadd', function (e) {
+                                if (window.gaBridge) window.gaBridge.overlayToggled(e.name, true);
+                            });
+                            window.map.on('overlayremove', function (e) {
+                                if (window.gaBridge) window.gaBridge.overlayToggled(e.name, false);
+                            });
+                        }
+                        window.gaLayerControl.addOverlay(group, name);
+                        if (window.gaOverlayVisible[name] !== false) group.addTo(window.map);
+                        return group;
+                    };
+
+                    // One marker cluster per network/source, placed inside its layer-panel group. The cluster icon
+                    // is that network's own icon with the station count on it. Without the plugin, pins are
+                    // simply added to the group.
+                    window.gaClusters = {};
+                    window.gaSeen = {};
+                    // True the first time a pin (same cluster, position and popup) is added; repeats are skipped.
+                    window.gaFirstTime = function (clusterId, lat, lng, popup) {
+                        var k = clusterId + '|' + Number(lat).toFixed(6) + ',' + Number(lng).toFixed(6) + '|' + popup;
+                        if (window.gaSeen[k]) return false;
+                        window.gaSeen[k] = true;
+                        return true;
+                    };
+                    window.gaClusterIcon = function (icon, count) {
+                        var o = (icon && icon.options) || L.Icon.Default.prototype.options;
+                        var url = o.iconUrl;
+                        if (url && url.indexOf('data:') !== 0 && url.indexOf('/') < 0 && L.Icon.Default.imagePath) {
+                            url = L.Icon.Default.imagePath + url;
+                        }
+                        var w = (o.iconSize || [25, 41])[0], h = (o.iconSize || [25, 41])[1];
+                        var html = '<div class="ga-cluster" style="width:' + w + 'px;height:' + h + 'px">' +
+                                   '<img src="' + url + '" style="width:' + w + 'px;height:' + h + 'px">' +
+                                   '<span class="ga-count">' + count + '</span></div>';
+                        return L.divIcon({html: html, className: 'ga-cluster-icon', iconSize: [w, h],
+                                          iconAnchor: o.iconAnchor || [w / 2, h]});
+                    };
+                    window.gaCluster = function (groupName, key, icon) {
+                        var parent = groupName ? window.gaOverlay(groupName) : window.map;
+                        if (typeof L.markerClusterGroup !== 'function') return parent;
+                        var id = (groupName || '') + '|' + key;
+                        if (window.gaClusters[id]) return window.gaClusters[id];
+                        var cg = L.markerClusterGroup({
+                            maxClusterRadius: function (zoom) {
+                                return zoom >= __CLUSTER_OFF_AT_ZOOM__ ? __CLUSTER_OVERLAP_PX__ : __CLUSTER_RADIUS_PX__;
+                            },
+                            spiderfyOnMaxZoom: true,
+                            showCoverageOnHover: false,
+                            iconCreateFunction: function (c) { return window.gaClusterIcon(icon, c.getChildCount()); }
+                        });
+                        if (groupName) parent.addLayer(cg); else cg.addTo(window.map);
+                        window.gaClusters[id] = cg;
+                        return cg;
+                    };
 
                     window.gaIcon = function (color) {
                         return color ? window[String(color).replace(/-/g, '_') + 'Icon'] : null;
@@ -586,7 +847,12 @@ class OpenStreetMapWidget(QWidget):
                     })();
                 })();
             </script>"""
-        return js.replace("__DEBOUNCE_MS__", str(int(self._bounds_debounce_ms)))
+        return (js.replace("__DEBOUNCE_MS__", str(int(self._bounds_debounce_ms)))
+                  .replace("__OVERLAY_ORDER__", json.dumps(list(self.OVERLAY_ORDER)))
+                  .replace("__OVERLAY_VISIBLE__", json.dumps(self._overlay_visible))
+                  .replace("__CLUSTER_RADIUS_PX__", str(int(self.CLUSTER_RADIUS_PX)))
+                  .replace("__CLUSTER_OFF_AT_ZOOM__", str(int(self.CLUSTER_OFF_AT_ZOOM)))
+                  .replace("__CLUSTER_OVERLAP_PX__", str(int(self.CLUSTER_OVERLAP_PX))))
 
     # --------------------------------------------------------------------------------------------------------------
     # Internal: build and load HTML
@@ -595,6 +861,8 @@ class OpenStreetMapWidget(QWidget):
         base_path = os.path.abspath(os.path.dirname(__file__))
         leaflet_dir = os.path.join(base_path, "../resources", "leaflet")
         leaflet_css = os.path.join(leaflet_dir, "leaflet.css")
+        cluster_css = os.path.join(leaflet_dir, "MarkerCluster.css")
+        cluster_js = os.path.join(leaflet_dir, "leaflet.markercluster.js")
         leaflet_js = os.path.join(leaflet_dir, "leaflet.js")
         images_dir = os.path.join(leaflet_dir, "images")
 
@@ -615,10 +883,19 @@ class OpenStreetMapWidget(QWidget):
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <link rel="stylesheet" href="{http_url(leaflet_css)}"/>
             <style>html, body, #map {{ height: 100%; margin: 0; padding: 0; }}</style>
+            {f'<link rel="stylesheet" href="{http_url(cluster_css)}"/>' if os.path.exists(cluster_css) else ''}
+            <style>
+                .ga-cluster-icon {{ background: none; border: none; }}
+                .ga-cluster {{ position: relative; }}
+                .ga-count {{ position: absolute; top: -6px; right: -12px; min-width: 14px; padding: 0 4px;
+                            background: #fff; color: #000; border: 1.5px solid #000; border-radius: 9px;
+                            font: bold 11px sans-serif; text-align: center; line-height: 15px; }}
+            </style>
         </head>
         <body>
             <div id="map"></div>
             <script src="{http_url(leaflet_js)}"></script>
+            {f'<script src="{http_url(cluster_js)}"></script>' if os.path.exists(cluster_js) else ''}
             <script>
                 (function initWhenReady() {{
                     function ready() {{
