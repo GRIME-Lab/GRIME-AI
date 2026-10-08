@@ -283,18 +283,564 @@ g_modelSettings = modelSettingsClass()
 hyperparameterDlg = None
 
 # ======================================================================================================================
+# PHENOCAM TAB: SETTINGS, SITE SEARCH, HOVER HELP
+# ======================================================================================================================
+import re
+
+# Tuning values for the PhenoCam tab. Each can be overridden by a JsonEditor entry
+# of the same name (e.g. "Phenocam_Search_Help_Delay_ms").
+PHENOCAM_TAB_DEFAULTS = {
+    "Phenocam_Search_Help_Delay_ms": 3000,   # hover time before the search syntax popup appears
+    "Phenocam_Search_Debounce_ms":   250,    # pause after typing before the list is filtered
+    "Phenocam_Default_Range_Days":   30,     # default download range ending today
+    "Phenocam_Button_Radius_px":     12,
+    "Phenocam_Preview_Min_Height_px": 120,
+    "Phenocam_Table_Blank_Rows":     3,      # table rows shown (blank) when fewer sites are checked
+    "Phenocam_Table_Max_Rows":       10,     # site rows shown before the table scrolls
+    "Phenocam_Left_Panel_Width_px":  300,    # initial site-list width; saved when the splitter is dragged
+    "Phenocam_Placeholder_Color":    "#4d4d4d",
+    "Phenocam_Error_Color":          "#b00020",
+    "Phenocam_Primary_Button_Color": "steelblue",
+    "Phenocam_Table_Header_Color":   "lightsteelblue",   # header fill; text is black for readability
+    "Phenocam_Show_Inactive":        False,  # inactive sites hidden until the user shows them
+    "Phenocam_Preview_Height_px":    None,   # saved splitter position; None = use the default fraction
+    "Phenocam_Preview_Fraction":     2 / 3,  # preview share of the panel height when none is saved
+    "Phenocam_Preview_Search_Days":  30,     # days searched back from a site's last image date
+    "Phenocam_Count_Max_Days":       366,    # most browse pages fetched per site for a narrow time window
+    "Phenocam_Count_Parallel_Pages": 4,      # browse pages fetched at once for narrow-window counts
+    "Phenocam_Count_Debounce_ms":    800,    # pause after a date/time edit before counting starts
+}
+
+
+# NEON tab layout values (its look shares the PhenoCam tab's colors and button styles).
+NEON_TAB_DEFAULTS = {
+    "NEON_Left_Panel_Width_px":     400,    # initial site-list width; saved when the splitter is dragged
+    "NEON_Left_Panel_Min_Width_px": 150,    # the site list can't be dragged narrower than this
+    "NEON_Preview_Height_px":       None,   # saved image height; None = image takes what the table leaves
+    "NEON_Table_Blank_Rows":        3,      # table rows shown (blank) when fewer products are checked
+    "NEON_Table_Max_Rows":          10,     # product rows shown before the table scrolls
+}
+
+# USGS tab layout values (its look shares the PhenoCam tab's colors and button styles).
+USGS_TAB_DEFAULTS = {
+    "USGS_Left_Panel_Width_px":  400,    # initial site-list width; saved when the splitter is dragged
+    "USGS_Left_Panel_Min_Width_px": 150, # the site list can't be dragged narrower than this
+    "USGS_Preview_Height_px":    None,   # saved image height; None = image takes the space the table leaves
+    "USGS_Table_Rows_Shown":     4,      # table height in rows (filled plus blank) when few cameras are checked
+    "USGS_Table_Max_Rows":       10,     # rows shown before the table scrolls
+    "USGS_Count_Debounce_ms":    2000,   # pause after a date/time edit before image counting starts
+}
+
+
+def _phenocam_setting(key):
+    """JsonEditor value for key if one is stored, else the PhenoCam or USGS tab default."""
+    default = PHENOCAM_TAB_DEFAULTS.get(key, USGS_TAB_DEFAULTS.get(key, NEON_TAB_DEFAULTS.get(
+        key, IMAGE_VIEW_DEFAULTS.get(key))))
+    try:
+        value = JsonEditor().getValue(key)
+    except Exception:
+        value = None
+    if value in (None, ""):
+        return default
+    if isinstance(default, bool):
+        return str(value).strip().lower() == "true"
+    if isinstance(default, float):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+    if isinstance(default, int) or (default is None and str(value).lstrip("-").isdigit()):
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return default
+    return value
+
+
+def _data_table_header_style():
+    """Header style shared by the PhenoCam and USGS download tables."""
+    edge = _phenocam_setting("Phenocam_Primary_Button_Color")
+    return (f"QHeaderView::section {{ background-color: {_phenocam_setting('Phenocam_Table_Header_Color')};"
+            f" color: #000000; font-weight: bold; padding: 4px;"
+            f" border: none; border-right: 1px solid {edge}; border-bottom: 1px solid {edge}; }}")
+
+
+def _button_styles():
+    """(primary, ghost) button style sheets shared by the PhenoCam and USGS tabs."""
+    radius = int(_phenocam_setting("Phenocam_Button_Radius_px"))
+    primary = _phenocam_setting("Phenocam_Primary_Button_Color")
+    filled = (f"QPushButton {{ background-color: {primary}; color: white; font-weight: bold;"
+              f" border: none; border-radius: {radius}px; padding: 4px 14px; }}"
+              f"QPushButton:disabled {{ background-color: palette(mid); }}")
+    ghost = (f"QPushButton {{ background: transparent; color: palette(text);"
+             f" border: 1px solid {primary}; border-radius: {radius}px; padding: 4px 14px; }}"
+             f"QPushButton:hover {{ background: palette(midlight); }}")
+    return filled, ghost
+
+
+# Search fields: name -> (description, kind). kind is "text", "number", or "date".
+PHENOCAM_SEARCH_FIELDS = {
+    "site":      ("Site name", "text"),
+    "location":  ("Site description", "text"),
+    "group":     ("Group", "text"),
+    "type":      ("Site type (I, II, III)", "text"),
+    "veg":       ("Primary or secondary vegetation type", "text"),
+    "species":   ("Dominant species", "text"),
+    "camera":    ("Camera description", "text"),
+    "orient":    ("Camera orientation", "text"),
+    "contact":   ("Either site contact", "text"),
+    "roi":       ("ROI names", "text"),
+    "ecoregion": ("North America ecoregion", "text"),
+    "koppen":    ("Köppen-Geiger climate", "text"),
+    "igbp":      ("IGBP land cover", "text"),
+    "flux":      ("Flux data (true/false)", "text"),
+    "active":    ("Active (true/false)", "text"),
+    "lat":       ("Latitude", "number"),
+    "lon":       ("Longitude", "number"),
+    "elev":      ("Elevation (m)", "number"),
+    "mat":       ("Daymet mean annual temperature (°C)", "number"),
+    "map":       ("Daymet mean annual precipitation (mm)", "number"),
+    "first":     ("First image date (YYYY-MM-DD)", "date"),
+    "last":      ("Last image date (YYYY-MM-DD)", "date"),
+}
+
+# USGS HIVIS camera fields (from the NIMS camera record)
+USGS_SEARCH_FIELDS = {
+    "camera":  ("Camera ID", "text"),
+    "name":    ("Camera name", "text"),
+    "desc":    ("Camera description", "text"),
+    "nwis":    ("NWIS site number", "text"),
+    "state":   ("State abbreviation", "text"),
+    "tz":      ("Time zone", "text"),
+    "pcode":   ("Default parameter code", "text"),
+    "hidden":  ("Hidden camera (true/false)", "text"),
+    "lat":     ("Latitude", "number"),
+    "lon":     ("Longitude", "number"),
+    "newest":  ("Newest image date (YYYY-MM-DD)", "date"),
+    "created": ("Camera added to NIMS (YYYY-MM-DD)", "date"),
+}
+
+# NEON field site fields; "product" also narrows the products listed under each site
+NEON_SEARCH_FIELDS = {
+    "site":     ("Site code", "text"),
+    "name":     ("Site name", "text"),
+    "state":    ("State", "text"),
+    "domain":   ("Domain code or name", "text"),
+    "phenocam": ("PhenoCam link", "text"),
+    "product":  ("Data product code or title (also narrows the product list)", "text"),
+    "lat":      ("Latitude", "number"),
+    "lon":      ("Longitude", "number"),
+}
+
+# Help popup examples per tab: (search text, what it does)
+PHENOCAM_SEARCH_EXAMPLES = [
+    ("prairie", "a bare word matches any field"),
+    ("group:NEON", "matches one field"),
+    ("site:NEON.D10.*", "* any characters, ? one character (a wildcard pattern must match the whole value)"),
+    ('location:"Nine Mile"', "quotes for values with spaces"),
+    ("elev>1000 &nbsp; last<2025-01-01 &nbsp; lat>=40", "comparisons on numbers and dates"),
+    ("-group:NEON", "a leading - excludes"),
+]
+PHENOCAM_SEARCH_EXAMPLE = "group:NEON veg:GR elev>500 -active:false"
+
+USGS_SEARCH_EXAMPLES = [
+    ("platte", "a bare word matches any field"),
+    ("state:NE", "matches one field"),
+    ("camera:NE_Platte*", "* any characters, ? one character (a wildcard pattern must match the whole value)"),
+    ('name:"Platte River"', "quotes for values with spaces"),
+    ("lat>=40 &nbsp; newest>2026-10-01", "comparisons on numbers and dates"),
+    ("-hidden:true", "a leading - excludes"),
+]
+USGS_SEARCH_EXAMPLE = "state:NE nwis:06* newest>2026-10-01 -hidden:true"
+
+NEON_SEARCH_EXAMPLES = [
+    ("harvard", "a bare word matches any field, including product titles"),
+    ("domain:D10", "matches one field"),
+    ("product:DP1.2*", "* any characters, ? one character (a wildcard pattern must match the whole value)"),
+    ('product:"water quality"', "quotes for values with spaces"),
+    ("lat>40 &nbsp; lon<-100", "comparisons on numbers"),
+    ("-state:AK", "a leading - excludes"),
+]
+NEON_SEARCH_EXAMPLE = "domain:D01 product:DP1.20002 -state:ME"
+
+
+class SiteSearchQuery:
+    """
+    Parses and applies site search text against a set of search fields.
+
+      prairie                 bare word: matches any field
+      group:NEON              field:value
+      site:NEON.D10.*         * and ? wildcards (pattern must match the whole value)
+      location:"Nine Mile"    quotes for values with spaces
+      elev>1000  last<2025-01-01  lat>=40   comparisons on number and date fields
+      -group:NEON             leading - excludes
+    Terms are ANDed and case-insensitive. Without wildcards a value matches
+    anywhere inside the field.
+
+    A record is {"fields": {name: [lowercase strings]}, "numbers": {name: float},
+    "dates": {name: "YYYY-MM-DD"}}.
+    """
+
+    _FIELD_TERM = re.compile(r"^([A-Za-z_]+)(>=|<=|:|>|<|=)(.*)$")
+
+    def __init__(self, text, fields):
+        import shlex
+        self.fields = fields
+        self.error = ""
+        self.terms = []   # (negate, field or None, op, value)
+        text = (text or "").strip()
+        if not text:
+            return
+        try:
+            tokens = shlex.split(text)
+        except ValueError:
+            tokens = text.replace('"', " ").split()
+        for tok in tokens:
+            negate = tok.startswith("-") and len(tok) > 1
+            if negate:
+                tok = tok[1:]
+            m = self._FIELD_TERM.match(tok)
+            if m and m.group(1).lower() in self.fields:
+                field, op, value = m.group(1).lower(), m.group(2), m.group(3)
+                kind = self.fields[field][1]
+                if op in (">", "<", ">=", "<=") and kind == "text":
+                    self.error = f"{field} can't be compared with {op}"
+                    continue
+                if kind == "number" and op != ":":
+                    try:
+                        float(value)
+                    except ValueError:
+                        self.error = f"{field}{op} needs a number"
+                        continue
+                self.terms.append((negate, field, op, value.lower()))
+            elif m and m.group(2) in (":", ">=", "<=", ">", "<", "=") and not m.group(3).startswith("//"):
+                self.error = f"Unknown field: {m.group(1)}"
+            else:
+                self.terms.append((negate, None, ":", tok.lower()))
+
+    @staticmethod
+    def text_match(pattern, values):
+        import fnmatch
+        if any(c in pattern for c in "*?"):
+            return any(fnmatch.fnmatchcase(v, pattern) for v in values)
+        return any(pattern in v for v in values)
+
+    _text_match = text_match
+
+    @staticmethod
+    def _compare(a, op, b):
+        return {"=": a == b, ">": a > b, "<": a < b, ">=": a >= b, "<=": a <= b}[op]
+
+    def _term_match(self, record, field, op, value):
+        fields = record["fields"]
+        if field is None:
+            return any(self.text_match(value, vals) for vals in fields.values())
+        kind = self.fields[field][1]
+        if op == ":" or (op == "=" and kind == "text"):
+            return self.text_match(value, fields.get(field, []))
+        if kind == "number":
+            x = record.get("numbers", {}).get(field)
+            return x is not None and self._compare(x, op, float(value))
+        x = record.get("dates", {}).get(field)   # ISO date strings compare correctly as text
+        return bool(x) and self._compare(x, op, value)
+
+    def term_matches(self, record, term):
+        """True if the record satisfies the term, ignoring its negation."""
+        _negate, field, op, value = term
+        return self._term_match(record, field, op, value)
+
+    def matches(self, record):
+        for negate, field, op, value in self.terms:
+            if self._term_match(record, field, op, value) == negate:
+                return False
+        return True
+
+
+class PhenocamSearchQuery(SiteSearchQuery):
+    def __init__(self, text):
+        super().__init__(text, PHENOCAM_SEARCH_FIELDS)
+
+
+def _search_help_html(fields, examples, example):
+    import html as _html
+    rows = "".join(f"<tr><td><b>{name}</b></td><td>{desc}</td></tr>" for name, (desc, _) in fields.items())
+    lines = "".join(f"<b>{_html.escape(code).replace('&amp;nbsp;', '&nbsp;')}</b> &nbsp; {text}<br>"
+                    for code, text in examples)
+    return (
+        "<div style='color:#000000'>"
+        "<b>Search syntax</b><br>"
+        f"{lines}"
+        "All terms must match. Case is ignored.<br><br>"
+        f"<table cellspacing='0' cellpadding='2'>{rows}</table><br>"
+        f"<b>Example:</b> {_html.escape(example)}"
+        "</div>"
+    )
+
+
+def _phenocam_search_help_html():
+    return _search_help_html(PHENOCAM_SEARCH_FIELDS, PHENOCAM_SEARCH_EXAMPLES, PHENOCAM_SEARCH_EXAMPLE)
+
+
+class SearchHelpFilter(QtCore.QObject):
+    """Shows a search syntax popup after the mouse rests on the search field;
+    hides it when the mouse leaves or the user types. Used on all site tabs."""
+
+    def __init__(self, line_edit, help_html, parent=None):
+        super().__init__(parent)
+        self._edit = line_edit
+        self._timer = QtCore.QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(int(_phenocam_setting("Phenocam_Search_Help_Delay_ms")))
+        self._timer.timeout.connect(self._show)
+        self._popup = QtWidgets.QFrame(line_edit, QtCore.Qt.ToolTip)
+        self._popup.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #000000; }"
+                                  "QLabel { color: #000000; border: none; }")
+        lay = QtWidgets.QVBoxLayout(self._popup)
+        lbl = QtWidgets.QLabel(help_html)
+        lbl.setTextFormat(QtCore.Qt.RichText)
+        lay.addWidget(lbl)
+        line_edit.installEventFilter(self)
+        line_edit.textEdited.connect(lambda _t: self._hide())
+
+    def _show(self):
+        self._popup.adjustSize()
+        pos = self._edit.mapToGlobal(QtCore.QPoint(0, self._edit.height()))
+        screen = QtWidgets.QApplication.screenAt(pos)
+        if screen is not None:
+            avail = screen.availableGeometry()
+            pos.setY(min(pos.y(), avail.bottom() - self._popup.height()))
+            pos.setX(min(pos.x(), avail.right() - self._popup.width()))
+        self._popup.move(pos)
+        self._popup.show()
+
+    def _hide(self):
+        try:
+            self._timer.stop()
+            self._popup.hide()
+        except RuntimeError:
+            pass   # popup already destroyed during application shutdown
+
+    def eventFilter(self, obj, event):
+        if obj is self._edit:
+            t = event.type()
+            if t == QtCore.QEvent.Enter:
+                self._timer.start()
+            elif t in (QtCore.QEvent.Leave, QtCore.QEvent.KeyPress, QtCore.QEvent.Hide):
+                self._hide()
+        return False
+
+
+class PhenocamSearchHelpFilter(SearchHelpFilter):
+    def __init__(self, line_edit, parent=None):
+        super().__init__(line_edit, _phenocam_search_help_html(), parent)
+
+
+def _search_error_label():
+    """Red line under a search field for messages like "Unknown field: grp"."""
+    lbl = QtWidgets.QLabel("")
+    lbl.setStyleSheet(f"QLabel {{ color: {_phenocam_setting('Phenocam_Error_Color')}; }}")
+    lbl.setVisible(False)
+    return lbl
+
+
+# ======================================================================================================================
+# ZOOMABLE IMAGE PANEL (latest/midday site images on the NEON, USGS and PhenoCam tabs)
+# ======================================================================================================================
+# Tuning values for the image panel. Each can be overridden by a JsonEditor entry of the same name.
+IMAGE_VIEW_DEFAULTS = {
+    "Image_Zoom_Step":           1.25,   # zoom factor per + / - click or mouse-wheel notch
+    "Image_Zoom_Min_Percent":    5.0,    # smallest zoom allowed
+    "Image_Zoom_Max_Percent":    800.0,  # largest zoom allowed
+    "Image_Zoom_Button_Size_px": 30,     # width and height of the zoom buttons
+}
+
+
+class _ZoomGraphicsView(QtWidgets.QGraphicsView):
+    """Graphics view that zooms with the mouse wheel (around the cursor) and pans by dragging."""
+    wheelZoom = QtCore.pyqtSignal(float)   # zoom factor requested by the wheel
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setScene(QtWidgets.QGraphicsScene(self))
+        self.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QtWidgets.QGraphicsView.AnchorViewCenter)
+        self.setDragMode(QtWidgets.QGraphicsView.ScrollHandDrag)
+        self.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.setStyleSheet("QGraphicsView { background: transparent; }")
+        self.setAlignment(QtCore.Qt.AlignCenter)
+
+    def wheelEvent(self, event):
+        steps = event.angleDelta().y() / 120.0
+        if steps:
+            step = float(_phenocam_setting("Image_Zoom_Step"))
+            self.wheelZoom.emit(step ** steps)
+        event.accept()
+
+
+class ZoomImagePanel(QtWidgets.QWidget):
+    """
+    Image panel with stacked + / - / 100% / Fit buttons on the left, mouse-wheel zoom,
+    drag-to-pan, and scroll bars when the image is larger than the panel.
+
+    The tab's existing QLabel is kept and shown for text messages ("Loading...",
+    "No image available."); the zoomable view is shown when an image is set.
+    A new image opens in Fit; re-setting the same image keeps the current zoom.
+    """
+
+    def __init__(self, message_label, parent=None):
+        super().__init__(parent)
+        self._label = message_label
+        self._pixmap = None
+        self._fit = True
+
+        lay = QtWidgets.QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+
+        _filled, ghost = _button_styles()
+        size = int(_phenocam_setting("Image_Zoom_Button_Size_px"))
+        bar = QtWidgets.QVBoxLayout()
+        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(4)
+        self.btn_zoom_in = QtWidgets.QPushButton("+")
+        self.btn_zoom_out = QtWidgets.QPushButton("−")
+        self.btn_actual = QtWidgets.QPushButton("100%")
+        self.btn_fit = QtWidgets.QPushButton("Fit")
+        tips = ("Zoom in", "Zoom out", "Show the image at its original size", "Fit the image to the panel")
+        for btn, tip in zip((self.btn_zoom_in, self.btn_zoom_out, self.btn_actual, self.btn_fit), tips):
+            btn.setToolTip(tip)
+            btn.setStyleSheet(ghost + "QPushButton { padding: 0px; }")
+            btn.setFixedHeight(size)
+            btn.setMinimumWidth(size)
+            bar.addWidget(btn)
+        f = self.btn_zoom_in.font()
+        f.setBold(True)
+        f.setPointSizeF(f.pointSizeF() * 1.4)
+        self.btn_zoom_in.setFont(f)
+        self.btn_zoom_out.setFont(f)
+        # All buttons share one width, wide enough for "100%" with some breathing room.
+        width = max(size, self.btn_actual.fontMetrics().horizontalAdvance("100%") + size // 2)
+        for btn in (self.btn_zoom_in, self.btn_zoom_out, self.btn_actual, self.btn_fit):
+            btn.setFixedWidth(width)
+        bar.addStretch(1)
+        lay.addLayout(bar, 0)
+
+        self._view = _ZoomGraphicsView()
+        self._item = QtWidgets.QGraphicsPixmapItem()
+        self._item.setTransformationMode(QtCore.Qt.SmoothTransformation)
+        self._view.scene().addItem(self._item)
+
+        self._stack = QtWidgets.QStackedWidget()
+        self._label.setParent(None)
+        self._stack.addWidget(self._label)
+        self._stack.addWidget(self._view)
+        lay.addWidget(self._stack, 1)
+
+        self.btn_zoom_in.clicked.connect(lambda: self.zoom_by(float(_phenocam_setting("Image_Zoom_Step"))))
+        self.btn_zoom_out.clicked.connect(lambda: self.zoom_by(1.0 / float(_phenocam_setting("Image_Zoom_Step"))))
+        self.btn_actual.clicked.connect(self.actual_size)
+        self.btn_fit.clicked.connect(self.fit)
+        self._view.wheelZoom.connect(self.zoom_by)
+        self._set_buttons_enabled(False)
+
+    # ---- content ------------------------------------------------------------------------------------------------
+    def setPixmap(self, pixmap):
+        """Show an image. A different image opens in Fit; the same image keeps the current zoom."""
+        if pixmap is None or pixmap.isNull():
+            return
+        same = self._pixmap is not None and self._pixmap.cacheKey() == pixmap.cacheKey()
+        if not same:
+            self._pixmap = pixmap
+            self._item.setPixmap(pixmap)
+            self._view.setSceneRect(QtCore.QRectF(pixmap.rect()))
+            self._fit = True
+        self._stack.setCurrentWidget(self._view)
+        self._set_buttons_enabled(True)
+        if self._fit:
+            QtCore.QTimer.singleShot(0, self._apply_fit)
+
+    def showMessage(self, text):
+        """Show a text message in place of the image."""
+        self._label.clear()
+        self._label.setText(text)
+        self._stack.setCurrentWidget(self._label)
+        self._set_buttons_enabled(False)
+
+    def pixmap(self):
+        return self._pixmap
+
+    # ---- zoom ---------------------------------------------------------------------------------------------------
+    def _scale(self):
+        return self._view.transform().m11()
+
+    def zoom_by(self, factor):
+        if self._pixmap is None or self._stack.currentWidget() is not self._view:
+            return
+        lo = float(_phenocam_setting("Image_Zoom_Min_Percent")) / 100.0
+        hi = float(_phenocam_setting("Image_Zoom_Max_Percent")) / 100.0
+        target = max(lo, min(hi, self._scale() * factor))
+        self._fit = False
+        self._set_scrollbars(True)
+        self._view.scale(target / self._scale(), target / self._scale())
+
+    def actual_size(self):
+        if self._pixmap is None:
+            return
+        self._fit = False
+        self._set_scrollbars(True)
+        self._view.resetTransform()
+        self._view.centerOn(self._item)
+
+    def fit(self):
+        self._fit = True
+        self._apply_fit()
+
+    def _apply_fit(self):
+        if self._pixmap is None or not self._fit:
+            return
+        self._set_scrollbars(False)
+        self._view.resetTransform()
+        self._view.fitInView(self._item, QtCore.Qt.KeepAspectRatio)
+
+    def _set_scrollbars(self, on):
+        policy = QtCore.Qt.ScrollBarAsNeeded if on else QtCore.Qt.ScrollBarAlwaysOff
+        self._view.setHorizontalScrollBarPolicy(policy)
+        self._view.setVerticalScrollBarPolicy(policy)
+
+    def _set_buttons_enabled(self, on):
+        for b in (self.btn_zoom_in, self.btn_zoom_out, self.btn_actual, self.btn_fit):
+            b.setEnabled(on)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._fit:
+            self._apply_fit()
+
+
+# ======================================================================================================================
 # PHENOCAM BACKGROUND WORKERS
 # ======================================================================================================================
 class PhenocamPreviewFetcher(QtCore.QThread):
     result = QtCore.pyqtSignal(object, str)
-    def __init__(self, site_name, parent=None, roi_name=None):
+    def __init__(self, site_name, parent=None, roi_name=None, last_date=None, search_days=30):
         super().__init__(parent)
         self.site_name = site_name
         self.roi_name  = roi_name  # e.g. "NEON.D01.BART.DP1.00033_DB_1000"
+        # Search backwards from the site's last image date (from the PhenoCam API),
+        # so inactive sites go straight to days that have images instead of
+        # walking back from today through days that never will.
+        self.last_date   = last_date
+        self.search_days = search_days
+        self._cancelled  = False
+    def cancel(self):
+        self._cancelled = True
     def run(self):
         import urllib.request, datetime as dt_mod
         from appcore.phenocam.PhenoCam import PhenoCam
         today = dt_mod.date.today()
+        if self.last_date is not None and self.last_date < today:
+            today = self.last_date
         t0, t1 = dt_mod.time(11, 0), dt_mod.time(13, 0)
         # Extract ROI type prefix for filename filtering (e.g. "DB" from "..._DB_1000")
         roi_filter = None
@@ -304,7 +850,9 @@ class PhenocamPreviewFetcher(QtCore.QThread):
             if len(parts) >= 2:
                 roi_filter = parts[-2]  # e.g. "DB", "EN", "SH", etc.
         img_url = None
-        for offset in range(30):
+        for offset in range(self.search_days):
+            if self._cancelled:
+                return
             check = today - dt_mod.timedelta(days=offset)
             url = (f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
                    f"{check.year}/{str(check.month).zfill(2)}/{str(check.day).zfill(2)}")
@@ -321,8 +869,10 @@ class PhenocamPreviewFetcher(QtCore.QThread):
                     break
             except Exception:
                 pass
+        if self._cancelled:
+            return
         if img_url is None:
-            self.result.emit(None, "No recent images found.")
+            self.result.emit(None, "No image available.")
             return
         try:
             data = urllib.request.urlopen(img_url, timeout=15).read()
@@ -332,6 +882,106 @@ class PhenocamPreviewFetcher(QtCore.QThread):
                              "" if not qimg.isNull() else "Could not decode image.")
         except Exception as e:
             self.result.emit(None, f"Error: {e}")
+
+
+class PhenocamDailyCountsWorker(QtCore.QThread):
+    """
+    Fetches each site's per-day RGB image counts from the PhenoCam API
+    (/api/dailycounts/?site=...). Two requests per site: one to read the total
+    number of days, one to fetch them all.
+    """
+    siteDone = QtCore.pyqtSignal(str, object)   # site, {ISO date: rgb_count} or None on error
+    done = QtCore.pyqtSignal()
+
+    URL = "https://phenocam.nau.edu/api/dailycounts/"
+
+    def __init__(self, sites, parent=None):
+        super().__init__(parent)
+        self.sites = list(sites)
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        from urllib.parse import urlencode
+        from appcore.http_client import TimeoutSession
+        session = TimeoutSession()
+        for site in self.sites:
+            if self._cancelled:
+                return
+            try:
+                first = session.get(f"{self.URL}?{urlencode({'site': site, 'limit': 1, 'format': 'json'})}")
+                first.raise_for_status()
+                total = int(first.json().get("count", 0))
+                counts = {}
+                if total:
+                    resp = session.get(f"{self.URL}?{urlencode({'site': site, 'limit': total, 'format': 'json'})}")
+                    resp.raise_for_status()
+                    for rec in resp.json().get("results", []):
+                        if rec.get("site") == site and rec.get("local_date"):
+                            counts[str(rec["local_date"])[:10]] = int(rec.get("rgb_count") or 0)
+            except Exception as e:
+                print(f"[PhenocamDailyCountsWorker] {site}: {e}")
+                counts = None
+            if self._cancelled:
+                return
+            self.siteDone.emit(site, counts)
+        self.done.emit()
+
+
+class PhenocamDayPagesWorker(QtCore.QThread):
+    """
+    Lists image times for (site, day) pairs from PhenoCam's daily browse pages
+    (no image downloads), a few pages at a time. Used only when the time window
+    is narrower than the whole day, and only for days known to have images.
+    """
+    dayDone = QtCore.pyqtSignal(str, str, object)   # site, ISO date, [(h, m, s), ...] or None on error
+    done = QtCore.pyqtSignal()
+
+    def __init__(self, site_days, parallel=4, parent=None):
+        super().__init__(parent)
+        self.site_days = list(site_days)              # [(site, datetime.date), ...]
+        self.parallel = max(1, int(parallel))
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def _list_day(self, site, day):
+        import datetime as dt_mod
+        from appcore.phenocam.PhenoCam import PhenoCam
+        if self._cancelled:
+            return site, day, None
+        midnight = dt_mod.time(0, 0, 0)
+        # Trailing slash avoids a 301 redirect on every request.
+        url = (f"https://phenocam.nau.edu/webcam/browse/{site}/"
+               f"{day.year}/{str(day.month).zfill(2)}/{str(day.day).zfill(2)}/")
+        try:
+            # start == end == 00:00 lists every image of the day
+            images = PhenoCam().getVisibleImages(url, midnight, midnight).getVisibleList()
+            times = []
+            for img in images:
+                stamp = os.path.basename(img.fullPathAndFilename).split("_")[-1]
+                times.append((int(stamp[0:2]), int(stamp[2:4]), int(stamp[4:6])))
+            return site, day, times
+        except Exception as e:
+            print(f"[PhenocamDayPagesWorker] {site} {day}: {e}")
+            return site, day, None
+
+    def run(self):
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=self.parallel) as pool:
+            futures = [pool.submit(self._list_day, site, day) for site, day in self.site_days]
+            for f in as_completed(futures):
+                if self._cancelled:
+                    for other in futures:
+                        other.cancel()
+                    return
+                site, day, times = f.result()
+                self.dayDone.emit(site, day.isoformat(), times)
+        if not self._cancelled:
+            self.done.emit()
 
 
 class PhenocamDownloadWorker(QtCore.QThread):
@@ -527,6 +1177,52 @@ class USGSStartupFetcher(QtCore.QThread):
             self.result.emit(None, {}, [])
 
 
+def _fix_mojibake(text):
+    """Repair UTF-8 text that was decoded as Latin-1 (e.g. 'GuÃ¡nica' -> 'Guánica'); other text is unchanged."""
+    if not isinstance(text, str) or not any(ch in text for ch in "ÃÂ"):
+        return text
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
+class NEONSitesProductsFetcher(QtCore.QThread):
+    """
+    Fetches every NEON site's data products in one request (GET {server}sites), in the
+    background. Emits {site code: {"domain", "state", "domainName", "products": [
+    {"code", "title", "months"}]}} or None on failure. Fields are the same ones the
+    per-site request (FetchSiteInfoFromNEON) already reads.
+    """
+    result = QtCore.pyqtSignal(object)
+
+    def __init__(self, server, parent=None):
+        super().__init__(parent)
+        self.server = server
+
+    def run(self):
+        try:
+            from appcore.http_client import TimeoutSession
+            resp = TimeoutSession().get(f"{self.server}sites")
+            resp.raise_for_status()
+            out = {}
+            for site in resp.json().get("data", []):
+                code = site.get("siteCode")
+                if not code:
+                    continue
+                products = [{"code": p.get("dataProductCode", ""),
+                             "title": _fix_mojibake(p.get("dataProductTitle", "")),
+                             "months": list(p.get("availableMonths") or [])}
+                            for p in site.get("dataProducts", []) or []]
+                products.sort(key=lambda p: p["code"])
+                out[code] = {"domain": site.get("domainCode", ""), "state": site.get("stateCode", ""),
+                             "domainName": site.get("domainName", ""), "products": products}
+            self.result.emit(out)
+        except Exception as e:
+            print(f"[NEONSitesProductsFetcher] {e}")
+            self.result.emit(None)
+
+
 class NEONStartupFetcher(QtCore.QThread):
     """Fetches NEON field site table in a background thread at startup."""
     result = QtCore.pyqtSignal(object, object)  # (status, siteList)
@@ -616,18 +1312,15 @@ class MainWindow(QMainWindow):
         resizeControls.resizeTab_0(self, event)
         self.NEON_DisplayLatestImage()
 
-        # TAB 2 - USGS SITES — keep horizontal splitter 50/50 until user moves it
-        if not getattr(self, '_usgs_splitter_moved_flag', False):
-            half = event.size().width() // 2
-            self.splitter_USGS_Horizontal.setSizes([half, half])
+        # TAB 2 - USGS SITES — the code-built layout keeps the site list at its
+        # width and gives the image whatever height the table doesn't need.
+        if hasattr(self, "_usgs_bottom_panel"):
+            self._usgs_fit_layout()
 
-        # TAB 2 - USGS SITES — keep vertical splitter 75/25 until user moves it
-        if not getattr(self, '_usgs_vertical_splitter_moved_flag', False):
-            h = event.size().height()
-            self.splitter_USGS_Vertical.setSizes([int(h * 0.65), int(h * 0.35)])
-
-        # TAB 0 - NEON SITES — keep splitters 50/50 until user moves them
-        if not getattr(self, '_neon_splitter_moved_flag', False):
+        # TAB 0 - NEON SITES — code-built layout sizes itself like the USGS tab
+        if getattr(self, "_neon_layout_built", False):
+            self._neon_fit_layout()
+        elif not getattr(self, '_neon_splitter_moved_flag', False):
             half = event.size().width() // 2
             self.splitter_NEON_Top.setSizes([half, half])
             self.splitter_NEON_Bottom.setSizes([half, half])
@@ -1088,6 +1781,14 @@ class MainWindow(QMainWindow):
         self.pushButton_USGSDownload.setStyleSheet('QPushButton {background-color: steelblue;}')
         self.pushButton_USGS_BrowseImageFolder.setStyleSheet('QPushButton {background-color: steelblue;}')
 
+        # USGS tab layout is built in code to match the PhenoCam tab (sites on the
+        # left; image over the table on the right). Restyles the buttons above.
+        self.setup_usgs_layout()
+
+        # NEON tab layout, built in code the same way (sites with details and products on
+        # the left; image over the checked-products table on the right).
+        self.setup_neon_layout()
+
         # INITIALIZE GUI CONTROLS
         # frame.NEON_listboxSites.setCurrentRow(1)
 
@@ -1478,26 +2179,10 @@ class MainWindow(QMainWindow):
             self.NEON_listboxSites.clear()
 
             for site in self.NEON_siteList:
-                site_item = QTreeWidgetItem([f"{site.siteID} - {site.siteName}"])
-                site_item.setData(0, QtCore.Qt.UserRole, site.siteID)
-                for label, value in [("Site ID", site.siteID),
-                                     ("Site Name", site.siteName),
-                                     ("Latitude", site.latitude),
-                                     ("Longitude", site.longitude),
-                                     ("PhenoCams", site.phenocamSite)]:
-                    child = QTreeWidgetItem([f"{label}: {value}"])
-                    child.setFlags(child.flags() & ~QtCore.Qt.ItemIsSelectable)
-                    url = next((w for w in str(value).split() if w.startswith("http")), None)
-                    if url:
-                        child.setData(0, QtCore.Qt.UserRole + 1, url)
-                        child.setForeground(0, QtGui.QBrush(QtGui.QColor("#1a6fc4")))
-                        font = child.font(0)
-                        font.setUnderline(True)
-                        child.setFont(0, font)
-                    site_item.addChild(child)
-                self.NEON_listboxSites.addTopLevelItem(site_item)
+                self.NEON_listboxSites.addTopLevelItem(self._neon_build_site_item(site))
 
             self.NEON_listboxSites.collapseAll()
+            self._neon_apply_filter()
 
             # Add NEON map pins
             for coords in self.NEON_siteList:
@@ -1742,6 +2427,32 @@ class MainWindow(QMainWindow):
             ("date_first", "First Date"),
             ("date_last",  "Last Date"),
             ("infrared",   "Infrared"),
+            ("contact1",   "Contact 1"),
+            ("contact2",   "Contact 2"),
+            # Site metadata (nested under "sitemetadata" in the API; json_normalize flattens it)
+            ("sitemetadata.site_description",      "Location"),
+            ("sitemetadata.group",                 "Group"),
+            ("sitemetadata.camera_description",    "Camera Description"),
+            ("sitemetadata.camera_orientation",    "Camera Orientation"),
+            ("sitemetadata.site_type",             "Site Type"),
+            ("sitemetadata.site_meteorology",      "Site Meteorology"),
+            ("sitemetadata.flux_data",             "Flux Data"),
+            ("sitemetadata.flux_networks",         "Flux Networks"),
+            ("sitemetadata.flux_sitenames",        "Flux Site Names"),
+            ("sitemetadata.MAT_site",              "Mean Annual Temperature, Site (\u00b0C)"),
+            ("sitemetadata.MAP_site",              "Mean Annual Precipitation, Site (mm)"),
+            ("sitemetadata.MAT_daymet",            "Mean Annual Temperature, Daymet (\u00b0C)"),
+            ("sitemetadata.MAP_daymet",            "Mean Annual Precipitation, Daymet (mm)"),
+            ("sitemetadata.MAT_worldclim",         "Mean Annual Temperature, WorldClim (\u00b0C)"),
+            ("sitemetadata.MAP_worldclim",         "Mean Annual Precipitation, WorldClim (mm)"),
+            ("sitemetadata.dominant_species",      "Dominant Species"),
+            ("sitemetadata.primary_veg_type",      "Primary Vegetation Type"),
+            ("sitemetadata.secondary_veg_type",    "Secondary Vegetation Type"),
+            ("sitemetadata.ecoregion",             "North America Ecoregion"),
+            ("sitemetadata.koeppen_geiger",        "K\u00f6ppen-Geiger Climate"),
+            ("sitemetadata.landcover_igbp",        "IGBP Land Cover"),
+            ("sitemetadata.site_acknowledgements", "Acknowledgements"),
+            ("sitemetadata.modified",              "Metadata Last Modified"),
         ]
 
         ROI_LINK_FIELDS = [
@@ -1753,14 +2464,40 @@ class MainWindow(QMainWindow):
             ("three_day_transition_dates", "3-Day Transition Dates"),
         ]
 
+        self.treeWidget_Phenocam.blockSignals(True)
         self.treeWidget_Phenocam.clear()
+        self._phenocam_records = {}   # site -> searchable fields (see PhenocamSearchQuery)
+
+        def _text(val):
+            if isinstance(val, list):
+                return ", ".join(str(v.get("Name", v)) if isinstance(v, dict) else str(v) for v in val).lower()
+            if val is None or (not isinstance(val, str) and pd.isna(val)):
+                return ""
+            return str(val).strip().lower()
+
+        def _number(val):
+            try:
+                x = float(val)
+                return None if pd.isna(x) else x
+            except (TypeError, ValueError):
+                return None
 
         for site_name, group in cameras_df.groupby(site_col):
-            # ── Top-level: site name only ──────────────────────────────────
+            # ── Top-level: site name only, with a checkbox to queue it for download ──
             site_item = QTreeWidgetItem([str(site_name)])
             site_item.setData(0, QtCore.Qt.UserRole, str(site_name))
+            site_item.setFlags(site_item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            site_item.setCheckState(0, QtCore.Qt.Unchecked)
 
             row = group.iloc[0]
+
+            # Gray out inactive cameras, using the theme's disabled-text color.
+            # The item stays selectable so archived imagery can still be downloaded.
+            active_val = row.get("active", None)
+            if active_val is False or str(active_val).strip().lower() == "false":
+                site_item.setForeground(0, QtGui.QBrush(
+                    self.treeWidget_Phenocam.palette().color(QtGui.QPalette.Disabled, QtGui.QPalette.Text)))
+                site_item.setToolTip(0, "Inactive camera")
 
             # Store utc_offset in UserRole+3 for timezone-aware download filtering
             # on strictly PhenoCam sites (non-NEON), whose filenames are UTC.
@@ -1774,6 +2511,11 @@ class MainWindow(QMainWindow):
             # ── Camera detail fields directly under site ───────────────────
             for col, label in CAMERA_FIELDS:
                 val = row.get(col, None)
+                if isinstance(val, list):
+                    # flux_networks is a list of {"Name", "NetworkURL", "Description"}
+                    val = ", ".join(str(v.get("Name", v)) if isinstance(v, dict) else str(v) for v in val)
+                    if not val:
+                        continue
                 if val is not None and pd.notna(val):
                     detail_item = QTreeWidgetItem([f"{label}: {val}"])
                     site_item.addChild(detail_item)
@@ -1812,9 +2554,51 @@ class MainWindow(QMainWindow):
                         link_item.setFont(0, font)
                         site_item.addChild(link_item)
 
+            # ── Searchable record for this site ────────────────────────────
+            roi_names = []
+            if roi_site_col is not None and not rois_df.empty:
+                roi_names = [_text(n) for n in rois_df.loc[rois_df[roi_site_col] == site_name, "roi_name"]] \
+                    if "roi_name" in rois_df.columns else []
+            g = lambda col: _text(row.get(col, None))
+            self._phenocam_records[str(site_name)] = {
+                "fields": {
+                    "site":      [str(site_name).lower()],
+                    "location":  [g("sitemetadata.site_description")],
+                    "group":     [g("sitemetadata.group")],
+                    "type":      [g("sitemetadata.site_type")],
+                    "veg":       [g("sitemetadata.primary_veg_type"), g("sitemetadata.secondary_veg_type")],
+                    "species":   [g("sitemetadata.dominant_species")],
+                    "camera":    [g("sitemetadata.camera_description")],
+                    "orient":    [g("sitemetadata.camera_orientation")],
+                    "contact":   [g("contact1"), g("contact2")],
+                    "roi":       roi_names,
+                    "ecoregion": [g("sitemetadata.ecoregion")],
+                    "koppen":    [g("sitemetadata.koeppen_geiger")],
+                    "igbp":      [g("sitemetadata.landcover_igbp")],
+                    "flux":      [g("sitemetadata.flux_data")],
+                    "active":    [g("active")],
+                },
+                "numbers": {
+                    "lat":  _number(row.get("Lat", None)),
+                    "lon":  _number(row.get("Lon", None)),
+                    "elev": _number(row.get("Elev", None)),
+                    "mat":  _number(row.get("sitemetadata.MAT_daymet", None)),
+                    "map":  _number(row.get("sitemetadata.MAP_daymet", None)),
+                },
+                "dates": {
+                    "first": g("date_first")[:10],
+                    "last":  g("date_last")[:10],
+                },
+                "active": g("active") != "false",
+            }
+
             self.treeWidget_Phenocam.addTopLevelItem(site_item)
 
         self.treeWidget_Phenocam.collapseAll()
+        self.treeWidget_Phenocam.blockSignals(False)
+        if hasattr(self, "phenocam_table"):
+            self._phenocam_rebuild_table()
+            self._phenocam_apply_filter()
 
         ###JES - THIS INTERACTION WITH THE PHENOCAM SERVERS TAKES ON THE ORDER OF 4 MINUTES; SO I
         if 0:
@@ -1853,17 +2637,66 @@ class MainWindow(QMainWindow):
         return row, date_edit, hour_spin, minute_spin
 
     def setup_phenocam_right_panel(self):
-        # ── LEFT: hard-cap the tree width; let it expand vertically ─────────────
-        self.treeWidget_Phenocam.setMaximumWidth(300)
+        # ── LEFT: tree fills the panel; the panel width is set by a splitter ─────
         self.treeWidget_Phenocam.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         # Expanding vertical policy lets the layout stretch the tree to fill the
         # full tab height rather than leaving dead space below it.
         self.treeWidget_Phenocam.setSizePolicy(
-            QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Expanding)
+            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding)
         # Remove AlignTop so the layout distributes space rather than pinning to top
         self.verticalLayout_PhenocamLeft.setAlignment(QtCore.Qt.Alignment())
-        self.horizontalLayout_Phenocam.setStretch(0, 1)
-        self.horizontalLayout_Phenocam.setStretch(1, 3)
+
+        self._pc_primary_btn_style, self._pc_ghost_btn_style = _button_styles()
+
+        # ── LEFT: search row above the tree, count + inactive toggle below it ───
+        left = self.verticalLayout_PhenocamLeft
+        tree_idx = max(left.indexOf(self.treeWidget_Phenocam), 0)
+
+        search_row = QtWidgets.QHBoxLayout()
+        search_row.setSpacing(4)
+        self.phenocam_search_edit = QtWidgets.QLineEdit()
+        self.phenocam_search_edit.setPlaceholderText("Enter search terms here")
+        self.phenocam_search_edit.setClearButtonEnabled(True)
+        pal = self.phenocam_search_edit.palette()
+        if hasattr(QtGui.QPalette, "PlaceholderText"):
+            pal.setColor(QtGui.QPalette.PlaceholderText,
+                         QtGui.QColor(_phenocam_setting("Phenocam_Placeholder_Color")))
+            self.phenocam_search_edit.setPalette(pal)
+        self.phenocam_search_btn = QtWidgets.QPushButton("Search")
+        self.phenocam_search_btn.setStyleSheet(self._pc_ghost_btn_style)
+        search_row.addWidget(self.phenocam_search_edit, 1)
+        search_row.addWidget(self.phenocam_search_btn, 0)
+        left.insertLayout(tree_idx, search_row)
+
+        self.phenocam_search_error = QtWidgets.QLabel("")
+        self.phenocam_search_error.setStyleSheet(
+            f"QLabel {{ color: {_phenocam_setting('Phenocam_Error_Color')}; }}")
+        self.phenocam_search_error.setVisible(False)
+        left.insertWidget(tree_idx + 1, self.phenocam_search_error)
+
+        # Footer: site count on one line, the inactive toggle below it (the list is too
+        # narrow for both on one line without the count wrapping).
+        footer = QtWidgets.QVBoxLayout()
+        footer.setSpacing(2)
+        self.phenocam_count_label = QtWidgets.QLabel("")
+        self.phenocam_count_label.setWordWrap(True)
+        self.phenocam_inactive_btn = QtWidgets.QPushButton()
+        self.phenocam_inactive_btn.setStyleSheet(self._pc_ghost_btn_style)
+        self.phenocam_inactive_btn.clicked.connect(self._phenocam_toggle_inactive)
+        footer.addWidget(self.phenocam_count_label)
+        footer.addWidget(self.phenocam_inactive_btn, 0, QtCore.Qt.AlignRight)
+        left.insertLayout(left.indexOf(self.treeWidget_Phenocam) + 1, footer)
+
+        self._pc_show_inactive = bool(_phenocam_setting("Phenocam_Show_Inactive"))
+        self._pc_query = PhenocamSearchQuery("")
+        self._pc_search_timer = QtCore.QTimer(self)
+        self._pc_search_timer.setSingleShot(True)
+        self._pc_search_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+        self._pc_search_timer.timeout.connect(self._phenocam_run_search)
+        self.phenocam_search_edit.textChanged.connect(lambda _t: self._pc_search_timer.start())
+        self.phenocam_search_edit.returnPressed.connect(self._phenocam_run_search)
+        self.phenocam_search_btn.clicked.connect(self._phenocam_run_search)
+        self._pc_search_help = PhenocamSearchHelpFilter(self.phenocam_search_edit, parent=self)
 
         # ── RIGHT: clear verticalLayout_PhenocamRight and rebuild ───────────────
         rl = self.verticalLayout_PhenocamRight
@@ -1875,39 +2708,57 @@ class MainWindow(QMainWindow):
         rl.setContentsMargins(4, 4, 4, 4)
         rl.setSpacing(6)
 
-        # Preview fixed at half the known tab content height (800px tab - ~30px tabbar = 770px)
+        # Preview (top of a vertical splitter). It takes Phenocam_Preview_Fraction of the
+        # height until the user drags the splitter; the dragged height is then kept.
         self.phenocam_preview_label = self.labelPhenocamImage
         self.phenocam_preview_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.phenocam_preview_label.setStyleSheet(
-            "QLabel { background-color: #1a1a1a; color: #888888; }")
-        self.phenocam_preview_label.setText("Select a site to preview the latest image")
+        self.phenocam_preview_label.setStyleSheet("QLabel { background: transparent; color: palette(text); }")
         self.phenocam_preview_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        self.phenocam_preview_label.setFixedHeight(385)
-        rl.addWidget(self.phenocam_preview_label, stretch=0)
+            QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
+        # Zoomable panel around the label (label shows messages; the panel shows the image)
+        self.phenocam_image_panel = ZoomImagePanel(self.phenocam_preview_label)
+        self.phenocam_image_panel.setMinimumHeight(int(_phenocam_setting("Phenocam_Preview_Min_Height_px")))
+        self.phenocam_image_panel.showMessage("Select a site to preview the latest image")
+        self._phenocam_pixmap = None
 
-        # (no maximum height cap — size policy handles vertical expansion)
+        bottom = QtWidgets.QWidget()
+        bl = QtWidgets.QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
 
-        # Date / Time Range
-        dt_group = QtWidgets.QGroupBox("Date / Time Range")
-        dt_form  = QtWidgets.QFormLayout(dt_group)
-        dt_form.setContentsMargins(8, 4, 8, 4)
-        dt_form.setVerticalSpacing(4)
-        now   = QtCore.QDate.currentDate()
-        (start_row, self.phenocam_start_date,
-         self.phenocam_start_hour, self.phenocam_start_minute) = \
-            self._make_date_time_row(now.addDays(-30), 0, 0)
-        (end_row, self.phenocam_end_date,
-         self.phenocam_end_hour, self.phenocam_end_minute) = \
-            self._make_date_time_row(now, 23, 59)
-        dt_form.addRow("Start:", start_row)
-        dt_form.addRow("End:",   end_row)
-        rl.addWidget(dt_group, stretch=0)
+        # Download table: row 0 sets the range for all checked sites; one row per checked site
+        self.phenocam_table = QtWidgets.QTableWidget(0, 7)
+        self.phenocam_table.setHorizontalHeaderLabels(
+            ["Site", "First Date", "Last Date", "Start Date", "End Date", "Time Window", "Image Count"])
+        hdr = self.phenocam_table.horizontalHeader()
+        hdr_font = QFont()
+        hdr_font.setBold(True)
+        hdr.setFont(hdr_font)
+        hdr.setSectionResizeMode(QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setStyleSheet(_data_table_header_style())
+        self.phenocam_table.verticalHeader().setVisible(False)
+        self.phenocam_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.phenocam_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        bl.addWidget(self.phenocam_table, 0)
+        self._pc_bottom_panel = bottom   # its height follows the table (see _phenocam_size_table)
+        self._pc_rows = {}          # site -> (start_edit, end_edit, time_start, time_end)
+        self._pc_daily = {}         # site -> {ISO date: rgb_count} from /api/dailycounts/, or None on error
+        self._pc_day_cache = {}     # (site, ISO date) -> [(h, m, s), ...] image times from a browse page
+        self._pc_day_failed = set() # (site, ISO date) browse pages that could not be read
+        self._pc_daily_worker = None
+        self._pc_count_worker = None
+        self._pc_count_timer = QtCore.QTimer(self)
+        self._pc_count_timer.setSingleShot(True)
+        self._pc_count_timer.setInterval(int(_phenocam_setting("Phenocam_Count_Debounce_ms")))
+        self._pc_count_timer.timeout.connect(self._phenocam_start_count)
+        self._pc_all_row = None
+        self._phenocam_add_all_row()
+        self._phenocam_size_table()
 
-        # Download Folder
-        folder_group  = QtWidgets.QGroupBox("Download Folder")
-        folder_layout = QtWidgets.QHBoxLayout(folder_group)
-        folder_layout.setContentsMargins(8, 4, 8, 4)
+        # Folder row: [path][Browse][Download Images]
+        folder_row = QtWidgets.QHBoxLayout()
+        folder_row.setSpacing(4)
         self.phenocam_folder_edit = QtWidgets.QLineEdit()
         self.phenocam_folder_edit.setPlaceholderText("Select output folder...")
         try:
@@ -1917,66 +2768,641 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.phenocam_browse_btn = QtWidgets.QPushButton("Browse...")
-        self.phenocam_browse_btn.setFixedWidth(80)
-        self.phenocam_browse_btn.setStyleSheet(
-            "QPushButton { background-color: steelblue; color: white; }")
+        self.phenocam_browse_btn.setStyleSheet(self._pc_ghost_btn_style)
         self.phenocam_browse_btn.clicked.connect(self._phenocam_browse_folder)
-        folder_layout.addWidget(self.phenocam_folder_edit)
-        folder_layout.addWidget(self.phenocam_browse_btn)
-        rl.addWidget(folder_group, stretch=0)
+        self.phenocam_download_btn = QtWidgets.QPushButton("Download Images")
+        self.phenocam_download_btn.setStyleSheet(self._pc_primary_btn_style)
+        self.phenocam_download_btn.clicked.connect(self._phenocam_download_clicked)
+        folder_row.addWidget(self.phenocam_folder_edit, 1)
+        folder_row.addWidget(self.phenocam_browse_btn, 0)
+        folder_row.addWidget(self.phenocam_download_btn, 0)
+        bl.addLayout(folder_row)
 
         # Progress + status
         self.phenocam_progress_bar = QtWidgets.QProgressBar()
         self.phenocam_progress_bar.setRange(0, 100)
         self.phenocam_progress_bar.setFixedHeight(16)
         self.phenocam_progress_bar.setVisible(False)
-        rl.addWidget(self.phenocam_progress_bar, stretch=0)
+        bl.addWidget(self.phenocam_progress_bar)
         self.phenocam_status_label = QtWidgets.QLabel("")
         self.phenocam_status_label.setAlignment(QtCore.Qt.AlignCenter)
         self.phenocam_status_label.setVisible(False)
-        rl.addWidget(self.phenocam_status_label, stretch=0)
+        bl.addWidget(self.phenocam_status_label)
 
-        # Download button
-        self.phenocam_download_btn = QtWidgets.QPushButton("Download Images")
-        self.phenocam_download_btn.setStyleSheet(
-            "QPushButton { background-color: steelblue; color: white; font-weight: bold; }")
-        self.phenocam_download_btn.setMinimumHeight(32)
-        self.phenocam_download_btn.clicked.connect(self._phenocam_download_clicked)
-        rl.addWidget(self.phenocam_download_btn, stretch=0)
+        self.phenocam_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.phenocam_splitter.setChildrenCollapsible(False)
+        self.phenocam_splitter.addWidget(self.phenocam_image_panel)
+        self.phenocam_splitter.addWidget(bottom)
+        self.phenocam_splitter.setStretchFactor(0, 0)
+        self.phenocam_splitter.setStretchFactor(1, 1)
+        self.phenocam_splitter.splitterMoved.connect(self._phenocam_splitter_moved)
+        saved_h = _phenocam_setting("Phenocam_Preview_Height_px")
+        self._pc_preview_user_height = int(saved_h) if saved_h else None
+        rl.addWidget(self.phenocam_splitter, 1)
 
-        # Trailing spacer so controls pin to top
-        rl.addStretch(1)
+        # ── Resizable left panel: move both columns into a horizontal splitter ──
+        # Each column becomes a widget, so the search row and footer buttons are
+        # bounded by the panel width and shrink with it.
+        hl = self.horizontalLayout_Phenocam
+        panels = []
+        for lay in (self.verticalLayout_PhenocamLeft, self.verticalLayout_PhenocamRight):
+            hl.removeItem(lay)
+            lay.setParent(None)
+            panel = QtWidgets.QWidget()
+            panel.setLayout(lay)
+            panels.append(panel)
+        self.phenocam_left_panel, self.phenocam_right_panel = panels
+        self.phenocam_h_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        self.phenocam_h_splitter.setChildrenCollapsible(False)
+        self.phenocam_h_splitter.addWidget(self.phenocam_left_panel)
+        self.phenocam_h_splitter.addWidget(self.phenocam_right_panel)
+        self.phenocam_h_splitter.setStretchFactor(0, 0)
+        self.phenocam_h_splitter.setStretchFactor(1, 1)
+        hl.addWidget(self.phenocam_h_splitter)
+        left_w = int(_phenocam_setting("Phenocam_Left_Panel_Width_px"))
+        self.phenocam_h_splitter.setSizes([left_w, max(self.width() - left_w, left_w)])
+        self.phenocam_h_splitter.splitterMoved.connect(self._phenocam_h_splitter_moved)
 
         # Connect tree selection
         self.treeWidget_Phenocam.currentItemChanged.connect(self._phenocam_site_selected)
         # Open hyperlink items in the browser on click
         self.treeWidget_Phenocam.itemClicked.connect(self._phenocam_tree_item_clicked)
+        # Checking a site adds it to the download table
+        self.treeWidget_Phenocam.itemChanged.connect(self._phenocam_item_changed)
         self._phenocam_worker          = None
         self._phenocam_preview_fetcher = None
+        self._pc_queue                 = []
+        self._pc_queue_total           = 0
+        self._pc_downloaded            = 0
+
+        self._pc_restoring = False
+        self._pc_save_timer = QtCore.QTimer(self)
+        self._pc_save_timer.setSingleShot(True)
+        self._pc_save_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+        self._pc_save_timer.timeout.connect(self._phenocam_save_state)
+
+        self._phenocam_rebuild_table()
+        self._phenocam_apply_filter()
+        self._phenocam_restore_state()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # PHENOCAM SEARCH AND INACTIVE FILTER
+    # ------------------------------------------------------------------------------------------------------------------
+    def _phenocam_run_search(self):
+        self._pc_search_timer.stop()
+        self._pc_query = PhenocamSearchQuery(self.phenocam_search_edit.text())
+        self.phenocam_search_error.setText(self._pc_query.error)
+        self.phenocam_search_error.setVisible(bool(self._pc_query.error))
+        self._phenocam_apply_filter()
+
+    def _phenocam_toggle_inactive(self):
+        self._pc_show_inactive = not self._pc_show_inactive
+        try:
+            JsonEditor().update_json_entry("Phenocam_Show_Inactive", str(self._pc_show_inactive))
+        except Exception:
+            pass
+        self._phenocam_apply_filter()
+
+    def _phenocam_apply_filter(self):
+        if not hasattr(self, "phenocam_count_label"):
+            return
+        records = getattr(self, "_phenocam_records", {})
+        query = getattr(self, "_pc_query", None)
+        tree = self.treeWidget_Phenocam
+        total = shown = inactive_hidden = checked = 0
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            site = item.data(0, QtCore.Qt.UserRole)
+            rec = records.get(site)
+            total += 1
+            if item.checkState(0) == QtCore.Qt.Checked:
+                checked += 1
+            visible = True
+            if rec is not None and not rec["active"] and not self._pc_show_inactive:
+                visible = False
+                inactive_hidden += 1
+            if visible and query is not None and rec is not None and not query.matches(rec):
+                visible = False
+            item.setHidden(not visible)
+            shown += visible
+        parts = [f"{shown:,} of {total:,} sites shown" if shown != total else f"{total:,} sites"]
+        if inactive_hidden:
+            parts.append(f"{inactive_hidden:,} inactive hidden")
+        parts.append(f"{checked:,} checked")
+        self.phenocam_count_label.setText(", ".join(parts))
+        self.phenocam_inactive_btn.setText(
+            "Hide inactive sites" if self._pc_show_inactive else "Show inactive sites")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # PHENOCAM DOWNLOAD TABLE
+    # ------------------------------------------------------------------------------------------------------------------
+    def _phenocam_range_widgets(self, start_qdate, end_qdate, t_start, t_end):
+        start_edit = QtWidgets.QDateEdit(start_qdate)
+        end_edit = QtWidgets.QDateEdit(end_qdate)
+        for e in (start_edit, end_edit):
+            e.setCalendarPopup(True)
+            e.setDisplayFormat("yyyy-MM-dd")
+            e.setFrame(False)
+        time_cell = QtWidgets.QWidget()
+        tl = QtWidgets.QHBoxLayout(time_cell)
+        tl.setContentsMargins(2, 0, 2, 0)
+        tl.setSpacing(4)
+        time_start = QtWidgets.QTimeEdit(t_start)
+        time_end = QtWidgets.QTimeEdit(t_end)
+        for e in (time_start, time_end):
+            e.setDisplayFormat("HH:mm")
+            e.setFrame(False)
+        tl.addWidget(time_start)
+        tl.addWidget(QtWidgets.QLabel("to"))
+        tl.addWidget(time_end)
+        for e in (start_edit, end_edit):
+            e.dateChanged.connect(lambda _d: self._phenocam_schedule_save())
+            e.dateChanged.connect(lambda _d: self._phenocam_schedule_count())
+        for e in (time_start, time_end):
+            e.timeChanged.connect(lambda _t: self._phenocam_schedule_save())
+            e.timeChanged.connect(lambda _t: self._phenocam_schedule_count())  # cached days recount instantly
+        return start_edit, end_edit, time_cell, time_start, time_end
+
+    def _phenocam_add_all_row(self):
+        t = self.phenocam_table
+        t.insertRow(0)
+        today = QtCore.QDate.currentDate()
+        days = int(_phenocam_setting("Phenocam_Default_Range_Days"))
+        start_edit, end_edit, time_cell, ts, te = self._phenocam_range_widgets(
+            today.addDays(-days), today, QtCore.QTime(0, 0), QtCore.QTime(23, 59))
+        label = QTableWidgetItem("All checked sites")
+        f = label.font()
+        f.setBold(True)
+        label.setFont(f)
+        t.setItem(0, 0, label)
+        t.setItem(0, 1, QTableWidgetItem(""))
+        t.setItem(0, 2, QTableWidgetItem(""))
+        t.setCellWidget(0, 3, start_edit)
+        t.setCellWidget(0, 4, end_edit)
+        t.setCellWidget(0, 5, time_cell)
+        t.setItem(0, 6, self._phenocam_count_item("", bold=True))
+        self._pc_all_row = (start_edit, end_edit, ts, te)
+        for e in (start_edit, end_edit):
+            e.dateChanged.connect(lambda _d: self._phenocam_apply_all_row())
+        for e in (ts, te):
+            e.timeChanged.connect(lambda _t: self._phenocam_apply_all_row())
+
+    def _phenocam_fit_range(self, site, start_q, end_q):
+        """Shift a date range to fall inside the site's image record, keeping its length."""
+        rec = getattr(self, "_phenocam_records", {}).get(site, {})
+        first = QtCore.QDate.fromString(rec.get("dates", {}).get("first", ""), "yyyy-MM-dd")
+        last = QtCore.QDate.fromString(rec.get("dates", {}).get("last", ""), "yyyy-MM-dd")
+        span = start_q.daysTo(end_q)
+        # Trim the range to the site's record where they overlap.
+        if first.isValid() and start_q < first:
+            start_q = first
+        if last.isValid() and end_q > last:
+            end_q = last
+        # No overlap: keep the range length, placed at the nearer end of the record.
+        if end_q < start_q:
+            if last.isValid() and start_q > last:
+                end_q = last
+                start_q = end_q.addDays(-span)
+                if first.isValid() and start_q < first:
+                    start_q = first
+            else:
+                start_q = first
+                end_q = start_q.addDays(span)
+                if last.isValid() and end_q > last:
+                    end_q = last
+        return start_q, end_q
+
+    def _phenocam_apply_all_row(self):
+        a_start, a_end, a_ts, a_te = self._pc_all_row
+        for site, (s, e, ts, te) in self._pc_rows.items():
+            sq, eq = self._phenocam_fit_range(site, a_start.date(), a_end.date())
+            s.setDate(sq)
+            e.setDate(eq)
+            ts.setTime(a_ts.time())
+            te.setTime(a_te.time())
+
+    def _phenocam_add_site_row(self, site):
+        if site in self._pc_rows:
+            return
+        t = self.phenocam_table
+        row = t.rowCount()
+        t.insertRow(row)
+        rec = getattr(self, "_phenocam_records", {}).get(site, {})
+        a_start, a_end, a_ts, a_te = self._pc_all_row
+        sq, eq = self._phenocam_fit_range(site, a_start.date(), a_end.date())
+        start_edit, end_edit, time_cell, ts, te = self._phenocam_range_widgets(sq, eq, a_ts.time(), a_te.time())
+        t.setItem(row, 0, QTableWidgetItem(site))
+        t.setItem(row, 1, QTableWidgetItem(rec.get("dates", {}).get("first", "")))
+        t.setItem(row, 2, QTableWidgetItem(rec.get("dates", {}).get("last", "")))
+        t.setCellWidget(row, 3, start_edit)
+        t.setCellWidget(row, 4, end_edit)
+        t.setCellWidget(row, 5, time_cell)
+        t.setItem(row, 6, self._phenocam_count_item(""))
+        self._pc_rows[site] = (start_edit, end_edit, ts, te)
+        self._phenocam_size_table()
+        self._phenocam_schedule_count()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # PHENOCAM IMAGE COUNTS
+    # Counts come from PhenoCam's daily browse pages (image timestamps only, nothing is
+    # downloaded). Each day's times are cached per site, so changing the time window
+    # recounts instantly and changing dates only fetches days not seen before.
+    # ------------------------------------------------------------------------------------------------------------------
+    def _phenocam_count_item(self, text, bold=False):
+        item = QTableWidgetItem(text)
+        item.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        if bold:
+            f = item.font()
+            f.setBold(True)
+            item.setFont(f)
+        return item
+
+    def _phenocam_row_days(self, site):
+        """Days in the site's row range, trimmed to the site's image record."""
+        import datetime as dt_mod
+        s, e, _ts, _te = self._pc_rows[site]
+        start = s.date().toPyDate()
+        end = e.date().toPyDate()
+        rec = getattr(self, "_phenocam_records", {}).get(site, {}).get("dates", {})
+        try:
+            if rec.get("first"):
+                start = max(start, dt_mod.date.fromisoformat(rec["first"]))
+            if rec.get("last"):
+                end = min(end, dt_mod.date.fromisoformat(rec["last"]))
+        except ValueError:
+            pass
+        n = (end - start).days + 1
+        return [start + dt_mod.timedelta(days=i) for i in range(max(n, 0))]
+
+    @staticmethod
+    def _phenocam_full_day(t_start, t_end):
+        """True if the window covers the whole day (minute resolution, as the downloader uses)."""
+        import datetime as dt_mod
+        return t_start == dt_mod.time(0, 0) and t_end in (dt_mod.time(0, 0), dt_mod.time(23, 59))
+
+    def _phenocam_pages_needed(self, site, days, t_start, t_end):
+        """
+        Days whose browse page must be read to count this row. A full-day window
+        needs none where daily counts exist. A narrow window needs only days the
+        daily counts say have images. Days missing from the daily counts (not yet
+        tallied by PhenoCam, or the daily counts failed) always need their page.
+        """
+        daily = self._pc_daily.get(site) or {}
+        full = self._phenocam_full_day(t_start, t_end)
+        needed = []
+        for d in days:
+            iso = d.isoformat()
+            if iso in daily:
+                if full or daily[iso] == 0:
+                    continue
+            needed.append(d)
+        return needed
+
+    def _phenocam_schedule_count(self):
+        if hasattr(self, "_pc_count_timer"):
+            self._phenocam_update_counts()
+            self._pc_count_timer.start()
+
+    def _phenocam_start_count(self):
+        # Stage 1: daily counts for any checked site that doesn't have them yet.
+        missing = [site for site in self._pc_rows if site not in self._pc_daily]
+        if missing:
+            if self._pc_daily_worker is not None and self._pc_daily_worker.isRunning():
+                return   # its done signal restarts the count
+            worker = PhenocamDailyCountsWorker(missing, parent=self)
+            worker.siteDone.connect(self._phenocam_daily_done)
+            worker.done.connect(lambda w=worker: self._phenocam_daily_finished(w))
+            self._pc_daily_worker = worker
+            worker.start()
+            return
+
+        # Stage 2: browse pages, only where the daily counts can't answer.
+        needed = []
+        for site, (_s, _e, ts, te) in self._pc_rows.items():
+            days = self._phenocam_row_days(site)
+            pages = [d for d in self._phenocam_pages_needed(site, days, ts.time().toPyTime(), te.time().toPyTime())
+                     if (site, d.isoformat()) not in self._pc_day_cache]
+            if len(pages) <= int(_phenocam_setting("Phenocam_Count_Max_Days")):
+                needed += [(site, d) for d in pages]
+        if self._pc_count_worker is not None:
+            self._pc_count_worker.cancel()
+            self._pc_count_worker = None
+        self._pc_day_failed.clear()
+        if not needed:
+            self._phenocam_update_counts()
+            return
+        worker = PhenocamDayPagesWorker(needed, int(_phenocam_setting("Phenocam_Count_Parallel_Pages")), parent=self)
+        worker.dayDone.connect(self._phenocam_count_day_done)
+        worker.done.connect(lambda w=worker: self._phenocam_count_finished(w))
+        self._pc_count_worker = worker
+        worker.start()
+
+    def _phenocam_daily_done(self, site, counts):
+        self._pc_daily[site] = counts
+
+    def _phenocam_daily_finished(self, worker):
+        if self._pc_daily_worker is worker:
+            self._pc_daily_worker = None
+        self._phenocam_start_count()
+
+    def _phenocam_count_day_done(self, site, iso_day, times):
+        if times is None:
+            self._pc_day_failed.add((site, iso_day))
+        else:
+            self._pc_day_cache[(site, iso_day)] = times
+        self._phenocam_update_counts()
+
+    def _phenocam_count_finished(self, worker):
+        if self._pc_count_worker is worker:
+            self._pc_count_worker = None
+        self._phenocam_update_counts()
+
+    @staticmethod
+    def _phenocam_in_window(hms, t_start, t_end):
+        """Same rule as PhenoCam.getVisibleImages: minute resolution; 00:00 to 00:00 means all day."""
+        import datetime as dt_mod
+        if t_start == dt_mod.time(0, 0) and t_end == dt_mod.time(0, 0):
+            return True
+        t = dt_mod.time(hms[0], hms[1], 0)
+        return t_start <= t <= t_end
+
+    def _phenocam_row_count(self, site):
+        """
+        (count, status) for a row. status is "ok", "pending" (still being read),
+        "unavailable" (a needed page or the daily counts failed), or "too_long".
+        """
+        _s, _e, ts, te = self._pc_rows[site]
+        t_start, t_end = ts.time().toPyTime(), te.time().toPyTime()
+        if site not in self._pc_daily:
+            return None, "pending"
+        days = self._phenocam_row_days(site)
+        daily = self._pc_daily.get(site) or {}
+        pages = set(self._phenocam_pages_needed(site, days, t_start, t_end))
+        if len(pages) > int(_phenocam_setting("Phenocam_Count_Max_Days")):
+            return None, "too_long"
+        n = 0
+        for d in days:
+            iso = d.isoformat()
+            if d not in pages:
+                n += daily.get(iso, 0)          # full day from daily counts, or a known empty day
+                continue
+            times = self._pc_day_cache.get((site, iso))
+            if times is None:
+                return None, "unavailable" if (site, iso) in self._pc_day_failed else "pending"
+            n += sum(1 for hms in times if self._phenocam_in_window(hms, t_start, t_end))
+        return n, "ok"
+
+    def _phenocam_update_counts(self):
+        """Counts appear only when final; a row shows "Computing..." while it is being worked out."""
+        if not hasattr(self, "phenocam_table"):
+            return
+        t = self.phenocam_table
+        total, all_ok, any_pending = 0, True, False
+        max_days = int(_phenocam_setting("Phenocam_Count_Max_Days"))
+        for r in range(1, t.rowCount()):
+            site = t.item(r, 0).text()
+            n, status = self._phenocam_row_count(site)
+            if status == "ok":
+                text = f"{n:,}"
+                total += n
+            else:
+                all_ok = False
+                any_pending = any_pending or status == "pending"
+                text = {"pending": "Computing...",
+                        "unavailable": "Unavailable",
+                        "too_long": f"Over {max_days} days"}[status]
+            t.item(r, 6).setText(text)
+        all_item = t.item(0, 6)
+        if all_item is not None:
+            if t.rowCount() == 1:
+                all_item.setText("")
+            else:
+                # "+" marks a total missing rows that couldn't be counted
+                all_item.setText("Computing..." if any_pending else f"{total:,}" + ("" if all_ok else "+"))
+        t.resizeColumnToContents(6)
+
+    def _phenocam_size_table(self):
+        """
+        Size the table to its rows: the "All checked sites" row plus one row per
+        checked site, with Phenocam_Table_Blank_Rows empty rows shown when fewer
+        sites are checked, and scrolling beyond Phenocam_Table_Max_Rows. The panel
+        below the preview is capped at what it needs, so the preview gets the rest.
+        """
+        if not hasattr(self, "phenocam_table"):
+            return
+        t = self.phenocam_table
+        n_sites = t.rowCount() - 1
+        blank = int(_phenocam_setting("Phenocam_Table_Blank_Rows"))
+        max_rows = int(_phenocam_setting("Phenocam_Table_Max_Rows"))
+        slots = max(n_sites, blank)
+        default_h = t.verticalHeader().defaultSectionSize()
+        shown_rows = min(slots, max_rows) + 1            # + the "All checked sites" row
+        h = t.horizontalHeader().height() or t.horizontalHeader().sizeHint().height()
+        for r in range(shown_rows):
+            h += t.rowHeight(r) if r < t.rowCount() else default_h
+        h += 2 * t.frameWidth()
+        if t.horizontalScrollBar().maximum() > 0:
+            h += t.horizontalScrollBar().sizeHint().height()
+        t.setFixedHeight(h)
+        self._phenocam_size_bottom_panel()
+
+    def _phenocam_size_bottom_panel(self):
+        """Cap the panel under the preview at the height its contents need."""
+        bottom = getattr(self, "_pc_bottom_panel", None)
+        if bottom is None:
+            return
+        bottom.setMaximumHeight(bottom.sizeHint().height())
+        self._phenocam_fit_preview_height()
+
+    def _phenocam_remove_site_row(self, site):
+        if site not in self._pc_rows:
+            return
+        t = self.phenocam_table
+        for r in range(1, t.rowCount()):
+            it = t.item(r, 0)
+            if it is not None and it.text() == site:
+                t.removeRow(r)
+                break
+        del self._pc_rows[site]
+        self._phenocam_size_table()
+        self._phenocam_update_counts()
+
+    def _phenocam_rebuild_table(self):
+        """Sync the table with the checked sites in the tree (used after the tree is rebuilt)."""
+        if not hasattr(self, "phenocam_table"):
+            return
+        checked = []
+        tree = self.treeWidget_Phenocam
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item.checkState(0) == QtCore.Qt.Checked:
+                checked.append(item.data(0, QtCore.Qt.UserRole))
+        for site in list(self._pc_rows):
+            if site not in checked:
+                self._phenocam_remove_site_row(site)
+        for site in checked:
+            self._phenocam_add_site_row(site)
+
+    def _phenocam_item_changed(self, item, column):
+        if column != 0 or item.parent() is not None:
+            return
+        site = item.data(0, QtCore.Qt.UserRole)
+        if item.checkState(0) == QtCore.Qt.Checked:
+            self._phenocam_add_site_row(site)
+        else:
+            self._phenocam_remove_site_row(site)
+        self._phenocam_apply_filter()
+        self._phenocam_schedule_save()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # PHENOCAM SAVED STATE
+    # Stored in the settings file as "Phenocam_Selections" (a JSON string):
+    #   {"all_sites_range": {"start", "end", "time_start", "time_end"},
+    #    "sites": [{"site", "start", "end", "time_start", "time_end"}, ...]}   (table order)
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _phenocam_range_to_dict(widgets):
+        s, e, ts, te = widgets
+        return {"start": s.date().toString("yyyy-MM-dd"), "end": e.date().toString("yyyy-MM-dd"),
+                "time_start": ts.time().toString("HH:mm"), "time_end": te.time().toString("HH:mm")}
+
+    @staticmethod
+    def _phenocam_range_from_dict(widgets, d):
+        s, e, ts, te = widgets
+        for w, key in ((s, "start"), (e, "end")):
+            q = QtCore.QDate.fromString(str(d.get(key, "")), "yyyy-MM-dd")
+            if q.isValid():
+                w.setDate(q)
+        for w, key in ((ts, "time_start"), (te, "time_end")):
+            q = QtCore.QTime.fromString(str(d.get(key, "")), "HH:mm")
+            if q.isValid():
+                w.setTime(q)
+
+    def _phenocam_schedule_save(self):
+        if getattr(self, "_pc_restoring", True) or not hasattr(self, "_pc_save_timer"):
+            return
+        self._pc_save_timer.start()
+
+    def _phenocam_save_state(self):
+        import json
+        t = self.phenocam_table
+        sites = []
+        for r in range(1, t.rowCount()):
+            site = t.item(r, 0).text()
+            sites.append({"site": site, **self._phenocam_range_to_dict(self._pc_rows[site])})
+        state = {"all_sites_range": self._phenocam_range_to_dict(self._pc_all_row),
+                 "sites": sites}
+        try:
+            JsonEditor().update_json_entry("Phenocam_Selections", json.dumps(state))
+        except Exception as e:
+            print(f"[PhenoCam] Could not save selections: {e}")
+
+    def _phenocam_restore_state(self):
+        import json
+        try:
+            raw = JsonEditor().getValue("Phenocam_Selections")
+            state = json.loads(raw) if isinstance(raw, str) and raw else (raw if isinstance(raw, dict) else None)
+        except Exception as e:
+            print(f"[PhenoCam] Could not read saved selections: {e}")
+            state = None
+        self._pc_restoring = True
+        try:
+            if state:
+                # "All checked sites" row first, without pushing its range onto site rows
+                for w in self._pc_all_row:
+                    w.blockSignals(True)
+                self._phenocam_range_from_dict(self._pc_all_row, state.get("all_sites_range", {}))
+                for w in self._pc_all_row:
+                    w.blockSignals(False)
+
+                # Re-check saved sites that still exist, then restore each row's own range
+                tree = self.treeWidget_Phenocam
+                items = {tree.topLevelItem(i).data(0, QtCore.Qt.UserRole): tree.topLevelItem(i)
+                         for i in range(tree.topLevelItemCount())}
+                skipped = []
+                for entry in state.get("sites", []):
+                    site = entry.get("site")
+                    item = items.get(site)
+                    if item is None:
+                        skipped.append(site)
+                        continue
+                    item.setCheckState(0, QtCore.Qt.Checked)   # adds the table row
+                    if site in self._pc_rows:
+                        self._phenocam_range_from_dict(self._pc_rows[site], entry)
+                if skipped:
+                    print(f"[PhenoCam] Saved sites no longer listed by PhenoCam: {', '.join(map(str, skipped))}")
+                # The search filter is deliberately not restored: each session starts with the full list.
+        finally:
+            self._pc_restoring = False
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # PHENOCAM PREVIEW SIZING
+    # ------------------------------------------------------------------------------------------------------------------
+    def _phenocam_splitter_moved(self, pos, index):
+        self._pc_preview_user_height = self.phenocam_splitter.sizes()[0]
+        self._phenocam_scale_preview()
+        # Save once the drag pauses rather than on every pixel of movement.
+        if not hasattr(self, "_pc_splitter_save_timer"):
+            self._pc_splitter_save_timer = QtCore.QTimer(self)
+            self._pc_splitter_save_timer.setSingleShot(True)
+            self._pc_splitter_save_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+            self._pc_splitter_save_timer.timeout.connect(self._phenocam_save_preview_height)
+        self._pc_splitter_save_timer.start()
+
+    def _phenocam_h_splitter_moved(self, pos, index):
+        """Save the left panel width once the drag pauses."""
+        if not hasattr(self, "_pc_hsplit_save_timer"):
+            self._pc_hsplit_save_timer = QtCore.QTimer(self)
+            self._pc_hsplit_save_timer.setSingleShot(True)
+            self._pc_hsplit_save_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+            self._pc_hsplit_save_timer.timeout.connect(
+                lambda: JsonEditor().update_json_entry(
+                    "Phenocam_Left_Panel_Width_px", str(self.phenocam_h_splitter.sizes()[0])))
+        self._pc_hsplit_save_timer.start()
+
+    def _phenocam_save_preview_height(self):
+        try:
+            JsonEditor().update_json_entry("Phenocam_Preview_Height_px", str(self._pc_preview_user_height))
+        except Exception:
+            pass
+
+    def _phenocam_scale_preview(self):
+        if self._phenocam_pixmap is None:
+            return
+        self.phenocam_image_panel.setPixmap(self._phenocam_pixmap)   # keeps the user's zoom for the same image
 
     def _phenocam_fit_preview_height(self):
-        if not hasattr(self, 'phenocam_preview_label'):
+        if not hasattr(self, 'phenocam_splitter'):
             return
-        tab_h = self.tab_phenocam_sites.height()
-        if tab_h < 50:
+        sp = self.phenocam_splitter
+        total = sum(sp.sizes())
+        if total < 50:
             return
-        # Tree height is managed by its Expanding size policy; no setFixedHeight needed.
-        self.phenocam_preview_label.setFixedHeight(tab_h // 2)
+        bottom_min = sp.widget(1).minimumSizeHint().height()
+        bottom_max = sp.widget(1).maximumHeight()
+        lbl_min = self.phenocam_image_panel.minimumHeight()
+        if self._pc_preview_user_height:
+            h = self._pc_preview_user_height
+        else:
+            h = int(total * float(_phenocam_setting("Phenocam_Preview_Fraction")))
+        h = max(lbl_min, min(h, total - bottom_min), total - bottom_max)
+        sp.setSizes([h, total - h])
+        self._phenocam_scale_preview()
 
     # ------------------------------------------------------------------------------------------------------------------
     def _phenocam_get_start_datetime(self):
+        """Start of the range in the 'All checked sites' row."""
         import datetime as dt_mod
-        d = self.phenocam_start_date.date()
-        return dt_mod.datetime(d.year(), d.month(), d.day(),
-                               self.phenocam_start_hour.value(),
-                               self.phenocam_start_minute.value())
+        s, _e, ts, _te = self._pc_all_row
+        d, t = s.date(), ts.time()
+        return dt_mod.datetime(d.year(), d.month(), d.day(), t.hour(), t.minute())
 
     def _phenocam_get_end_datetime(self):
+        """End of the range in the 'All checked sites' row."""
         import datetime as dt_mod
-        d = self.phenocam_end_date.date()
-        return dt_mod.datetime(d.year(), d.month(), d.day(),
-                               self.phenocam_end_hour.value(),
-                               self.phenocam_end_minute.value())
+        _s, e, _ts, te = self._pc_all_row
+        d, t = e.date(), te.time()
+        return dt_mod.datetime(d.year(), d.month(), d.day(), t.hour(), t.minute())
 
     def _phenocam_get_selected_sitename(self):
         item = self.treeWidget_Phenocam.currentItem()
@@ -2031,22 +3457,39 @@ class MainWindow(QMainWindow):
             self._phenocam_load_latest_preview(site_name, roi_name=roi_name)
 
     def _phenocam_load_latest_preview(self, site_name, roi_name=None):
+        import datetime as dt_mod
         label = roi_name if roi_name else site_name
-        self.phenocam_preview_label.setPixmap(QtGui.QPixmap())
-        self.phenocam_preview_label.setText(f"Loading latest image for {label}...")
+        self._phenocam_pixmap = None
+        self.phenocam_image_panel.showMessage(f"Loading latest image for {label}...")
+
+        # Stop any preview search still running for a previously clicked site.
+        previous = getattr(self, "_phenocam_preview_fetcher", None)
+        if previous is not None:
+            previous.cancel()
+
+        last_date = None
+        last_text = getattr(self, "_phenocam_records", {}).get(site_name, {}).get("dates", {}).get("last", "")
+        try:
+            last_date = dt_mod.date.fromisoformat(last_text) if last_text else None
+        except ValueError:
+            last_date = None
+
+        fetcher = PhenocamPreviewFetcher(site_name, self, roi_name=roi_name, last_date=last_date,
+                                         search_days=int(_phenocam_setting("Phenocam_Preview_Search_Days")))
 
         def _on_result(pixmap, err):
+            if self._phenocam_preview_fetcher is not fetcher:
+                return   # result from a site the user has since moved away from
             if pixmap is None:
-                self.phenocam_preview_label.setText(err or "No image available.")
+                self._phenocam_pixmap = None
+                self.phenocam_image_panel.showMessage("No image available.")
+                if err and err != "No image available.":
+                    print(f"[PhenoCam] Preview for {label}: {err}")
             else:
-                lbl = self.phenocam_preview_label
-                scaled = pixmap.scaled(lbl.width(), lbl.height(),
-                                       QtCore.Qt.KeepAspectRatio,
-                                       QtCore.Qt.SmoothTransformation)
-                lbl.setPixmap(scaled)
+                self._phenocam_pixmap = pixmap
+                self._phenocam_fit_preview_height()
             self._phenocam_preview_fetcher = None
 
-        fetcher = PhenocamPreviewFetcher(site_name, self, roi_name=roi_name)
         fetcher.result.connect(_on_result)
         self._phenocam_preview_fetcher = fetcher
         fetcher.start()
@@ -2061,6 +3504,13 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+    def _phenocam_row_datetimes(self, widgets):
+        import datetime as dt_mod
+        s, e, ts, te = widgets
+        sd, ed, st, et = s.date(), e.date(), ts.time(), te.time()
+        return (dt_mod.datetime(sd.year(), sd.month(), sd.day(), st.hour(), st.minute()),
+                dt_mod.datetime(ed.year(), ed.month(), ed.day(), et.hour(), et.minute()))
+
     def _phenocam_download_clicked(self):
         # If a PhenoCam download is already running, use the same button to cancel it.
         if (
@@ -2068,16 +3518,26 @@ class MainWindow(QMainWindow):
                 and self._phenocam_worker is not None
                 and self._phenocam_worker.isRunning()
         ):
+            self._pc_queue = []
             self._phenocam_worker.cancel()
             self.phenocam_status_label.setText("Cancelling download...")
             self.phenocam_download_btn.setEnabled(False)
             return
 
-        site_name = self._phenocam_get_selected_sitename()
-        if not site_name:
-            App_QMessageBox("PhenoCam Download",
-                                 "Please select a site first.").displayMsgBox()
-            return
+        # Checked sites (table order); if none are checked, the highlighted site
+        # with the "All checked sites" range, as before.
+        jobs = []
+        t = self.phenocam_table
+        for r in range(1, t.rowCount()):
+            site = t.item(r, 0).text()
+            jobs.append((site, *self._phenocam_row_datetimes(self._pc_rows[site])))
+        if not jobs:
+            site_name = self._phenocam_get_selected_sitename()
+            if not site_name:
+                App_QMessageBox("PhenoCam Download",
+                                "Please check one or more sites, or select a site.").displayMsgBox()
+                return
+            jobs.append((site_name, self._phenocam_get_start_datetime(), self._phenocam_get_end_datetime()))
 
         save_folder = self.phenocam_folder_edit.text().strip()
         if not save_folder:
@@ -2085,12 +3545,10 @@ class MainWindow(QMainWindow):
                                  "Please specify a download folder.").displayMsgBox()
             return
 
-        start_dt = self._phenocam_get_start_datetime()
-        end_dt = self._phenocam_get_end_datetime()
-
-        if start_dt >= end_dt:
+        bad = [site for site, start_dt, end_dt in jobs if start_dt >= end_dt]
+        if bad:
             App_QMessageBox("PhenoCam Download",
-                                 "Start must be before End.").displayMsgBox()
+                            "Start must be before End for: " + ", ".join(bad)).displayMsgBox()
             return
 
         try:
@@ -2098,15 +3556,28 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # One site downloads into the folder itself, as before; several sites
+        # each get a subfolder named for the site.
+        multi = len(jobs) > 1
+        self._pc_queue = [(site, s, e, os.path.join(save_folder, site) if multi else save_folder)
+                          for site, s, e in jobs]
+        self._pc_queue_total = len(self._pc_queue)
+        self._pc_downloaded = 0
+
         self.phenocam_download_btn.setText("Cancel Download")
         self.phenocam_download_btn.setEnabled(True)
         self.phenocam_progress_bar.setValue(0)
         self.phenocam_progress_bar.setVisible(True)
         self.phenocam_status_label.setVisible(True)
+        self._phenocam_size_bottom_panel()
         self.phenocam_status_label.setText("Starting...")
+        self._phenocam_start_next_job()
 
+    def _phenocam_start_next_job(self):
+        site_name, start_dt, end_dt, folder = self._pc_queue.pop(0)
+        self._pc_current_site = site_name
         worker = PhenocamDownloadWorker(
-            site_name, start_dt, end_dt, save_folder, parent=self
+            site_name, start_dt, end_dt, folder, parent=self
         )
         worker.progress.connect(self._phenocam_download_progress)
         worker.finished.connect(self._phenocam_download_finished)
@@ -2116,22 +3587,35 @@ class MainWindow(QMainWindow):
     def _phenocam_download_progress(self, current, total, label):
         if total > 0:
             self.phenocam_progress_bar.setValue(int(current / total * 100))
+        if self._pc_queue_total > 1:
+            n = self._pc_queue_total - len(self._pc_queue)
+            label = f"{self._pc_current_site} (site {n} of {self._pc_queue_total}): {label}"
         self.phenocam_status_label.setText(label)
 
     def _phenocam_download_finished(self, count):
-        self.phenocam_download_btn.setText("Download Images")
-        self.phenocam_download_btn.setEnabled(True)
-        self._phenocam_worker = None
-
         if count == -1:
+            self._pc_queue = []
+            self.phenocam_download_btn.setText("Download Images")
+            self.phenocam_download_btn.setEnabled(True)
+            self._phenocam_worker = None
             self.phenocam_status_label.setText("Download cancelled.")
             App_QMessageBox("PhenoCam Download", "Download cancelled.").displayMsgBox()
             return
 
+        self._pc_downloaded += max(count, 0)
+        if self._pc_queue:
+            self._phenocam_start_next_job()
+            return
+
+        self.phenocam_download_btn.setText("Download Images")
+        self.phenocam_download_btn.setEnabled(True)
+        self._phenocam_worker = None
         self.phenocam_progress_bar.setValue(100)
 
+        count = self._pc_downloaded
+        sites = f" from {self._pc_queue_total} sites" if self._pc_queue_total > 1 else ""
         msg = (
-            f"Download complete. {count} new image(s) saved."
+            f"Download complete. {count} new image(s) saved{sites}."
             if count > 0
             else "No new images found for the selected date range."
         )
@@ -2379,6 +3863,578 @@ class MainWindow(QMainWindow):
     # PROCESS NEON SITE CHANGE
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    # NEON TAB LAYOUT (built in code; same look as the PhenoCam and USGS tabs)
+    #
+    #   splitter_NEON_Horizontal
+    #   ├── left:  search row, NEON_listboxSites, count line
+    #   │          each site: "Site details" branch + "Data products (N)" branch (checkable products)
+    #   └── right: splitter_NEON_Vertical
+    #       ├── top:    labelLatestImageTitle + NEON_labelLatestImage
+    #       └── bottom: NEON_selected_products (one row per checked site/product)
+    #                   [folder path] [Browse] [Download]
+    #
+    # The product list and Sync Dates button from the .ui are hidden: the tree and the
+    # "All checked products" row replace them. Existing handlers are unchanged.
+    # ------------------------------------------------------------------------------------------------------------------
+    def setup_neon_layout(self):
+        filled_style, ghost_style = _button_styles()
+        self._neon_products = {}        # site code -> {"domain", "state", "domainName", "products": [...]}
+        self._neon_rows = {}            # (site, product code) -> row info
+        self._neon_all_row = None
+
+        # Left: search, site tree, count
+        left = QtWidgets.QWidget()
+        left.setMinimumWidth(int(_phenocam_setting("NEON_Left_Panel_Min_Width_px")))
+        ll = QtWidgets.QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(4)
+        search_row = QtWidgets.QHBoxLayout()
+        search_row.setSpacing(4)
+        self.neon_search_edit = QtWidgets.QLineEdit()
+        self.neon_search_edit.setPlaceholderText("Enter search terms here")
+        self.neon_search_edit.setClearButtonEnabled(True)
+        if hasattr(QtGui.QPalette, "PlaceholderText"):
+            pal = self.neon_search_edit.palette()
+            pal.setColor(QtGui.QPalette.PlaceholderText, QtGui.QColor(_phenocam_setting("Phenocam_Placeholder_Color")))
+            self.neon_search_edit.setPalette(pal)
+        self.neon_search_btn = QtWidgets.QPushButton("Search")
+        self.neon_search_btn.setStyleSheet(ghost_style)
+        search_row.addWidget(self.neon_search_edit, 1)
+        search_row.addWidget(self.neon_search_btn, 0)
+        ll.addLayout(search_row)
+        self.neon_search_error = _search_error_label()
+        ll.addWidget(self.neon_search_error)
+        self._neon_search_help = SearchHelpFilter(
+            self.neon_search_edit,
+            _search_help_html(NEON_SEARCH_FIELDS, NEON_SEARCH_EXAMPLES, NEON_SEARCH_EXAMPLE), parent=self)
+        ll.addWidget(self.NEON_listboxSites, 1)
+        self.NEON_listboxSites.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding)
+        self.neon_count_label = QtWidgets.QLabel("")
+        self.neon_count_label.setWordWrap(True)
+        ll.addWidget(self.neon_count_label)
+
+        self._neon_search_timer = QtCore.QTimer(self)
+        self._neon_search_timer.setSingleShot(True)
+        self._neon_search_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+        self._neon_search_timer.timeout.connect(self._neon_apply_filter)
+        self.neon_search_edit.textChanged.connect(lambda _t: self._neon_search_timer.start())
+        self.neon_search_edit.returnPressed.connect(self._neon_apply_filter)
+        self.neon_search_btn.clicked.connect(self._neon_apply_filter)
+
+        # Right top: image title over the image
+        preview = QtWidgets.QWidget()
+        pl = QtWidgets.QVBoxLayout(preview)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(2)
+        pl.addWidget(self.labelLatestImageTitle, 0)
+        self.NEON_labelLatestImage.setStyleSheet("QLabel { background: transparent; color: palette(text); }")
+        self.neon_image_panel = ZoomImagePanel(self.NEON_labelLatestImage)
+        pl.addWidget(self.neon_image_panel, 1)
+        preview.setMinimumHeight(int(_phenocam_setting("Phenocam_Preview_Min_Height_px")))
+
+        # Right bottom: table, folder row
+        bottom = QtWidgets.QWidget()
+        bl = QtWidgets.QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+        bl.addWidget(self.NEON_selected_products, 0)
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(4)
+        self.edit_NEON_TableInput.setPlaceholderText("Select output folder...")
+        row.addWidget(self.edit_NEON_TableInput, 1)
+        for btn, style in ((self.pushButton_NEON_Browse, ghost_style), (self.pushButton_NEON_Download, filled_style)):
+            btn.setStyleSheet(style)
+            btn.setMinimumSize(0, 0)
+            btn.setMaximumSize(QtWidgets.QWIDGETSIZE_MAX, QtWidgets.QWIDGETSIZE_MAX)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+            row.addWidget(btn, 0)
+        bl.addLayout(row)
+        self._neon_bottom_panel = bottom
+
+        vertical = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        vertical.setChildrenCollapsible(False)
+        vertical.addWidget(preview)
+        vertical.addWidget(bottom)
+        vertical.setStretchFactor(0, 1)
+        vertical.setStretchFactor(1, 0)
+        horizontal = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        horizontal.setChildrenCollapsible(False)
+        horizontal.addWidget(left)
+        horizontal.addWidget(vertical)
+        horizontal.setStretchFactor(0, 0)
+        horizontal.setStretchFactor(1, 1)
+
+        # Replace the .ui arrangement. The old containers (with the product list,
+        # their labels and the Sync Dates button) are hidden, not deleted, because
+        # existing code still fills the product list when a site is clicked.
+        main = self.layout_NEON_Main
+        old = self.splitter_NEON_Vertical
+        main.removeWidget(old)
+        old.hide()
+        self._neon_ui_layout_unused = old
+        main.addWidget(horizontal, 1)
+        self.splitter_NEON_Horizontal = horizontal
+        self.splitter_NEON_RightVertical = vertical
+        horizontal.splitterMoved.connect(lambda _p, _i: self._neon_splitter_moved())
+        vertical.splitterMoved.connect(lambda _p, _i: self._neon_splitter_moved())
+        horizontal.splitterMoved.connect(lambda _p, _i: self._neon_save_splitters())
+        vertical.splitterMoved.connect(lambda _p, _i: self._neon_save_splitters())
+        saved_h = _phenocam_setting("NEON_Preview_Height_px")
+        self._neon_preview_user_height = int(saved_h) if saved_h else None
+        self._neon_layout_sized = False
+
+        self.tabWidget.currentChanged.connect(
+            lambda _i: QtCore.QTimer.singleShot(0, self._neon_fit_layout)
+            if self.tabWidget.currentWidget() is self.tab_NEONSites else None)
+
+        self.NEON_listboxSites.itemChanged.connect(self._neon_item_changed)
+        self._neon_setup_table()
+        self._neon_layout_built = True
+
+        # Products for every site in one request, in the background
+        self._neon_products_fetcher = NEONSitesProductsFetcher(SERVER, parent=self)
+        self._neon_products_fetcher.result.connect(self._neon_products_received)
+        self._neon_products_fetcher.start()
+        self._neon_apply_filter()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _neon_fit_layout(self):
+        h_split, v_split = self.splitter_NEON_Horizontal, self.splitter_NEON_RightVertical
+        if not h_split.isVisible():
+            return
+        too_narrow = h_split.sizes()[0] < h_split.widget(0).minimumWidth()
+        if too_narrow or (not getattr(self, "_neon_splitter_moved_flag", False) and not self._neon_layout_sized):
+            total_w = sum(h_split.sizes())
+            if total_w > 50:
+                left_w = int(_phenocam_setting("NEON_Left_Panel_Width_px"))
+                h_split.setSizes([left_w, max(total_w - left_w, 1)])
+                self._neon_layout_sized = True
+        total_h = sum(v_split.sizes())
+        if total_h > 50:
+            bottom_max = v_split.widget(1).maximumHeight()
+            if self._neon_preview_user_height:
+                top = max(self._neon_preview_user_height, total_h - bottom_max)
+            else:
+                top = total_h - min(bottom_max, total_h)
+            top = max(v_split.widget(0).minimumHeight(), min(top, total_h))
+            v_split.setSizes([top, total_h - top])
+        self.NEON_DisplayLatestImage()
+
+    def _neon_save_splitters(self):
+        if not hasattr(self, "_neon_split_save_timer"):
+            self._neon_split_save_timer = QtCore.QTimer(self)
+            self._neon_split_save_timer.setSingleShot(True)
+            self._neon_split_save_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+
+            def _save():
+                try:
+                    JsonEditor().update_json_entry(
+                        "NEON_Left_Panel_Width_px", str(self.splitter_NEON_Horizontal.sizes()[0]))
+                    self._neon_preview_user_height = self.splitter_NEON_RightVertical.sizes()[0]
+                    JsonEditor().update_json_entry("NEON_Preview_Height_px", str(self._neon_preview_user_height))
+                except Exception as e:
+                    print(f"[NEON] Could not save splitter positions: {e}")
+            self._neon_split_save_timer.timeout.connect(_save)
+        self._neon_split_save_timer.start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # NEON SITE TREE: site -> "Site details" + "Data products (N)"
+    # ------------------------------------------------------------------------------------------------------------------
+    NEON_BRANCH_ROLE = QtCore.Qt.UserRole + 4    # "details" or "products" on the two branch items
+    NEON_PRODUCT_ROLE = QtCore.Qt.UserRole + 5   # product dict on each product item
+
+    def _neon_branch(self, site_item, kind):
+        for i in range(site_item.childCount()):
+            if site_item.child(i).data(0, self.NEON_BRANCH_ROLE) == kind:
+                return site_item.child(i)
+        return None
+
+    def _neon_build_site_item(self, site):
+        """Tree item for one NEON field site (used at startup and by Refresh NEON)."""
+        site_item = QTreeWidgetItem([f"{site.siteID} - {_fix_mojibake(site.siteName)}"])
+        site_item.setData(0, QtCore.Qt.UserRole, site.siteID)
+
+        details = QTreeWidgetItem(["Site details"])
+        details.setData(0, self.NEON_BRANCH_ROLE, "details")
+        details.setFlags(details.flags() & ~QtCore.Qt.ItemIsSelectable)
+        for label, value in [("Site ID", site.siteID),
+                             ("Site Name", _fix_mojibake(site.siteName)),
+                             ("Latitude", site.latitude),
+                             ("Longitude", site.longitude),
+                             ("PhenoCams", site.phenocamSite)]:
+            child = QTreeWidgetItem([f"{label}: {value}"])
+            child.setFlags(child.flags() & ~QtCore.Qt.ItemIsSelectable)
+            url = next((w for w in str(value).split() if w.startswith("http")), None)
+            if url:
+                child.setData(0, QtCore.Qt.UserRole + 1, url)
+                child.setForeground(0, QtGui.QBrush(QtGui.QColor("#1a6fc4")))
+                font = child.font(0)
+                font.setUnderline(True)
+                child.setFont(0, font)
+            details.addChild(child)
+        site_item.addChild(details)
+
+        products = QTreeWidgetItem(["Data products (loading...)"])
+        products.setData(0, self.NEON_BRANCH_ROLE, "products")
+        products.setFlags(products.flags() & ~QtCore.Qt.ItemIsSelectable)
+        site_item.addChild(products)
+        if site.siteID in getattr(self, "_neon_products", {}):
+            self._neon_fill_products(site_item)
+        return site_item
+
+    def _neon_fill_products(self, site_item):
+        site = site_item.data(0, QtCore.Qt.UserRole)
+        branch = self._neon_branch(site_item, "products")
+        info = self._neon_products.get(site)
+        if branch is None or info is None:
+            return
+        tree = self.NEON_listboxSites
+        tree.blockSignals(True)
+        branch.takeChildren()
+        for prod in info["products"]:
+            item = QTreeWidgetItem([f"{prod['code']}  {prod['title']}"])
+            item.setData(0, QtCore.Qt.UserRole, site)
+            item.setData(0, self.NEON_PRODUCT_ROLE, prod)
+            item.setFlags((item.flags() | QtCore.Qt.ItemIsUserCheckable) & ~QtCore.Qt.ItemIsSelectable)
+            item.setCheckState(0, QtCore.Qt.Checked if (site, prod["code"]) in self._neon_rows
+                               else QtCore.Qt.Unchecked)
+            branch.addChild(item)
+        branch.setText(0, f"Data products ({len(info['products'])})")
+        tree.blockSignals(False)
+
+    def _neon_products_received(self, data):
+        if data is None:
+            print("[NEON] Could not load the data product lists; product branches stay empty.")
+            tree = self.NEON_listboxSites
+            for i in range(tree.topLevelItemCount()):
+                branch = self._neon_branch(tree.topLevelItem(i), "products")
+                if branch is not None:
+                    branch.setText(0, "Data products (unavailable)")
+            return
+        self._neon_products = data
+        tree = self.NEON_listboxSites
+        for i in range(tree.topLevelItemCount()):
+            self._neon_fill_products(tree.topLevelItem(i))
+        self._neon_apply_filter()
+
+    def _neon_checked_count(self):
+        return len(self._neon_rows)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # NEON SEARCH
+    # ------------------------------------------------------------------------------------------------------------------
+    def _neon_site_record(self, site_item):
+        """Searchable fields for one NEON site (see NEON_SEARCH_FIELDS), without its products."""
+        code = str(site_item.data(0, QtCore.Qt.UserRole) or "")
+        label = site_item.text(0)
+        name = label.split(" - ", 1)[1] if " - " in label else label
+        details = {}
+        branch = self._neon_branch(site_item, "details")
+        for c in range(branch.childCount() if branch else 0):
+            text = branch.child(c).text(0)
+            if ":" in text:
+                k, v = text.split(":", 1)
+                details[k.strip().lower()] = v.strip()
+        info = getattr(self, "_neon_products", {}).get(code, {})
+
+        def num(key):
+            try:
+                return float(details.get(key, ""))
+            except ValueError:
+                return None
+
+        return {
+            "fields": {
+                "site":     [code.lower()],
+                "name":     [name.lower()],
+                "state":    [str(info.get("state") or details.get("state", "")).lower()],
+                "domain":   [str(info.get("domain") or details.get("domain code", "")).lower(),
+                             str(info.get("domainName") or details.get("domain name", "")).lower()],
+                "phenocam": [details.get("phenocams", "").lower()],
+            },
+            "numbers": {"lat": num("latitude"), "lon": num("longitude")},
+            "dates": {},
+        }
+
+    def _neon_apply_filter(self):
+        """
+        Filter NEON sites with the search text (see NEON_SEARCH_FIELDS).
+        A site is shown when every term matches the site, except that product: terms, and bare
+        words the site itself doesn't match, must match at least one of its products; those terms
+        also narrow the products listed under the site. Opens the products branch when products
+        matched, the details branch when a site detail matched.
+        """
+        if not hasattr(self, "neon_count_label"):
+            return
+        self._neon_search_timer.stop()
+        query = SiteSearchQuery(self.neon_search_edit.text(), NEON_SEARCH_FIELDS)
+        self.neon_search_error.setText(query.error)
+        self.neon_search_error.setVisible(bool(query.error))
+        on_label = ("site", "name")   # fields shown in the site's own label
+
+        tree = self.NEON_listboxSites
+        total = shown = 0
+        for i in range(tree.topLevelItemCount()):
+            site_item = tree.topLevelItem(i)
+            total += 1
+            rec = self._neon_site_record(site_item)
+            products = self._neon_branch(site_item, "products")
+            product_items = [products.child(c) for c in range(products.childCount())] if products else []
+            product_recs = [{"fields": {"product": [p.text(0).lower()]}} for p in product_items]
+
+            ok, in_details, product_terms = True, False, []
+            for term in query.terms:
+                negate, field, _op, value = term
+                if field == "product":
+                    product_terms.append(term)
+                    continue
+                site_hit = query.term_matches(rec, term)
+                if field is None:
+                    if negate:
+                        if site_hit:
+                            ok = False
+                            break
+                        product_terms.append(term)      # also drop products that mention it
+                    elif site_hit:
+                        if not any(query.text_match(value, rec["fields"][f]) for f in on_label):
+                            in_details = True
+                    else:
+                        product_terms.append(term)      # must be found in a product
+                    continue
+                if site_hit == negate:
+                    ok = False
+                    break
+                if not negate and field not in on_label:
+                    in_details = True
+
+            visible = [all(query.term_matches(r, t) != t[0] for t in product_terms) for r in product_recs]
+            if ok and any(not t[0] for t in product_terms) and not any(visible):
+                ok = False
+            for p, v in zip(product_items, visible):
+                p.setHidden(not v)
+            site_item.setHidden(not ok)
+            shown += ok
+            if ok and query.terms:
+                if products is not None and any(not t[0] for t in product_terms):
+                    site_item.setExpanded(True)
+                    products.setExpanded(True)
+                details = self._neon_branch(site_item, "details")
+                if details is not None and in_details:
+                    site_item.setExpanded(True)
+                    details.setExpanded(True)
+
+        text = f"{shown:,} of {total:,} sites shown" if shown != total else f"{total:,} sites"
+        n = self._neon_checked_count()
+        text += f", {n:,} product{'s' if n != 1 else ''} checked"
+        self.neon_count_label.setText(text)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # NEON DOWNLOAD TABLE: row 0 sets the range for all checked products; one row per checked site/product
+    # ------------------------------------------------------------------------------------------------------------------
+    NEON_IMAGE_PRODUCT_IDS = (20002, 42, 33)   # products downloaded as images (same rule as the downloader)
+
+    @staticmethod
+    def _neon_product_id(code):
+        try:
+            return int(code.split('.')[1])
+        except (IndexError, ValueError):
+            return -1
+
+    def _neon_setup_table(self):
+        t = self.NEON_selected_products
+        t.clear()
+        t.setRowCount(0)
+        t.setColumnCount(6)
+        t.setHorizontalHeaderLabels(["Site", "Product", "Available", "Start Date", "End Date", "Time Window"])
+        t.setStyleSheet("")
+        hdr = t.horizontalHeader()
+        hdr.setStyleSheet(_data_table_header_style())
+        hdr.setMinimumSectionSize(0)
+        hdr.setHighlightSections(False)
+        hdr.setSectionResizeMode(QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        t.verticalHeader().setVisible(False)
+        t.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        t.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._neon_rows = {}
+
+        t.insertRow(0)
+        today = QtCore.QDate.currentDate()
+        days = int(_phenocam_setting("Phenocam_Default_Range_Days"))
+        s, e, cell, ts, te = self._neon_range_widgets(today.addDays(-days), today, True)
+        label = QTableWidgetItem("All checked products")
+        f = label.font()
+        f.setBold(True)
+        label.setFont(f)
+        t.setItem(0, 0, label)
+        t.setSpan(0, 0, 1, 3)
+        t.setCellWidget(0, 3, s)
+        t.setCellWidget(0, 4, e)
+        t.setCellWidget(0, 5, cell)
+        self._neon_all_row = (s, e, ts, te)
+        for w in (s, e):
+            w.dateChanged.connect(lambda _d: self._neon_apply_all_row())
+        for w in (ts, te):
+            w.timeChanged.connect(lambda _t: self._neon_apply_all_row())
+        self._neon_size_table()
+
+    def _neon_range_widgets(self, start_q, end_q, with_time, t_start=None, t_end=None):
+        s = QtWidgets.QDateEdit(start_q)
+        e = QtWidgets.QDateEdit(end_q)
+        for w in (s, e):
+            w.setCalendarPopup(True)
+            w.setDisplayFormat("yyyy-MM-dd")
+            w.setFrame(False)
+        if not with_time:
+            return s, e, None, None, None
+        cell = QtWidgets.QWidget()
+        hl = QtWidgets.QHBoxLayout(cell)
+        hl.setContentsMargins(2, 0, 2, 0)
+        hl.setSpacing(4)
+        ts = QtWidgets.QTimeEdit(t_start or QtCore.QTime(0, 0))
+        te = QtWidgets.QTimeEdit(t_end or QtCore.QTime(23, 59))
+        for w in (ts, te):
+            w.setDisplayFormat("HH:mm")
+            w.setFrame(False)
+        hl.addWidget(ts)
+        hl.addWidget(QtWidgets.QLabel("to"))
+        hl.addWidget(te)
+        return s, e, cell, ts, te
+
+    @staticmethod
+    def _neon_available_range(months):
+        """(first day, last day) covered by NEON 'YYYY-MM' availability strings."""
+        if not months:
+            return QtCore.QDate(), QtCore.QDate()
+        first = QtCore.QDate.fromString(sorted(months)[0] + "-01", "yyyy-MM-dd")
+        last = QtCore.QDate.fromString(sorted(months)[-1] + "-01", "yyyy-MM-dd")
+        if last.isValid():
+            last = last.addMonths(1).addDays(-1)
+        return first, last
+
+    def _neon_fit_range(self, months, start_q, end_q):
+        """Trim a range to the product's available months; if they don't overlap, keep the
+        length and place it at the nearer end of the availability (as on the PhenoCam tab)."""
+        first, last = self._neon_available_range(months)
+        span = start_q.daysTo(end_q)
+        if first.isValid() and start_q < first:
+            start_q = first
+        if last.isValid() and end_q > last:
+            end_q = last
+        if end_q < start_q:
+            if last.isValid() and start_q > last:
+                end_q = last
+                start_q = end_q.addDays(-span)
+                if first.isValid() and start_q < first:
+                    start_q = first
+            else:
+                start_q = first
+                end_q = start_q.addDays(span)
+                if last.isValid() and end_q > last:
+                    end_q = last
+        return start_q, end_q
+
+    def _neon_apply_all_row(self):
+        a_s, a_e, a_ts, a_te = self._neon_all_row
+        for info in self._neon_rows.values():
+            sq, eq = self._neon_fit_range(info["product"].get("months", []), a_s.date(), a_e.date())
+            info["start"].setDate(sq)
+            info["end"].setDate(eq)
+            if info["time_start"] is not None:
+                info["time_start"].setTime(a_ts.time())
+                info["time_end"].setTime(a_te.time())
+
+    def _neon_add_row(self, site, prod):
+        key = (site, prod["code"])
+        if key in self._neon_rows:
+            return
+        t = self.NEON_selected_products
+        r = t.rowCount()
+        t.insertRow(r)
+        a_s, a_e, a_ts, a_te = self._neon_all_row
+        months = prod.get("months", [])
+        sq, eq = self._neon_fit_range(months, a_s.date(), a_e.date())
+        is_image = self._neon_product_id(prod["code"]) in self.NEON_IMAGE_PRODUCT_IDS
+        s, e, cell, ts, te = self._neon_range_widgets(sq, eq, is_image, a_ts.time(), a_te.time())
+        first, last = self._neon_available_range(months)
+        avail = (f"{sorted(months)[0]} to {sorted(months)[-1]}" if months else "")
+        site_item = QTableWidgetItem(site)
+        site_item.setData(QtCore.Qt.UserRole, key)
+        t.setItem(r, 0, site_item)
+        t.setItem(r, 1, QTableWidgetItem(f"{prod['code']}  {prod['title']}"))
+        t.setItem(r, 2, QTableWidgetItem(avail))
+        t.setCellWidget(r, 3, s)
+        t.setCellWidget(r, 4, e)
+        if cell is not None:
+            t.setCellWidget(r, 5, cell)
+        else:
+            na = QTableWidgetItem("n/a")
+            na.setTextAlignment(QtCore.Qt.AlignCenter)
+            t.setItem(r, 5, na)
+        self._neon_rows[key] = {"site": site, "product": prod, "start": s, "end": e,
+                                "time_start": ts, "time_end": te}
+        self._neon_size_table()
+
+    def _neon_remove_row(self, key):
+        if key not in self._neon_rows:
+            return
+        t = self.NEON_selected_products
+        for r in range(1, t.rowCount()):
+            it = t.item(r, 0)
+            if it is not None and it.data(QtCore.Qt.UserRole) == key:
+                t.removeRow(r)
+                break
+        del self._neon_rows[key]
+        self._neon_size_table()
+
+    def _neon_item_changed(self, item, column):
+        prod = item.data(0, self.NEON_PRODUCT_ROLE)
+        if column != 0 or not prod:
+            return
+        site = item.data(0, QtCore.Qt.UserRole)
+        if item.checkState(0) == QtCore.Qt.Checked:
+            self._neon_add_row(site, prod)
+        else:
+            self._neon_remove_row((site, prod["code"]))
+        self._neon_apply_filter()
+
+    def _neon_size_table(self):
+        t = self.NEON_selected_products
+        blank = int(_phenocam_setting("NEON_Table_Blank_Rows"))
+        max_rows = int(_phenocam_setting("NEON_Table_Max_Rows"))
+        shown = min(max(t.rowCount() - 1, blank), max_rows) + 1
+        h = t.horizontalHeader().height() or t.horizontalHeader().sizeHint().height()
+        for r in range(shown):
+            h += t.rowHeight(r) if r < t.rowCount() else t.verticalHeader().defaultSectionSize()
+        h += 2 * t.frameWidth()
+        if t.horizontalScrollBar().maximum() > 0:
+            h += t.horizontalScrollBar().sizeHint().height()
+        t.setFixedHeight(h)
+        bottom = getattr(self, "_neon_bottom_panel", None)
+        if bottom is not None:
+            bottom.setMaximumHeight(bottom.sizeHint().height())
+            if hasattr(self, "splitter_NEON_RightVertical"):
+                self._neon_fit_layout()
+
+    def _neon_download_jobs(self):
+        """[(site, domain, 'CODE: title', start_date, start_time, end_date, end_time), ...] in table order."""
+        import datetime as dt_mod
+        jobs = []
+        t = self.NEON_selected_products
+        for r in range(1, t.rowCount()):
+            key = t.item(r, 0).data(QtCore.Qt.UserRole)
+            info = self._neon_rows[key]
+            prod = info["product"]
+            sd, ed = info["start"].date().toPyDate(), info["end"].date().toPyDate()
+            if info["time_start"] is not None:
+                st, et = info["time_start"].time().toPyTime(), info["time_end"].time().toPyTime()
+            else:
+                st, et = dt_mod.time(0, 0), dt_mod.time(23, 59)
+            domain = self._neon_products.get(info["site"], {}).get("domain", "")
+            jobs.append((info["site"], domain, f"{prod['code']}: {prod['title']}", sd, st, ed, et))
+        return jobs
+
     def NEON_SiteClicked(self, item, previous=None):
         global SITECODE
         global gWebImagesAvailable
@@ -2420,13 +4476,13 @@ class MainWindow(QMainWindow):
                 if num_matches > 0:
                     strFirstProductID = matches[0]
                     strProductID = strFirstProductID.split('.')[1]
-                    self.NEON_labelLatestImage.setText("Loading latest image...")
+                    self._show_image_message("neon", "Loading latest image...")
                     self._neon_preview_fetcher = NEONPreviewFetcher(SITECODE, DOMAINCODE, strProductID)
                     self._neon_preview_fetcher.result.connect(self._neon_preview_received)
                     self._neon_preview_fetcher.start()
                 else:
                     gWebImagesAvailable = 0
-                    self.NEON_labelLatestImage.setText("No Images Available")
+                    self._show_image_message("neon", "No image available.")
 
                 gProcessClick = 0
         except Exception:
@@ -2454,19 +4510,592 @@ class MainWindow(QMainWindow):
     # ==================================================================================================================
     #
     # ==================================================================================================================
+    # ------------------------------------------------------------------------------------------------------------------
+    # USGS TAB LAYOUT (built in code; same look as the PhenoCam tab)
+    #
+    #   splitter_USGS_Horizontal
+    #   ├── left:  USGS_listboxSites
+    #   └── right: splitter_USGS_Vertical
+    #       ├── top:    image title + USGS_labelLatestImage
+    #       └── bottom: table_USGS_Sites
+    #                   [folder path] [Browse...] [Correlate Sensor Data] [Download]
+    #
+    # The existing USGS widgets are moved into new splitters; their handlers are unchanged.
+    # ------------------------------------------------------------------------------------------------------------------
+    def setup_usgs_layout(self):
+        main = self.layout_USGS_Main
+        old_vertical = self.splitter_USGS_Vertical
+        filled_style, ghost_style = _button_styles()
+
+        # Left: search row, site list, count + hidden-camera toggle (as on the PhenoCam tab)
+        left = QtWidgets.QWidget()
+        left.setMinimumWidth(int(_phenocam_setting("USGS_Left_Panel_Min_Width_px")))
+        ll = QtWidgets.QVBoxLayout(left)
+        ll.setContentsMargins(0, 0, 0, 0)
+        ll.setSpacing(4)
+
+        search_row = QtWidgets.QHBoxLayout()
+        search_row.setSpacing(4)
+        self.usgs_search_edit = QtWidgets.QLineEdit()
+        self.usgs_search_edit.setPlaceholderText("Enter search terms here")
+        self.usgs_search_edit.setClearButtonEnabled(True)
+        if hasattr(QtGui.QPalette, "PlaceholderText"):
+            pal = self.usgs_search_edit.palette()
+            pal.setColor(QtGui.QPalette.PlaceholderText, QtGui.QColor(_phenocam_setting("Phenocam_Placeholder_Color")))
+            self.usgs_search_edit.setPalette(pal)
+        self.usgs_search_btn = QtWidgets.QPushButton("Search")
+        self.usgs_search_btn.setStyleSheet(ghost_style)
+        search_row.addWidget(self.usgs_search_edit, 1)
+        search_row.addWidget(self.usgs_search_btn, 0)
+        ll.addLayout(search_row)
+        self.usgs_search_error = _search_error_label()
+        ll.addWidget(self.usgs_search_error)
+        self._usgs_search_help = SearchHelpFilter(
+            self.usgs_search_edit,
+            _search_help_html(USGS_SEARCH_FIELDS, USGS_SEARCH_EXAMPLES, USGS_SEARCH_EXAMPLE), parent=self)
+
+        ll.addWidget(self.USGS_listboxSites, 1)
+        self.USGS_listboxSites.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Expanding)
+
+        self.usgs_count_label = QtWidgets.QLabel("")
+        self.usgs_count_label.setWordWrap(True)
+        self.usgs_hidden_btn = QtWidgets.QPushButton("Show hidden cameras")
+        self.usgs_hidden_btn.setStyleSheet(ghost_style)
+        self.usgs_hidden_btn.clicked.connect(self._usgs_toggle_hidden_clicked)
+        ll.addWidget(self.usgs_count_label)
+        ll.addWidget(self.usgs_hidden_btn, 0, QtCore.Qt.AlignRight)
+
+        self._usgs_search_timer = QtCore.QTimer(self)
+        self._usgs_search_timer.setSingleShot(True)
+        self._usgs_search_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+        self._usgs_search_timer.timeout.connect(self._usgs_apply_filter)
+        self.usgs_search_edit.textChanged.connect(lambda _t: self._usgs_search_timer.start())
+        self.usgs_search_edit.returnPressed.connect(self._usgs_apply_filter)
+        self.usgs_search_btn.clicked.connect(self._usgs_apply_filter)
+
+        # Right top: image title over the image
+        preview = QtWidgets.QWidget()
+        pl = QtWidgets.QVBoxLayout(preview)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(2)
+        title = getattr(self, "_usgs_image_title_label", None)
+        if title is not None:
+            pl.addWidget(title, 0)
+        self.USGS_labelLatestImage.setStyleSheet("QLabel { background: transparent; color: palette(text); }")
+        self.usgs_image_panel = ZoomImagePanel(self.USGS_labelLatestImage)
+        pl.addWidget(self.usgs_image_panel, 1)
+        preview.setMinimumHeight(int(_phenocam_setting("Phenocam_Preview_Min_Height_px")))
+
+        # Right bottom: table, then the folder row
+        bottom = QtWidgets.QWidget()
+        bl = QtWidgets.QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+        table = self.table_USGS_Sites
+        table.verticalHeader().setVisible(False)
+        bl.addWidget(table, 0)
+
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(4)
+        self.edit_USGSSaveFilePath.setPlaceholderText("Select output folder...")
+        row.addWidget(self.edit_USGSSaveFilePath, 1)
+        buttons = [(self.pushButton_USGS_BrowseImageFolder, ghost_style)]
+        correlate = getattr(self, "pushButton_USGSCorrelate", None)
+        if correlate is not None:
+            buttons.append((correlate, ghost_style))
+        buttons.append((self.pushButton_USGSDownload, filled_style))
+        for btn, style in buttons:
+            btn.setStyleSheet(style)
+            btn.setMinimumSize(0, 0)
+            btn.setMaximumSize(QtWidgets.QWIDGETSIZE_MAX, QtWidgets.QWIDGETSIZE_MAX)
+            btn.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Fixed)
+            row.addWidget(btn, 0)
+        bl.addLayout(row)
+        self._usgs_bottom_panel = bottom
+
+        vertical = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        vertical.setChildrenCollapsible(False)
+        vertical.addWidget(preview)
+        vertical.addWidget(bottom)
+        vertical.setStretchFactor(0, 1)
+        vertical.setStretchFactor(1, 0)
+
+        horizontal = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        horizontal.setChildrenCollapsible(False)
+        horizontal.addWidget(left)
+        horizontal.addWidget(vertical)
+        horizontal.setStretchFactor(0, 0)
+        horizontal.setStretchFactor(1, 1)
+
+        # Replace the .ui splitters, now empty of the widgets moved above. They are
+        # hidden rather than deleted so any code still holding references to the
+        # old containers (e.g. Resize_Controls) keeps working.
+        main.removeWidget(old_vertical)
+        old_vertical.hide()
+        self._usgs_ui_layout_unused = old_vertical
+        main.addWidget(horizontal, 1)
+
+        self.splitter_USGS_Horizontal = horizontal
+        self.splitter_USGS_Vertical = vertical
+        horizontal.splitterMoved.connect(self._usgs_splitter_moved)
+        vertical.splitterMoved.connect(self._usgs_vertical_splitter_moved)
+        horizontal.splitterMoved.connect(lambda _p, _i: self._usgs_save_splitters())
+        vertical.splitterMoved.connect(lambda _p, _i: self._usgs_save_splitters())
+
+        saved_h = _phenocam_setting("USGS_Preview_Height_px")
+        self._usgs_preview_user_height = int(saved_h) if saved_h else None
+        self._usgs_layout_sized = False
+        self._usgs_size_table()
+
+        # A hidden tab has no size yet, so set the site-list width the first time the tab is shown.
+        self.tabWidget.currentChanged.connect(
+            lambda _i: QtCore.QTimer.singleShot(0, self._usgs_fit_layout)
+            if self.tabWidget.currentWidget() is self.tab_USGSSites else None)
+
+        # Multi-site selection: checkboxes on the cameras, one table row per checked camera
+        self._usgs_rows = {}          # camera ID -> (start date, end date, start time, end time) widgets
+        self._usgs_count_cache = {}   # (camera ID, start date, end date, start time, end time) -> image count
+        self.USGS_listboxSites.itemChanged.connect(self._usgs_item_changed)
+        self._usgs_layout_built = True
+        tree = self.USGS_listboxSites
+        tree.blockSignals(True)
+        for i in range(tree.topLevelItemCount()):
+            it = tree.topLevelItem(i)
+            it.setFlags(it.flags() | QtCore.Qt.ItemIsUserCheckable)
+            it.setCheckState(0, QtCore.Qt.Unchecked)
+        tree.blockSignals(False)
+        self._usgs_reset_rows()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # USGS SITE SEARCH AND HIDDEN-CAMERA TOGGLE
+    # ------------------------------------------------------------------------------------------------------------------
+    def _usgs_toggle_hidden_clicked(self):
+        self._toggle_usgs_hidden_cameras()   # rebuilds the tree, which re-applies the search
+
+    def _usgs_showing_hidden(self):
+        try:
+            return any(self.myHIVIS.is_hidden(cam) for cam in self.cameraList)
+        except Exception:
+            return False
+
+    def _usgs_apply_filter(self):
+        """Filter the USGS site tree with the search text (see USGS_SEARCH_FIELDS)."""
+        if not hasattr(self, "usgs_count_label"):
+            return
+        if hasattr(self, "_usgs_search_timer"):
+            self._usgs_search_timer.stop()
+        query = SiteSearchQuery(self.usgs_search_edit.text(), USGS_SEARCH_FIELDS)
+        self.usgs_search_error.setText(query.error)
+        self.usgs_search_error.setVisible(bool(query.error))
+        tree = self.USGS_listboxSites
+        total = shown = 0
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            ok = not query.terms or query.matches(self._usgs_search_record(item.data(0, QtCore.Qt.UserRole)))
+            item.setHidden(not ok)
+            total += 1
+            shown += ok
+        text = f"{shown:,} of {total:,} cameras shown" if shown != total else f"{total:,} cameras"
+        showing_hidden = self._usgs_showing_hidden()
+        if not showing_hidden:
+            text += ", hidden cameras not listed"
+        n = len(getattr(self, "_usgs_rows", {}))
+        text += f", {n:,} checked"
+        self.usgs_count_label.setText(text)
+        self.usgs_hidden_btn.setText("Hide hidden cameras" if showing_hidden else "Show hidden cameras")
+
+    def _usgs_size_table(self):
+        """Table height: at least USGS_Table_Rows_Shown rows, growing with checked cameras up to
+        USGS_Table_Max_Rows, then scrolling. The panel is capped to its contents."""
+        t = self.table_USGS_Sites
+        rows = min(max(t.rowCount(), int(_phenocam_setting("USGS_Table_Rows_Shown"))),
+                   int(_phenocam_setting("USGS_Table_Max_Rows")))
+        h = t.horizontalHeader().height() or t.horizontalHeader().sizeHint().height()
+        for r in range(rows):
+            h += t.rowHeight(r) if r < t.rowCount() else t.verticalHeader().defaultSectionSize()
+        h += 2 * t.frameWidth()
+        if t.horizontalScrollBar().maximum() > 0:
+            h += t.horizontalScrollBar().sizeHint().height()
+        t.setFixedHeight(h)
+        self._usgs_bottom_panel.setMaximumHeight(self._usgs_bottom_panel.sizeHint().height())
+        if hasattr(self, "splitter_USGS_Vertical") and self.splitter_USGS_Vertical.widget(1) is self._usgs_bottom_panel:
+            self._usgs_fit_layout()
+
+    def _usgs_fit_layout(self):
+        """Initial site-list width, and image height (saved, or whatever the table leaves)."""
+        h_split, v_split = self.splitter_USGS_Horizontal, self.splitter_USGS_Vertical
+        if not h_split.isVisible():
+            return   # sizes of a hidden tab aren't real yet; sized when the tab is shown
+        too_narrow = h_split.sizes()[0] < h_split.widget(0).minimumWidth()
+        if too_narrow or (not getattr(self, "_usgs_splitter_moved_flag", False)
+                          and not getattr(self, "_usgs_layout_sized", False)):
+            total_w = sum(h_split.sizes())
+            if total_w > 50:
+                left_w = int(_phenocam_setting("USGS_Left_Panel_Width_px"))
+                h_split.setSizes([left_w, max(total_w - left_w, 1)])
+                self._usgs_layout_sized = True
+        total_h = sum(v_split.sizes())
+        if total_h > 50:
+            bottom_max = v_split.widget(1).maximumHeight()
+            if self._usgs_preview_user_height:
+                top = max(self._usgs_preview_user_height, total_h - bottom_max)
+            else:
+                top = total_h - min(bottom_max, total_h)
+            top = max(v_split.widget(0).minimumHeight(), min(top, total_h))
+            v_split.setSizes([top, total_h - top])
+
+    def _usgs_save_splitters(self):
+        """Save the site-list width and image height once a drag pauses."""
+        if not hasattr(self, "_usgs_split_save_timer"):
+            self._usgs_split_save_timer = QtCore.QTimer(self)
+            self._usgs_split_save_timer.setSingleShot(True)
+            self._usgs_split_save_timer.setInterval(int(_phenocam_setting("Phenocam_Search_Debounce_ms")))
+
+            def _save():
+                try:
+                    JsonEditor().update_json_entry(
+                        "USGS_Left_Panel_Width_px", str(self.splitter_USGS_Horizontal.sizes()[0]))
+                    self._usgs_preview_user_height = self.splitter_USGS_Vertical.sizes()[0]
+                    JsonEditor().update_json_entry(
+                        "USGS_Preview_Height_px", str(self._usgs_preview_user_height))
+                except Exception as e:
+                    print(f"[USGS] Could not save splitter positions: {e}")
+            self._usgs_split_save_timer.timeout.connect(_save)
+        self._usgs_split_save_timer.start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # USGS SEARCH RECORDS
+    # ------------------------------------------------------------------------------------------------------------------
+    def _usgs_camera_record(self, cam_id):
+        """NIMS camera dict for a camera ID ({} if unknown)."""
+        try:
+            return self.myHIVIS.get_camera_dictionary().get(cam_id, {}) or {}
+        except Exception:
+            return {}
+
+    def _usgs_nwis_id(self, cam_id):
+        nwis = self._usgs_camera_record(cam_id).get("nwisId")
+        return str(nwis).strip() if nwis else None
+
+    def _usgs_search_record(self, cam_id):
+        """Searchable fields for one camera (see SiteSearchQuery and USGS_SEARCH_FIELDS)."""
+        cam = self._usgs_camera_record(cam_id)
+
+        def t(key):
+            v = cam.get(key)
+            return "" if v is None else str(v).strip().lower()
+
+        def num(key):
+            import math
+            try:
+                x = float(cam.get(key))
+                return x if math.isfinite(x) else None
+            except (TypeError, ValueError):
+                return None
+
+        try:
+            hidden = bool(self.myHIVIS.is_hidden(cam_id))
+        except Exception:
+            hidden = cam.get("hideCam", True) is not False
+        return {
+            "fields": {
+                "camera": [str(cam_id).lower()],
+                "name":   [t("camName")],
+                "desc":   [t("camDesc")],
+                "nwis":   [t("nwisId")],
+                "state":  [t("stateAbrv")],
+                "tz":     [t("tz")],
+                "pcode":  [t("defaultPCode")],
+                "hidden": ["true" if hidden else "false"],
+            },
+            "numbers": {"lat": num("lat"), "lon": num("lng")},
+            "dates": {"newest": t("newestImageDT")[:10], "created": t("createdDate")[:10]},
+        }
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # USGS DOWNLOAD TABLE: row 0 ("All checked sites") sets the range for every checked camera;
+    # one row per checked camera, in the existing column layout.
+    # ------------------------------------------------------------------------------------------------------------------
+    USGS_COL_SITE, USGS_COL_COUNT = 0, 1
+    USGS_COL_START_DATE, USGS_COL_END_DATE, USGS_COL_START_TIME, USGS_COL_END_TIME = 4, 5, 6, 7
+
+    def _usgs_all_row_widgets(self):
+        t = self.table_USGS_Sites
+        return tuple(t.cellWidget(0, c) for c in (self.USGS_COL_START_DATE, self.USGS_COL_END_DATE,
+                                                   self.USGS_COL_START_TIME, self.USGS_COL_END_TIME))
+
+    def _usgs_reset_rows(self):
+        """Label row 0 "All checked sites", drop site rows, uncheck every camera.
+        Called after USGS_FormatProductTable rebuilds the table."""
+        t = self.table_USGS_Sites
+        while t.rowCount() > 1:
+            t.removeRow(1)
+        self._usgs_rows = {}
+        label = QTableWidgetItem("All checked sites")
+        f = label.font()
+        f.setBold(True)
+        label.setFont(f)
+        t.setItem(0, self.USGS_COL_SITE, label)
+        t.setItem(0, self.USGS_COL_COUNT, QTableWidgetItem(""))
+        s, e, ts, te = self._usgs_all_row_widgets()
+        for w in (s, e, ts, te):
+            if w is not None:
+                w.dateTimeChanged.connect(lambda _d: self._usgs_apply_all_row())
+        tree = self.USGS_listboxSites
+        tree.blockSignals(True)
+        for i in range(tree.topLevelItemCount()):
+            it = tree.topLevelItem(i)
+            if it.flags() & QtCore.Qt.ItemIsUserCheckable:
+                it.setCheckState(0, QtCore.Qt.Unchecked)
+        tree.blockSignals(False)
+        self._usgs_size_table()
+        self._usgs_apply_filter()
+
+    def _usgs_apply_all_row(self):
+        s, e, ts, te = self._usgs_all_row_widgets()
+        if s is None:
+            return
+        for rs, re_, rts, rte in self._usgs_rows.values():
+            rs.setDate(s.date())
+            re_.setDate(e.date())
+            rts.setTime(ts.time())
+            rte.setTime(te.time())
+
+    def _usgs_add_row(self, cam_id):
+        if cam_id in self._usgs_rows:
+            return
+        t = self.table_USGS_Sites
+        r = t.rowCount()
+        t.insertRow(r)
+        a_s, a_e, a_ts, a_te = self._usgs_all_row_widgets()
+        item = QTableWidgetItem(cam_id)
+        item.setData(QtCore.Qt.UserRole, cam_id)
+        t.setItem(r, self.USGS_COL_SITE, item)
+        t.setItem(r, self.USGS_COL_COUNT, QTableWidgetItem(""))
+        for c in (2, 3):                       # min/max Date, disabled as on row 0
+            w = QtWidgets.QDateEdit()
+            w.setDisabled(True)
+            t.setCellWidget(r, c, w)
+        s = QtWidgets.QDateEdit(calendarPopup=True)
+        e = QtWidgets.QDateEdit(calendarPopup=True)
+        s.setDate(a_s.date() if a_s is not None else QtCore.QDate.currentDate())
+        e.setDate(a_e.date() if a_e is not None else QtCore.QDate.currentDate())
+        ts, te = QDateTimeEdit(), QDateTimeEdit()
+        ts.setTime(a_ts.time() if a_ts is not None else QtCore.QTime(0, 0, 0))
+        te.setTime(a_te.time() if a_te is not None else QtCore.QTime(23, 59, 59))
+        for w in (s, e):
+            w.setKeyboardTracking(False)
+        for w in (ts, te):
+            w.setDisplayFormat("hh:mm")
+            w.setKeyboardTracking(False)
+            w.setFrame(False)
+        for w in (s, e, ts, te):
+            w.dateTimeChanged.connect(lambda _d: self._usgs_schedule_count())
+        t.setCellWidget(r, self.USGS_COL_START_DATE, s)
+        t.setCellWidget(r, self.USGS_COL_END_DATE, e)
+        t.setCellWidget(r, self.USGS_COL_START_TIME, ts)
+        t.setCellWidget(r, self.USGS_COL_END_TIME, te)
+        self._usgs_rows[cam_id] = (s, e, ts, te)
+        self._usgs_size_table()
+        self._usgs_schedule_count()
+
+    def _usgs_remove_row(self, cam_id):
+        if cam_id not in self._usgs_rows:
+            return
+        t = self.table_USGS_Sites
+        for r in range(1, t.rowCount()):
+            it = t.item(r, self.USGS_COL_SITE)
+            if it is not None and it.data(QtCore.Qt.UserRole) == cam_id:
+                t.removeRow(r)
+                break
+        del self._usgs_rows[cam_id]
+        self._usgs_size_table()
+        self._usgs_refresh_total()
+
+    def _usgs_item_changed(self, item, column):
+        if column != 0 or item.parent() is not None or not (item.flags() & QtCore.Qt.ItemIsUserCheckable):
+            return
+        cam_id = item.data(0, QtCore.Qt.UserRole)
+        if item.checkState(0) == QtCore.Qt.Checked:
+            self._usgs_add_row(cam_id)
+        else:
+            self._usgs_remove_row(cam_id)
+        self._usgs_apply_filter()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # USGS IMAGE COUNTS (one NIMS request per camera, cached per camera and range)
+    # ------------------------------------------------------------------------------------------------------------------
+    def _usgs_row_range(self, cam_id):
+        s, e, ts, te = self._usgs_rows[cam_id]
+        return (s.date().toPyDate(), e.date().toPyDate(),
+                ts.time().toPyTime().replace(second=0), te.time().toPyTime().replace(second=59))
+
+    def _usgs_schedule_count(self):
+        t = self.table_USGS_Sites
+        for r in range(1, t.rowCount()):
+            cam_id = t.item(r, self.USGS_COL_SITE).data(QtCore.Qt.UserRole)
+            if (cam_id, *self._usgs_row_range(cam_id)) not in self._usgs_count_cache:
+                t.item(r, self.USGS_COL_COUNT).setText("Computing...")
+        self._usgs_refresh_total()
+        self.usgs_check_timer.stop()
+        self.usgs_check_timer.start(int(_phenocam_setting("USGS_Count_Debounce_ms")))
+
+    def _usgs_refresh_total(self):
+        t = self.table_USGS_Sites
+        if t.rowCount() <= 1:
+            t.item(0, self.USGS_COL_COUNT).setText("")
+            return
+        total, done = 0, True
+        for cam_id in self._usgs_rows:
+            n = self._usgs_count_cache.get((cam_id, *self._usgs_row_range(cam_id)))
+            if n is None:
+                done = False
+            else:
+                total += n
+        t.item(0, self.USGS_COL_COUNT).setText(f"{total:,}" if done else "Computing...")
+
+    def _usgs_count_rows(self):
+        """Count images for every checked camera whose range isn't cached yet. Runs on the UI thread,
+        one camera at a time, because the HIVIS count can show message boxes on network errors."""
+        if self.usgs_checking:
+            return
+        self.usgs_checking = True
+        try:
+            t = self.table_USGS_Sites
+            for cam_id in list(self._usgs_rows):
+                if cam_id not in self._usgs_rows:
+                    continue   # unchecked while counting
+                key = (cam_id, *self._usgs_row_range(cam_id))
+                if key not in self._usgs_count_cache:
+                    sd, ed, st, et = key[1:]
+                    try:
+                        n = self.myHIVIS.get_image_count(siteName=cam_id, nwisID=self._usgs_nwis_id(cam_id),
+                                                         startDate=sd, endDate=ed, startTime=st, endTime=et)
+                    except Exception as e:
+                        print(f"[USGS] Image count for {cam_id}: {e}")
+                        n = None
+                    if n is not None:
+                        self._usgs_count_cache[key] = int(n)
+                for r in range(1, t.rowCount()):
+                    it = t.item(r, self.USGS_COL_SITE)
+                    if it is not None and it.data(QtCore.Qt.UserRole) == cam_id:
+                        n = self._usgs_count_cache.get((cam_id, *self._usgs_row_range(cam_id)))
+                        t.item(r, self.USGS_COL_COUNT).setText(f"{n:,}" if n is not None else "Unavailable")
+                        break
+                self._usgs_refresh_total()
+                QApplication.processEvents()
+            self._usgs_refresh_total()
+        finally:
+            self.usgs_checking = False
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # USGS MULTI-SITE DOWNLOAD
+    # ------------------------------------------------------------------------------------------------------------------
+    def _usgs_download_checked(self, root_folder):
+        """Download every checked camera. One camera downloads into the folder itself; several
+        cameras each get <folder>/<camera ID>/Images and /data."""
+        self.usgs_check_timer.stop()
+        t = self.table_USGS_Sites
+        jobs = []
+        for r in range(1, t.rowCount()):
+            cam_id = t.item(r, self.USGS_COL_SITE).data(QtCore.Qt.UserRole)
+            jobs.append((cam_id, *self._usgs_row_range(cam_id)))
+        bad = [j[0] for j in jobs if datetime.datetime.combine(j[1], j[3]) >= datetime.datetime.combine(j[2], j[4])]
+        if bad:
+            App_QMessageBox("USGS Download", "Start must be before End for: " + ", ".join(bad),
+                            QMessageBox.Close).displayMsgBox()
+            return
+        multi = len(jobs) > 1
+        self._usgs_cancel_requested = False
+        results = []
+        for i, (cam_id, sd, ed, st, et) in enumerate(jobs, start=1):
+            if self._usgs_cancel_requested:
+                results.append(f"{cam_id}: not downloaded (cancelled)")
+                continue
+            folder = os.path.join(root_folder, cam_id) if multi else root_folder
+            image_folder = os.path.join(folder, "Images")
+            data_folder = os.path.join(folder, "data")
+            os.makedirs(image_folder, exist_ok=True)
+            os.makedirs(data_folder, exist_ok=True)
+            nwis = self._usgs_nwis_id(cam_id)
+            try:
+                self.statusBar().showMessage(f"USGS download: {cam_id} (site {i} of {len(jobs)})")
+            except Exception:
+                pass
+            # Builds this camera's time-zone-aware image list, which download_images then uses.
+            self.myHIVIS.get_image_count(siteName=cam_id, nwisID=nwis, startDate=sd, endDate=ed,
+                                         startTime=st, endTime=et)
+            downloaded, missing = self.usgs.download_images(
+                cam_id, sd, ed, st, et, image_folder,
+                progress=self._usgs_progress,
+                cancel_check=lambda: self._usgs_cancel_requested)
+            self.force_close_progress()
+            line = f"{cam_id}: {downloaded} new image(s)" + (f", {missing} failed" if missing else "")
+            if nwis:
+                self.myHIVIS.fetchStageAndDischarge(nwis, cam_id, sd, ed, st, et, data_folder)
+            else:
+                line += ", no NWIS site number so no sensor data"
+            results.append(line)
+        try:
+            self.statusBar().clearMessage()
+        except Exception:
+            pass
+        App_QMessageBox("USGS Download", "Download complete.\n\n" + "\n".join(results),
+                        QMessageBox.Close).displayMsgBox()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # USGS CORRELATION: a site folder (Images + data), a folder of site folders, or (as before) an image folder
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _usgs_subfolder(path, name):
+        """Subfolder of path named name, ignoring case; None if absent."""
+        try:
+            for d in os.listdir(path):
+                if d.lower() == name.lower() and os.path.isdir(os.path.join(path, d)):
+                    return os.path.join(path, d)
+        except OSError:
+            pass
+        return None
+
+    def _usgs_correlation_sites(self, folder):
+        """[(site name, images folder, data folder)] for a site folder or a folder of site folders."""
+        images, data = self._usgs_subfolder(folder, "images"), self._usgs_subfolder(folder, "data")
+        if images and data:
+            return [(os.path.basename(os.path.normpath(folder)), images, data)]
+        sites = []
+        try:
+            children = sorted(os.listdir(folder))
+        except OSError:
+            children = []
+        for child in children:
+            path = os.path.join(folder, child)
+            if os.path.isdir(path):
+                images, data = self._usgs_subfolder(path, "images"), self._usgs_subfolder(path, "data")
+                if images and data:
+                    sites.append((child, images, data))
+        return sites
+
+    @staticmethod
+    def _usgs_sensor_file(data_folder):
+        """Newest NWIS sensor file in a data folder: .csv preferred, else .txt. None if there is none."""
+        for ext in (".csv", ".txt"):
+            files = [os.path.join(data_folder, f) for f in os.listdir(data_folder) if f.lower().endswith(ext)]
+            if files:
+                return max(files, key=os.path.getmtime)
+        return None
+
+
     def USGS_InitProductTable(self):
         # HEADER TITLES
         headerList = ['Site', 'Image Count', ' min Date ', ' max Date ', 'Start Date', 'End Date', 'Start Time', 'End Time']
 
-        # DEFINE HEADER STYLE
-        stylesheet = "::section{Background-color:rgb(116,175,80);border-radius:14px;}"
+        # DEFINE HEADER STYLE (shared with the PhenoCam table)
+        stylesheet = _data_table_header_style()
 
         # POINTER TO HEADER
         header = self.table_USGS_Sites.horizontalHeader()
 
-        # SET DEFAULT HEADER SETTINGS
-        header.setMinimumSectionSize(120)
-        header.setDefaultSectionSize(140)
+        # SET DEFAULT HEADER SETTINGS (columns fit their contents, as in the PhenoCam table)
         header.setHighlightSections(False)
         header.setStretchLastSection(False)
 
@@ -2478,9 +5107,9 @@ class MainWindow(QMainWindow):
             headerItem.setTextAlignment(QtCore.Qt.AlignCenter)
 
             self.table_USGS_Sites.setHorizontalHeaderItem(i, headerItem)
-            self.table_USGS_Sites.setStyleSheet(stylesheet)
+            header.setStyleSheet(stylesheet)
 
-            header.setSectionResizeMode(i, QHeaderView.Interactive)
+            header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
 
         header.setSectionResizeMode(0, QHeaderView.Stretch)
 
@@ -2497,7 +5126,7 @@ class MainWindow(QMainWindow):
 
         # START TIME - defaults to 00:00:00
         time_widget = QDateTimeEdit()
-        time_widget.setDisplayFormat("hh:mm:ss")
+        time_widget.setDisplayFormat("hh:mm")
         time_widget.setTime(QtCore.QTime(0, 0, 0))  # 00:00:00
         time_widget.dateTimeChanged.connect(lambda: self.USGS_dateChangeMethod(time_widget, self.table_USGS_Sites))
         time_widget.setKeyboardTracking(False)
@@ -2506,7 +5135,7 @@ class MainWindow(QMainWindow):
 
         # END TIME - defaults to 23:59:59 (full day)
         time_widget = QDateTimeEdit()
-        time_widget.setDisplayFormat("hh:mm:ss")
+        time_widget.setDisplayFormat("hh:mm")
         time_widget.setTime(QtCore.QTime(23, 59, 59))  # 23:59:59
         time_widget.dateTimeChanged.connect(lambda: self.USGS_dateChangeMethod(time_widget, self.table_USGS_Sites))
         time_widget.setKeyboardTracking(False)
@@ -2517,6 +5146,8 @@ class MainWindow(QMainWindow):
     #
     # ======================================================================================================================
     def USGS_dateChangeMethod(self, date_widget, tableWidget):
+        if getattr(self, "_usgs_layout_built", False):
+            return   # row 0 is "All checked sites"; its changes go through _usgs_apply_all_row
         # ============================================================================
         # DEBOUNCE: RESTART TIMER ON EACH DATE/TIME CHANGE
         # THIS PREVENTS API SPAM WHILE USER IS STILL TYPING/SELECTING DATES
@@ -2582,7 +5213,7 @@ class MainWindow(QMainWindow):
             m += 1
             # START TIME - defaults to 00:00:00
             dateTime = QDateTimeEdit()
-            dateTime.setDisplayFormat("hh:mm:ss")  # Show seconds for clarity
+            dateTime.setDisplayFormat("hh:mm")
             dateTime.setTime(QtCore.QTime(0, 0, 0))  # 00:00:00
             dateTime.dateTimeChanged.connect(lambda: self.USGS_dateChangeMethod(date_widget, self.table_USGS_Sites))
             dateTime.setKeyboardTracking(False)
@@ -2592,12 +5223,15 @@ class MainWindow(QMainWindow):
             m += 1
             # END TIME - defaults to 23:59:59 (full day)
             dateTime = QDateTimeEdit()
-            dateTime.setDisplayFormat("hh:mm:ss")  # Show seconds for clarity
+            dateTime.setDisplayFormat("hh:mm")
             dateTime.setTime(QtCore.QTime(23, 59, 59))  # 23:59:59
             dateTime.dateTimeChanged.connect(lambda: self.USGS_dateChangeMethod(date_widget, self.table_USGS_Sites))
             dateTime.setKeyboardTracking(False)
             dateTime.setFrame(False)
             tableProducts.setCellWidget(i, m, dateTime)
+
+        if getattr(self, "_usgs_layout_built", False):
+            self._usgs_reset_rows()
 
     # ======================================================================================================================
     #
@@ -2606,10 +5240,15 @@ class MainWindow(QMainWindow):
         """(Re)build the USGS site tree from self.cameraList.
         Hidden cameras (when shown) are rendered in gray italics.
         """
+        self.USGS_listboxSites.blockSignals(True)
         self.USGS_listboxSites.clear()
+        checked = getattr(self, "_usgs_rows", {})
         for camID in self.cameraList:
             site_item = QTreeWidgetItem([camID])
             site_item.setData(0, QtCore.Qt.UserRole, camID)
+            if getattr(self, "_usgs_layout_built", False):
+                site_item.setFlags(site_item.flags() | QtCore.Qt.ItemIsUserCheckable)
+                site_item.setCheckState(0, QtCore.Qt.Checked if camID in checked else QtCore.Qt.Unchecked)
 
             # Visually distinguish hidden cameras when they are displayed
             try:
@@ -2633,6 +5272,9 @@ class MainWindow(QMainWindow):
             self.USGS_listboxSites.addTopLevelItem(site_item)
 
         self.USGS_listboxSites.collapseAll()
+        self.USGS_listboxSites.blockSignals(False)
+        if hasattr(self, "_usgs_apply_filter"):
+            self._usgs_apply_filter()
 
     # ------------------------------------------------------------------------------------------------------------------
     #
@@ -2701,7 +5343,7 @@ class MainWindow(QMainWindow):
             self._on_usgs_site_expanded(currentItem)
 
             # Fetch latest image in background thread
-            self.USGS_labelLatestImage.setText("Loading midday image...")
+            self._show_image_message("usgs", "Loading midday image...")
             if self._usgs_image_fetcher and self._usgs_image_fetcher.isRunning():
                 self._usgs_image_fetcher.quit()
                 self._usgs_image_fetcher.wait()
@@ -2709,8 +5351,9 @@ class MainWindow(QMainWindow):
             self._usgs_image_fetcher.result.connect(self._on_usgs_latest_image_received)
             self._usgs_image_fetcher.start()
 
-            # Update table
-            self.table_USGS_Sites.setItem(0, 0, QTableWidgetItem(strCamID))
+            # Update table (row 0 is "All checked sites" in the code-built layout)
+            if not getattr(self, "_usgs_layout_built", False):
+                self.table_USGS_Sites.setItem(0, 0, QTableWidgetItem(strCamID))
 
         except Exception as e:
             print("Error in USGS_updateSiteInfo:", e)
@@ -2726,7 +5369,7 @@ class MainWindow(QMainWindow):
     def _on_usgs_latest_image_received(self, code: int, pix, is_midday: bool):
         if code == 404 or pix is None:
             self.USGS_latestImage = []
-            self.USGS_labelLatestImage.setText("No Image Available")
+            self._show_image_message("usgs", "No image available.")
             if hasattr(self, '_usgs_image_title_label'):
                 self._usgs_image_title_label.setText("")
         else:
@@ -2832,7 +5475,20 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     #
     # ------------------------------------------------------------------------------------------------------------------
+    def _show_image_message(self, tab, text):
+        """Text in place of the image on the "neon" or "usgs" tab (zoom panel if built, else the label)."""
+        panel = getattr(self, f"{tab}_image_panel", None)
+        if panel is not None:
+            panel.showMessage(text)
+        else:
+            (self.NEON_labelLatestImage if tab == "neon" else self.USGS_labelLatestImage).setText(text)
+
     def USGS_DisplayLatestImage(self):
+        panel = getattr(self, "usgs_image_panel", None)
+        if panel is not None:
+            if self.USGS_latestImage != []:
+                panel.setPixmap(self.USGS_latestImage)   # same image keeps the user's zoom
+            return
         if self.USGS_latestImage != [] and self.USGS_labelLatestImage.width() > 1:
             self.USGS_labelLatestImage.clear()
             self.USGS_labelLatestImage.setPixmap(
@@ -2854,6 +5510,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     def USGS_SiteClicked(self, item):
         USGSSiteIndex = self.USGS_updateSiteInfo(item)
+        if getattr(self, "_usgs_layout_built", False):
+            return   # counts are shown per checked camera in the table
 
         imageCount = self.USGS_get_image_count()
 
@@ -3185,6 +5843,18 @@ class MainWindow(QMainWindow):
     #
     # ==================================================================================================================
     def NEON_FormatProductTableHeader(self):
+        # Once the code-built NEON layout exists, its table replaces this format.
+        if getattr(self, "_neon_layout_built", False):
+            self._neon_setup_table()
+            tree = self.NEON_listboxSites
+            tree.blockSignals(True)
+            for i in range(tree.topLevelItemCount()):
+                branch = self._neon_branch(tree.topLevelItem(i), "products")
+                for c in range(branch.childCount() if branch else 0):
+                    branch.child(c).setCheckState(0, QtCore.Qt.Unchecked)
+            tree.blockSignals(False)
+            self._neon_apply_filter()
+            return
 
         # HEADER TITLES
         headerList = ['Site', "Image Count", 'Start Date', 'End Date', 'Start Time', 'End Time']
@@ -3290,11 +5960,11 @@ class MainWindow(QMainWindow):
 
             startTimeCol = 6
             nHour, nMinute, nSecond = self.separateTime(self.table_USGS_Sites.cellWidget(0, startTimeCol).dateTime().time())
-            startTime = datetime.time(nHour, nMinute, nSecond)
+            startTime = datetime.time(nHour, nMinute, 0)          # times are entered to the minute
 
             endTimeCol = 7
             nHour, nMinute, nSecond = self.separateTime(self.table_USGS_Sites.cellWidget(0, endTimeCol).dateTime().time())
-            endTime = datetime.time(nHour, nMinute, nSecond)
+            endTime = datetime.time(nHour, nMinute, 59)           # the end minute is inclusive
 
             nwisID = self.myHIVIS.get_nwisID()
 
@@ -3313,6 +5983,9 @@ class MainWindow(QMainWindow):
         1. Debounce timer (2 seconds after date/time changes)
         2. Manual "Check Availability" button click
         """
+        if getattr(self, "_usgs_layout_built", False):
+            self._usgs_count_rows()
+            return
         if self.usgs_checking:
             return  # Already checking, avoid duplicate calls
         
@@ -3350,21 +6023,41 @@ class MainWindow(QMainWindow):
     #
     # ==================================================================================================================
     def pushButton_USGSCorrelate_Clicked(self):
-        """Correlate downloaded USGS images with the sidecar NWIS sensor file
-        and open a report of matches, misalignments, and coverage gaps."""
+        """Correlate downloaded USGS images with the sidecar NWIS sensor file and write a report of
+        matches, misalignments, and coverage gaps. The chosen folder can be:
+          - a site folder holding Images and data      -> that site
+          - a folder of site folders, each with both   -> every site, plus a summary of all of them
+          - a folder of images (as before)             -> asks for the sensor file
+        """
         start_dir = self.edit_USGSSaveFilePath.text().strip() or (JsonEditor().getValue("USGS_Root_Folder") or "")
 
-        image_folder = QtWidgets.QFileDialog.getExistingDirectory(
-            self, "Select the folder of downloaded USGS images", start_dir)
-        if not image_folder:
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select a site folder (Images + data), a folder of site folders, or a folder of images",
+            start_dir)
+        if not folder:
             return
 
-        sensor_file, _filter = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select the NWIS sensor data file (.txt or .csv)",
-            os.path.dirname(image_folder),
-            "NWIS sensor data (*.txt *.csv);;All files (*.*)")
-        if not sensor_file:
-            return
+        sites = self._usgs_correlation_sites(folder)
+        jobs = []   # (site name, image folder, sensor file or None)
+        if sites:
+            for name, images, data in sites:
+                jobs.append((name, images, self._usgs_sensor_file(data)))
+            if len(jobs) == 1 and jobs[0][2] is None:
+                sensor_file, _filter = QtWidgets.QFileDialog.getOpenFileName(
+                    self, "Select the NWIS sensor data file (.txt or .csv)", sites[0][2],
+                    "NWIS sensor data (*.txt *.csv);;All files (*.*)")
+                if not sensor_file:
+                    return
+                jobs[0] = (jobs[0][0], jobs[0][1], sensor_file)
+        else:
+            # The chosen folder is the image folder itself (original behavior)
+            sensor_file, _filter = QtWidgets.QFileDialog.getOpenFileName(
+                self, "Select the NWIS sensor data file (.txt or .csv)",
+                os.path.dirname(folder),
+                "NWIS sensor data (*.txt *.csv);;All files (*.*)")
+            if not sensor_file:
+                return
+            jobs.append((os.path.basename(os.path.normpath(folder)), folder, sensor_file))
 
         # Match tolerance: seconds entered directly; 0 = automatic
         # (half the sensor sampling interval, e.g. 450 s for 15-min data).
@@ -3379,39 +6072,72 @@ class MainWindow(QMainWindow):
         tolerance_minutes = (tol_seconds / 60.0) if tol_seconds > 0 else None
 
         from appcore.QProgressWheel import QProgressWheel
-        progressBar = QProgressWheel(0, 1000)
-        progressBar.setWindowTitle("Correlating images with sensor data...")
-        # Keep the wheel visible above the main window
-        progressBar.setWindowFlags(progressBar.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
-        progressBar.show()
+        from appcore.SensorImageCorrelator import SensorImageCorrelator
+        from appcore.reporting.gap_report import reports_folder_for
+        results = []   # (site, status, csv path, xlsx path, sensor file)
+        for i, (name, image_folder, sensor_file) in enumerate(jobs, start=1):
+            prefix = f"{name} (site {i} of {len(jobs)}): " if len(jobs) > 1 else ""
+            if sensor_file is None:
+                results.append((name, "No sensor file in data folder", "", "", ""))
+                continue
 
-        def _progress(done, total, label):
-            progressBar.setValue(int(done * 1000 / max(total, 1)))
-            if label:
-                progressBar.setWindowTitle(label)
-            QApplication.processEvents()
+            progressBar = QProgressWheel(0, 1000)
+            progressBar.setWindowTitle(prefix + "Correlating images with sensor data...")
+            # Keep the wheel visible above the main window
+            progressBar.setWindowFlags(progressBar.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+            progressBar.show()
 
-        try:
-            from appcore.SensorImageCorrelator import SensorImageCorrelator
-            correlator = SensorImageCorrelator()
-            csv_path, xlsx_path = correlator.correlate(image_folder, sensor_file,
-                                                       tolerance_minutes=tolerance_minutes,
-                                                       progress=_progress)
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(
-                self, "Sensor/Image Correlation",
-                f"Correlation failed:\n{e}")
+            def _progress(done, total, label, _bar=progressBar, _prefix=prefix):
+                _bar.setValue(int(done * 1000 / max(total, 1)))
+                if label:
+                    _bar.setWindowTitle(_prefix + str(label))
+                QApplication.processEvents()
+
+            try:
+                # Reports go in a "correlation" folder: the sister of Images (<site>/correlation),
+                # or a subfolder of any other image folder, never among the images.
+                csv_path, xlsx_path = SensorImageCorrelator().correlate(
+                    image_folder, sensor_file,
+                    output_folder=reports_folder_for(image_folder, "correlation"),
+                    tolerance_minutes=tolerance_minutes, progress=_progress)
+                results.append((name, "OK", csv_path, xlsx_path, sensor_file))
+            except Exception as e:
+                results.append((name, f"Failed: {e}", "", "", sensor_file))
+            finally:
+                # Always dismiss the progress wheel, whatever happened above
+                progressBar.close()
+
+        if len(results) == 1:
+            name, status, csv_path, xlsx_path, _sensor = results[0]
+            if status == "OK":
+                QtWidgets.QMessageBox.information(
+                    self, "Sensor/Image Correlation",
+                    "Correlation report written:\n\n"
+                    f"{csv_path}\n{xlsx_path}\n\n"
+                    "The xlsx contains Image Correlation, Sensor Coverage, Gaps, "
+                    "and Summary worksheets. Unmatched rows are highlighted.")
+            else:
+                QtWidgets.QMessageBox.critical(self, "Sensor/Image Correlation",
+                                               f"Correlation failed for {name}:\n{status}")
             return
-        finally:
-            # Always dismiss the progress wheel, whatever happened above
-            progressBar.close()
 
+        # Several sites: one summary of all of them in the chosen folder, named by run time
+        import csv as _csv
+        summary_path = os.path.join(folder, f"CorrelationSummary_{datetime.datetime.now():%Y%m%d_%H%M%S}.csv")
+        try:
+            with open(summary_path, "w", newline="", encoding="utf-8") as f:
+                w = _csv.writer(f)
+                w.writerow(["Site", "Result", "Correlation CSV", "Correlation Workbook", "Sensor File"])
+                w.writerows(results)
+        except Exception as e:
+            summary_path = f"(could not write summary: {e})"
+        n_ok = sum(1 for r in results if r[1] == "OK")
+        lines = [f"{r[0]}: {r[1]}" for r in results]
         QtWidgets.QMessageBox.information(
             self, "Sensor/Image Correlation",
-            "Correlation report written:\n\n"
-            f"{csv_path}\n{xlsx_path}\n\n"
-            "The xlsx contains Image Correlation, Sensor Coverage, Gaps, "
-            "and Summary worksheets. Unmatched rows are highlighted.")
+            f"Correlated {n_ok} of {len(results)} sites.\n\n" + "\n".join(lines) +
+            f"\n\nSummary of all sites:\n{summary_path}\n\n"
+            "The summary lists each site's report files.")
 
     def pushButton_USGSDownloadClicked(self):
 
@@ -3443,6 +6169,11 @@ class MainWindow(QMainWindow):
             if not os.path.exists(USGS_download_file_path):
                 os.makedirs(USGS_download_file_path)
 
+        # Checked cameras: download each (code-built layout)
+        if getattr(self, "_usgs_layout_built", False) and self._usgs_rows:
+            self._usgs_download_checked(USGS_download_file_path)
+            return
+
         currentItem = self.USGS_listboxSites.currentItem()
 
         if currentItem is not None:
@@ -3458,13 +6189,20 @@ class MainWindow(QMainWindow):
 
             startTimeCol = 6
             nHour, nMinute, nSecond = self.separateTime(self.table_USGS_Sites.cellWidget(0, startTimeCol).dateTime().time())
-            startTime = datetime.time(nHour, nMinute, nSecond)
+            startTime = datetime.time(nHour, nMinute, 0)          # times are entered to the minute
 
             endTimeCol = 7
             nHour, nMinute, nSecond = self.separateTime(self.table_USGS_Sites.cellWidget(0, endTimeCol).dateTime().time())
-            endTime = datetime.time(nHour, nMinute, nSecond)
+            endTime = datetime.time(nHour, nMinute, 59)           # the end minute is inclusive
 
             nwisID = self.myHIVIS.get_nwisID()
+            if getattr(self, "_usgs_layout_built", False):
+                # Image counts for other cameras change HIVIS's "last camera", so take this
+                # camera's NWIS ID from its own record, and build its time-zone-aware image
+                # list (counting no longer happens on a site click).
+                nwisID = self._usgs_nwis_id(site)
+                self.myHIVIS.get_image_count(siteName=site, nwisID=nwisID, startDate=startDate, endDate=endDate,
+                                             startTime=startTime, endTime=endTime)
 
             #downloadsFilePath = os.path.join(self.edit_USGSSaveFilePath.text(), 'Images')
             downloadsFilePath = self.edit_USGSSaveFilePath.text()
@@ -3601,26 +6339,10 @@ class MainWindow(QMainWindow):
             self.NEON_listboxSites.clear()
 
             for site in siteList:
-                site_item = QTreeWidgetItem([f"{site.siteID} - {site.siteName}"])
-                site_item.setData(0, QtCore.Qt.UserRole, site.siteID)
-                for label, value in [("Site ID", site.siteID),
-                                     ("Site Name", site.siteName),
-                                     ("Latitude", site.latitude),
-                                     ("Longitude", site.longitude),
-                                     ("PhenoCams", site.phenocamSite)]:
-                    child = QTreeWidgetItem([f"{label}: {value}"])
-                    child.setFlags(child.flags() & ~QtCore.Qt.ItemIsSelectable)
-                    url = next((w for w in str(value).split() if w.startswith("http")), None)
-                    if url:
-                        child.setData(0, QtCore.Qt.UserRole + 1, url)
-                        child.setForeground(0, QtGui.QBrush(QtGui.QColor("#1a6fc4")))
-                        font = child.font(0)
-                        font.setUnderline(True)
-                        child.setFont(0, font)
-                    site_item.addChild(child)
-                self.NEON_listboxSites.addTopLevelItem(site_item)
+                self.NEON_listboxSites.addTopLevelItem(self._neon_build_site_item(site))
 
             self.NEON_listboxSites.collapseAll()
+            self._neon_apply_filter()
 
             #JES - TEMPORARILY SET BARCO LAKE AS THE DEFAULT SELECTION
             try:
@@ -4815,11 +7537,15 @@ class MainWindow(QMainWindow):
 
         self.NEON_listboxSiteProducts.show()
 
+        # With the code-built layout, products are chosen by checking them in the site
+        # tree, so clicking a site no longer fills the table with default products.
+        auto_select = not getattr(self, "_neon_layout_built", False)
+
         #JES - TEMPORARILY SET NITRATE DATA ('should only be one nitrate product') AS THE DEFAULT SELECTION
         # vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
         itemNitrate = self.NEON_listboxSiteProducts.findItems('Nitrate', QtCore.Qt.MatchContains)
         nIndex = 0
-        if len(itemNitrate) > 0:
+        if auto_select and len(itemNitrate) > 0:
             for item in itemNitrate:
                 nIndex = self.NEON_listboxSiteProducts.row(item)
                 self.NEON_listboxSiteProducts.setCurrentRow(nIndex)
@@ -4830,7 +7556,7 @@ class MainWindow(QMainWindow):
         # vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
         item20002 = self.NEON_listboxSiteProducts.findItems('20002', QtCore.Qt.MatchContains)
         nIndex = 0
-        if len(item20002) > 0:
+        if auto_select and len(item20002) > 0:
             for item in item20002:
                 nIndex = self.NEON_listboxSiteProducts.row(item)
                 self.NEON_listboxSiteProducts.setCurrentRow(nIndex)
@@ -4866,7 +7592,9 @@ class MainWindow(QMainWindow):
             self.NEON_DisplayLatestImage()
         else:
             gWebImagesAvailable = 0
-            self.NEON_labelLatestImage.setText(error_msg or "No Images Available")
+            self._show_image_message("neon", "No image available.")
+            if error_msg:
+                print(f"[NEON] Latest image: {error_msg}")
 
     def _neon_tree_item_clicked(self, item, column):
         """Open URL in browser if the clicked NEON tree item is a hyperlink."""
@@ -4877,9 +7605,16 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl(url))
 
     def NEON_DisplayLatestImage(self):
+        panel = getattr(self, "neon_image_panel", None)
+        if panel is not None:
+            if self.NEON_latestImage == []:
+                panel.showMessage("No image available.")
+            else:
+                panel.setPixmap(self.NEON_latestImage)   # same image keeps the user's zoom
+            return
 
         if self.NEON_latestImage == []:
-            self.NEON_labelLatestImage.setText("No Images Available")
+            self.NEON_labelLatestImage.setText("No image available.")
         elif self.NEON_labelLatestImage.width() > 1:
             self.NEON_labelLatestImage.clear()
             self.NEON_labelLatestImage.setPixmap(self.NEON_latestImage.scaled(self.NEON_labelLatestImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
@@ -5546,11 +8281,15 @@ def NEON_updateSiteInfo(self):
     ]
     deims_url = data.get('deimsId', '')
 
+    # API fields go under the "Site details" branch when the code-built layout is in use
+    details = self._neon_branch(top, "details") if getattr(self, "_neon_layout_built", False) else None
+    target = details if details is not None else top
+
     # Remove any previously-added API children (marked with UserRole+3)
     i = 0
-    while i < top.childCount():
-        if top.child(i).data(0, QtCore.Qt.UserRole + 3):
-            top.removeChild(top.child(i))
+    while i < target.childCount():
+        if target.child(i).data(0, QtCore.Qt.UserRole + 3):
+            target.removeChild(target.child(i))
         else:
             i += 1
 
@@ -5559,7 +8298,7 @@ def NEON_updateSiteInfo(self):
             child = QTreeWidgetItem([f"{label}: {value}"])
             child.setFlags(child.flags() & ~QtCore.Qt.ItemIsSelectable)
             child.setData(0, QtCore.Qt.UserRole + 3, True)
-            top.addChild(child)
+            target.addChild(child)
 
     if deims_url:
         link_item = QTreeWidgetItem([f"DEIMS ID: {deims_url}"])
@@ -5569,7 +8308,7 @@ def NEON_updateSiteInfo(self):
         font = link_item.font(0)
         font.setUnderline(True)
         link_item.setFont(0, font)
-        top.addChild(link_item)
+        target.addChild(link_item)
 
     return (SITECODE)
 
@@ -5945,9 +8684,63 @@ def downloadProductDataFiles(self, item):
 
 
     # --------------------------------------------------------------------------------
-    # FIND IMAGE PRODUCT (20002) ROW TO GET DATE RANGE
+    # CODE-BUILT LAYOUT: one row per checked site/product, each with its own site
     # --------------------------------------------------------------------------------
-    rowRange = range(self.NEON_selected_products.rowCount())
+    if getattr(self, "_neon_layout_built", False):
+        global SITECODE, DOMAINCODE
+        jobs = self._neon_download_jobs()
+        if not jobs:
+            App_QMessageBox('NEON Download', 'Check one or more data products in the site list first.',
+                            buttons=QMessageBox.Close).displayMsgBox()
+            return
+        multi_site = len({j[0] for j in jobs}) > 1
+        for site, domain, strProductIDCell, start_date, start_time, end_date, end_time in jobs:
+            SITECODE, DOMAINCODE = site, domain
+            # One site downloads into the folder itself, as before; several sites each get a subfolder.
+            site_root = os.path.join(NEON_download_file_path, site) if multi_site else NEON_download_file_path
+            nProductID = self._neon_product_id(strProductIDCell.split(':')[0])
+            if nProductID <= 0:
+                missing_data_message += 'NEON Error!\n  ' + strProductIDCell + 'Product not available!' + '\n'
+                continue
+            PRODUCTCODE = strProductIDCell.split(':')[0]
+
+            if nProductID in self.NEON_IMAGE_PRODUCT_IDS:
+                downloadsFilePath = os.path.join(site_root, 'Images')
+                if not os.path.exists(downloadsFilePath):
+                    os.makedirs(downloadsFilePath)
+                DP1_20002_fetchImageList(self, nProductID, 0, start_date, end_date, start_time, end_time,
+                                         downloadsFilePath)
+                processLocalImage(self, imageFileFolder=downloadsFilePath)
+
+            if nProductID != 20002:
+                strStartYearMonth = str(start_date.year) + '-' + str(start_date.month).zfill(2)
+                strEndYearMonth = str(end_date.year) + '-' + str(end_date.month).zfill(2)
+                dateRange = App_Utils().getRangeOfDates(strStartYearMonth, strEndYearMonth)
+                availableMonths = NEON_API().getAvailableMonths(SITECODE, PRODUCTCODE)
+                monthCount = 0
+                missingMonths = []
+                for month in dateRange:
+                    if month in availableMonths:
+                        monthCount += 1
+                    else:
+                        missingMonths.append(month)
+                if monthCount == 0:
+                    missing_data_message = missing_data_message + 'NEON Error!  ' + site + ' ' + strProductIDCell + 'Data is not available for some or all of the dates selected!\n'
+                elif monthCount < len(dateRange):
+                    strMsg = '%d of %d months unavailable: %s' % (len(missingMonths), len(dateRange), missingMonths)
+                    missing_data_message = missing_data_message + 'Partial Download!\n   ' + site + ' ' + strProductIDCell + strMsg + '\n'
+                if monthCount > 0:
+                    downloadsFilePath = os.path.normpath(os.path.join(site_root, 'data'))
+                    if not os.path.exists(downloadsFilePath):
+                        os.makedirs(downloadsFilePath)
+                    nError = myNEON_API.FetchData(SITECODE, strProductIDCell, strStartYearMonth, strEndYearMonth, downloadsFilePath)
+        rowRange = range(0)   # the .ui-table loop below has nothing left to do
+    else:
+        rowRange = range(self.NEON_selected_products.rowCount())
+
+    # --------------------------------------------------------------------------------
+    # FIND IMAGE PRODUCT (20002) ROW TO GET DATE RANGE  (.ui table, used before the code-built layout)
+    # --------------------------------------------------------------------------------
 
     for nRow in rowRange:
         ProductTableObj = ProductTable()
