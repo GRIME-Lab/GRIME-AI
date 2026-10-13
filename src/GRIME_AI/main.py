@@ -1187,6 +1187,15 @@ def _fix_mojibake(text):
         return text
 
 
+def _strip_neon_suffix(name):
+    """Drop a redundant trailing ' NEON' from a NEON field-site name for display
+    on the NEON tab (e.g. 'Lake Barco NEON' -> 'Lake Barco'). Names without the
+    suffix are returned unchanged."""
+    if not isinstance(name, str):
+        return name
+    return re.sub(r"\s+NEON\s*$", "", name)
+
+
 class NEONSitesProductsFetcher(QtCore.QThread):
     """
     Fetches every NEON site's data products in one request (GET {server}sites), in the
@@ -4052,14 +4061,16 @@ class MainWindow(QMainWindow):
 
     def _neon_build_site_item(self, site):
         """Tree item for one NEON field site (used at startup and by Refresh NEON)."""
-        site_item = QTreeWidgetItem([f"{site.siteID} - {_fix_mojibake(site.siteName)}"])
+        _site_name = _strip_neon_suffix(_fix_mojibake(site.siteName))
+        _base_label = f"{site.siteID} - {_site_name}"
+        site_item = QTreeWidgetItem([_base_label])
         site_item.setData(0, QtCore.Qt.UserRole, site.siteID)
 
         details = QTreeWidgetItem(["Site details"])
         details.setData(0, self.NEON_BRANCH_ROLE, "details")
         details.setFlags(details.flags() & ~QtCore.Qt.ItemIsSelectable)
         for label, value in [("Site ID", site.siteID),
-                             ("Site Name", _fix_mojibake(site.siteName)),
+                             ("Site Name", _site_name),
                              ("Latitude", site.latitude),
                              ("Longitude", site.longitude),
                              ("PhenoCams", site.phenocamSite)]:
@@ -4101,6 +4112,7 @@ class MainWindow(QMainWindow):
                                else QtCore.Qt.Unchecked)
             branch.addChild(item)
         branch.setText(0, f"Data products ({len(info['products'])})")
+        site_item.setToolTip(0, f"{len(info['products'])} data products")
         tree.blockSignals(False)
 
     def _neon_products_received(self, data):

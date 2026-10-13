@@ -1,5 +1,7 @@
 import os
 import threading
+import urllib.parse
+import urllib.request
 import http.server
 import socketserver
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QApplication
@@ -56,13 +58,28 @@ class OpenStreetMapWidget(QWidget):
     overlayToggled = pyqtSignal(str, bool)                # a pin group was switched on/off in the map's layer panel
 
     # Pin groups listed in the map's layer panel, in this order. Pins added with group=<name> belong to it.
-    OVERLAY_ORDER = ("MESONET", "PhenoCam", "USGS", "NEON")
+    OVERLAY_ORDER = ("MESONET", "PhenoCam", "USGS", "NEON", "Watersheds")
     OVERLAY_SETTINGS_FILE = "map_layers.json"             # remembers which groups are shown, per user
 
     # Clustering (Leaflet.markercluster): each network clusters only with itself; clusters split apart on zoom-in.
     CLUSTER_RADIUS_PX = 60          # pins closer than this (screen pixels) merge into one cluster
     CLUSTER_OFF_AT_ZOOM = 11        # at this zoom level and closer, only overlapping pins stay merged...
     CLUSTER_OVERLAP_PX = 2          # ...pins within this many pixels; clicking such a cluster fans them out
+
+    # Watersheds: USGS Watershed Boundary Dataset (WBD), drawn by the USGS service for the visible area only.
+    WATERSHED_LAYER_NAME = "Watersheds"
+    WATERSHED_SERVICE_URL = "https://hydro.nationalmap.gov/arcgis/rest/services/wbd/MapServer"
+    # Service layer id -> (level, unit name). 1 = HUC2 ... 6 = HUC12 in the USGS service.
+    WATERSHED_LEVELS = {1: ("HUC2", "Region"), 2: ("HUC4", "Subregion"), 3: ("HUC6", "Basin"),
+                        4: ("HUC8", "Subbasin"), 5: ("HUC10", "Watershed"), 6: ("HUC12", "Subwatershed")}
+    # (deepest zoom, finest layer id shown): up to zoom 4 HUC2, up to 6 HUC4, ... ; None = no limit.
+    # All coarser levels are drawn too, in heavier lines, so the enclosing watersheds stay visible.
+    WATERSHED_FINEST_BY_ZOOM = ((4, 1), (6, 2), (7, 3), (9, 4), (11, 5), (None, 6))
+    WATERSHED_LINE_WIDTH_PT = {1: 3.0, 2: 2.5, 3: 2.0, 4: 1.5, 5: 1.0, 6: 0.75}
+    WATERSHED_LINE_RGBA = (0, 60, 160, 230)
+    WATERSHED_OPACITY = 1.0
+    WATERSHED_TIMEOUT_SEC = 20      # tile and identify requests to the USGS service
+    WATERSHED_TILE_PX = 256         # tile edge in pixels (Leaflet's tile size)
 
     def __init__(self, parent=None, timeout_ms=10000, bounds_debounce_ms=0):
         self._overlay_visible = self._load_overlay_settings()
@@ -139,15 +156,52 @@ class OpenStreetMapWidget(QWidget):
         base_path = os.path.abspath(os.path.dirname(__file__))
         self._serve_root = os.path.normpath(os.path.join(base_path, ".."))
         serve_root = self._serve_root
+        widget = self
+        # The map cancels requests it no longer needs (e.g. tiles scrolled out of view), which closes the
+        # connection before the reply is written. That is normal, not an error.
+        client_gone = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
 
         class _Handler(http.server.SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=serve_root, **kwargs)
 
+            def do_GET(self):
+                # Watershed click lookups go through Python so the page never depends on the
+                # USGS server's cross-origin settings. Everything else is served from disk as before.
+                if self.path.startswith("/__watersheds/tile"):
+                    query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    self._reply(*widget._watershed_tile(query))
+                    return
+                if self.path.startswith("/__watersheds/identify"):
+                    query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                    body = json.dumps(widget._identify_watersheds(query)).encode("utf-8")
+                    self._reply(200, "application/json", body)
+                    return
+                super().do_GET()
+
+            def _reply(self, status, ctype, body):
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except client_gone:
+                    pass   # the map no longer wanted this reply
+
             def log_message(self, fmt, *args):
                 pass  # suppress access log noise
 
-        self._server = socketserver.TCPServer(("127.0.0.1", 0), _Handler)
+        class _Server(socketserver.ThreadingMixIn, socketserver.TCPServer):
+            daemon_threads = True
+
+            def handle_error(self, request, client_address):
+                import sys
+                if isinstance(sys.exc_info()[1], client_gone):
+                    return            # request cancelled by the map; nothing to report
+                super().handle_error(request, client_address)
+
+        self._server = _Server(("127.0.0.1", 0), _Handler)
         port = self._server.server_address[1]
         self._server_thread = threading.Thread(
             target=self._server.serve_forever, daemon=True
@@ -561,7 +615,7 @@ class OpenStreetMapWidget(QWidget):
     # --------------------------------------------------------------------------------------------------------------
     # Public API: interactive marker layers (clickable, hover tooltips, removable, recolorable)
     # --------------------------------------------------------------------------------------------------------------
-    def add_marker_layer(self, name, markers, dot=None):
+    def add_marker_layer(self, name, markers, dot=None, group=None, group_default_visible=True, group_color=None):
         """
         Add many pins in one call as a named, removable layer. Replaces any layer with the same name.
 
@@ -576,12 +630,23 @@ class OpenStreetMapWidget(QWidget):
         dot: None draws icon pins. A dict draws small circles instead:
             {"radius": px, "weight": border width px, "fill_opacity": 0..1}
 
+        group: name of an entry in the map's layer panel (a checkbox, e.g. "Watersheds"); the layer
+               is placed inside it and shown or hidden with it. None adds the layer straight to the map.
+
+        group_default_visible: whether that layer-panel entry starts checked the first time it appears
+               (True) or unchecked (False). Ignored without group, and once the user has set the checkbox.
+
+        group_color: CSS color of a small dot drawn next to this entry's checkbox, so the panel doubles
+               as a legend. None draws no dot. Ignored without group.
+
         Clicking a pin or dot emits markerClicked(id).
         """
-        def _impl(name, markers, dot):
-            js = f"window.gaAddMarkerLayer({json.dumps(name)}, {json.dumps(markers)}, {json.dumps(dot)});"
+        def _impl(name, markers, dot, group, default_visible, color):
+            js = (f"window.gaAddMarkerLayer({json.dumps(name)}, {json.dumps(markers)}, "
+                  f"{json.dumps(dot)}, {json.dumps(group)}, {json.dumps(bool(default_visible))}, "
+                  f"{json.dumps(color)});")
             self.view.page().runJavaScript(js)
-        self._queue_or_run(_impl, name, list(markers), dot)
+        self._queue_or_run(_impl, name, list(markers), dot, group, group_default_visible, group_color)
 
     def clear_marker_layer(self, name):
         """Remove a layer added with add_marker_layer."""
@@ -639,6 +704,133 @@ class OpenStreetMapWidget(QWidget):
             print(f"Map layer choices not saved: {e}")
         self.overlayToggled.emit(name, bool(visible))
 
+    # --------------------------------------------------------------------------------------------------------------
+    # Watersheds: click lookup through the USGS service (never raises; failures come back as a message)
+    # --------------------------------------------------------------------------------------------------------------
+    # 1x1 transparent PNG returned for tiles USGS could not supply
+    _BLANK_PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d494441"
+                               "54789c6360606060000000050001a5f645400000000049454e44ae426082")
+    _WEB_MERCATOR_HALF_EXTENT_M = 20037508.342789244   # EPSG:3857 constant
+
+    def _watershed_layer_ids(self, zoom):
+        """Layer ids drawn at this zoom: HUC2 up to the finest level for the zoom."""
+        finest = self.WATERSHED_FINEST_BY_ZOOM[-1][1]
+        for limit, layer_id in self.WATERSHED_FINEST_BY_ZOOM:
+            if limit is None or zoom <= limit:
+                finest = layer_id
+                break
+        return [i for i in sorted(self.WATERSHED_LEVELS) if i <= finest]
+
+    def _ws_log_once(self, key, text):
+        seen = self.__dict__.setdefault("_ws_logged", set())
+        if key not in seen:
+            seen.add(key)
+            print(f"[OSM] {text}")
+
+    def _ws_fetch(self, params):
+        """GET the USGS export. Returns (image bytes or None, reason text when not an image)."""
+        url = f"{self.WATERSHED_SERVICE_URL}/export?{urllib.parse.urlencode(params)}"
+        req = urllib.request.Request(url, headers={"User-Agent": "GRIME-AI map viewer"})
+        with urllib.request.urlopen(req, timeout=self.WATERSHED_TIMEOUT_SEC) as resp:
+            ctype = resp.headers.get("Content-Type", "")
+            body = resp.read()
+        if ctype.startswith("image/"):
+            return body, ""
+        return None, f"{ctype or 'no content type'}: {body[:300].decode('utf-8', errors='replace')}"
+
+    def _watershed_tile(self, query):
+        """One map tile of watershed boundaries: (HTTP status, content type, bytes). Never raises."""
+        try:
+            z, x, y = (int(query[k][0]) for k in ("z", "x", "y"))
+        except (KeyError, ValueError, IndexError):
+            return 400, "image/png", self._BLANK_PNG
+        half = self._WEB_MERCATOR_HALF_EXTENT_M
+        span = 2 * half / (2 ** z)
+        minx, maxy = -half + x * span, half - y * span
+        ids = self._watershed_layer_ids(z)
+        px = int(self.WATERSHED_TILE_PX)
+        base = {"bbox": f"{minx},{maxy - span},{minx + span},{maxy}", "bboxSR": "3857", "imageSR": "3857",
+                "size": f"{px},{px}", "format": "png32", "transparent": "true", "dpi": "96", "f": "image"}
+        rgba = list(self.WATERSHED_LINE_RGBA)
+        styled = dict(base, dynamicLayers=json.dumps([
+            {"id": i, "source": {"type": "mapLayer", "mapLayerId": i}, "minScale": 0, "maxScale": 0,
+             "drawingInfo": {"renderer": {"type": "simple", "symbol": {
+                 "type": "esriSFS", "style": "esriSFSNull",
+                 "outline": {"type": "esriSLS", "style": "esriSLSSolid", "color": rgba,
+                             "width": self.WATERSHED_LINE_WIDTH_PT.get(i, 1)}}}}} for i in ids],
+            separators=(",", ":")))
+        plain = dict(base, layers="show:" + ",".join(str(i) for i in ids))
+        try:
+            if self.__dict__.get("_ws_styled_ok", True):
+                img, why = self._ws_fetch(styled)
+                if img is not None:
+                    return 200, "image/png", img
+                self._ws_styled_ok = False
+                self._ws_log_once("styled", "USGS rejected the custom watershed line style; using the "
+                                            f"service's default style. Reply was {why}")
+            img, why = self._ws_fetch(plain)
+            if img is not None:
+                return 200, "image/png", img
+            self._ws_log_once("plain:" + why[:80], f"USGS returned no watershed image. Reply was {why}")
+        except Exception as e:
+            self._ws_log_once(f"net:{e.__class__.__name__}",
+                              f"Watershed tiles unavailable: {e.__class__.__name__}: {e}")
+        return 502, "image/png", self._BLANK_PNG
+
+    @staticmethod
+    def _pick(attrs, *candidates):
+        """First attribute matching one of the candidate names, ignoring case and punctuation."""
+        norm = {"".join(ch for ch in str(k).lower() if ch.isalnum()): v for k, v in attrs.items()}
+        for c in candidates:
+            v = norm.get("".join(ch for ch in c.lower() if ch.isalnum()))
+            if v not in (None, "", "Null"):
+                return v
+        return ""
+
+    def _identify_watersheds(self, query):
+        try:
+            lat = float(query["lat"][0])
+            lng = float(query["lng"][0])
+            ids = [int(i) for i in query["layers"][0].split(",") if i.strip()]
+        except (KeyError, ValueError, IndexError):
+            return {"ok": False, "message": "Watershed lookup: bad request."}
+        span = 0.01   # tiny map extent around the click; required by the service, not used for the result
+        params = {
+            "geometry": f"{lng},{lat}", "geometryType": "esriGeometryPoint", "sr": "4326",
+            "layers": "all:" + ",".join(str(i) for i in ids), "tolerance": "0",
+            "mapExtent": f"{lng - span},{lat - span},{lng + span},{lat + span}", "imageDisplay": "100,100,96",
+            "returnGeometry": "false", "returnFieldName": "true", "returnUnformattedValues": "true", "f": "json",
+        }
+        url = f"{self.WATERSHED_SERVICE_URL}/identify?{urllib.parse.urlencode(params)}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "GRIME-AI map viewer"})
+            with urllib.request.urlopen(req, timeout=self.WATERSHED_TIMEOUT_SEC) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+        except Exception as e:
+            print(f"[OSM] Watershed lookup failed: {e.__class__.__name__}: {e}")
+            return {"ok": False, "message": "Watershed details unavailable (USGS service not reachable)."}
+        if not isinstance(payload, dict) or "error" in payload:
+            print(f"[OSM] Watershed lookup returned an error: {str(payload)[:300]}")
+            return {"ok": False, "message": "Watershed details unavailable (USGS service returned an error)."}
+        units = []
+        for r in payload.get("results") or []:
+            layer_id = r.get("layerId")
+            level, unit = self.WATERSHED_LEVELS.get(layer_id, (str(r.get("layerName") or ""), ""))
+            attrs = r.get("attributes") or {}
+            digits = level[3:] if level.startswith("HUC") else ""
+            units.append({
+                "layer_id": layer_id,
+                "level": level,
+                "unit": unit,
+                "huc": str(self._pick(attrs, f"huc{digits}", f"HUC{digits}", "huc") or r.get("value") or ""),
+                "name": str(self._pick(attrs, "name", "Name") or ""),
+                "area_km2": self._pick(attrs, "areasqkm", "Area (Square Kilometers)", "area_sqkm"),
+                "area_acres": self._pick(attrs, "areaacres", "Area (Acres)", "area_acres"),
+                "states": str(self._pick(attrs, "states", "States") or ""),
+            })
+        units.sort(key=lambda u: -(u["layer_id"] or 0))     # finest first
+        return {"ok": True, "units": units}
+
     def _event_js(self):
         """Page-side support for the marker-layer, box-select and bounds API."""
         js = """
@@ -669,6 +861,7 @@ class OpenStreetMapWidget(QWidget):
                     window.gaOverlayOrder = __OVERLAY_ORDER__;
                     window.gaOverlayVisible = __OVERLAY_VISIBLE__;
                     window.gaOverlays = {};
+                    window.gaOverlayColors = {};
                     window.gaLayerControl = null;
                     window.gaOverlay = function (name) {
                         if (window.gaOverlays[name]) return window.gaOverlays[name];
@@ -685,14 +878,36 @@ class OpenStreetMapWidget(QWidget):
                             }).addTo(window.map);
                             window.map.on('overlayadd', function (e) {
                                 if (window.gaBridge) window.gaBridge.overlayToggled(e.name, true);
+                                if (window.gaDecorateLegend) setTimeout(window.gaDecorateLegend, 0);
                             });
                             window.map.on('overlayremove', function (e) {
                                 if (window.gaBridge) window.gaBridge.overlayToggled(e.name, false);
+                                if (window.gaDecorateLegend) setTimeout(window.gaDecorateLegend, 0);
                             });
                         }
                         window.gaLayerControl.addOverlay(group, name);
                         if (window.gaOverlayVisible[name] !== false) group.addTo(window.map);
                         return group;
+                    };
+
+                    window.gaDecorateLegend = function () {
+                        var ctl = window.gaLayerControl;
+                        if (!ctl || !ctl._overlaysList) return;
+                        var labels = ctl._overlaysList.getElementsByTagName('label');
+                        for (var i = 0; i < labels.length; i++) {
+                            var label = labels[i];
+                            var input = label.getElementsByTagName('input')[0];
+                            if (!input) continue;
+                            var color = window.gaOverlayColors[(label.textContent || '').trim()];
+                            if (!color) continue;
+                            if (label.getElementsByClassName('ga-legend-swatch').length) continue;
+                            var dot = document.createElement('span');
+                            dot.className = 'ga-legend-swatch';
+                            dot.style.cssText = 'display:inline-block;width:10px;height:10px;border-radius:50%;' +
+                                'background:' + color + ';border:1px solid #555;margin:0 4px;vertical-align:middle;';
+                            if (input.nextSibling) input.parentNode.insertBefore(dot, input.nextSibling);
+                            else input.parentNode.appendChild(dot);
+                        }
                     };
 
                     // One marker cluster per network/source, placed inside its layer-panel group. The cluster icon
@@ -756,11 +971,11 @@ class OpenStreetMapWidget(QWidget):
 
                     window.gaClearMarkerLayer = function (name) {
                         var layer = window.gaLayers[name];
-                        if (layer && mapReady()) window.map.removeLayer(layer.group);
+                        if (layer && mapReady()) (layer.parent || window.map).removeLayer(layer.group);
                         delete window.gaLayers[name];
                     };
 
-                    window.gaAddMarkerLayer = function (name, markers, dot) {
+                    window.gaAddMarkerLayer = function (name, markers, dot, overlayName, overlayDefault, overlayColor) {
                         if (!mapReady()) { console.error('Map not ready yet'); return; }
                         window.gaClearMarkerLayer(name);
                         var group = L.layerGroup();
@@ -784,8 +999,14 @@ class OpenStreetMapWidget(QWidget):
                             mk.addTo(group);
                             byId[id] = mk;
                         });
-                        group.addTo(window.map);
-                        window.gaLayers[name] = {group: group, byId: byId, dot: !!dot};
+                        if (overlayName && overlayColor) window.gaOverlayColors[overlayName] = overlayColor;
+                        if (overlayName && overlayDefault === false && window.gaOverlayVisible[overlayName] === undefined) {
+                            window.gaOverlayVisible[overlayName] = false;
+                        }
+                        var parent = overlayName ? window.gaOverlay(overlayName) : window.map;
+                        parent.addLayer(group);
+                        if (window.gaDecorateLegend) window.gaDecorateLegend();
+                        window.gaLayers[name] = {group: group, byId: byId, dot: !!dot, parent: parent};
                     };
 
                     window.gaSetMarkerColor = function (name, id, color, border) {
@@ -837,8 +1058,92 @@ class OpenStreetMapWidget(QWidget):
                         if (enabled) window.map.boxZoom.disable(); else window.map.boxZoom.enable();
                     };
 
+                    // ---- Watersheds: USGS WBD boundaries for the visible area, level chosen by zoom ----
+                    window.gaWs = __WATERSHED_CONFIG__;
+                    window.gaWsFinest = function (z) {
+                        for (var i = 0; i < gaWs.finestByZoom.length; i++) {
+                            var lim = gaWs.finestByZoom[i][0];
+                            if (lim === null || z <= lim) return gaWs.finestByZoom[i][1];
+                        }
+                        return gaWs.finestByZoom[gaWs.finestByZoom.length - 1][1];
+                    };
+                    window.gaWsLayerIds = function (z) {          // coarsest first (drawn on top, heaviest)
+                        var ids = [];
+                        for (var id = 1; id <= gaWsFinest(z); id++) ids.push(id);
+                        return ids;
+                    };
+                    var WsTiles = L.TileLayer.extend({
+                        // Tiles come through GRIME AI's local server, which fetches them from USGS
+                        getTileUrl: function (c) {
+                            return '/__watersheds/tile?z=' + c.z + '&x=' + c.x + '&y=' + c.y;
+                        }
+                    });
+                    var wsNotice = null;
+                    function wsShowNotice(show) {
+                        if (show && !wsNotice) {
+                            wsNotice = L.control({position: 'bottomleft'});
+                            wsNotice.onAdd = function () {
+                                var d = L.DomUtil.create('div', 'ga-ws-notice');
+                                d.innerHTML = 'Watershed boundaries unavailable (offline or USGS service not responding).';
+                                return d;
+                            };
+                            wsNotice.addTo(window.map);
+                            console.warn('Watershed boundaries unavailable.');
+                        } else if (!show && wsNotice) {
+                            window.map.removeControl(wsNotice);
+                            wsNotice = null;
+                        }
+                    }
+                    window.gaAddWatersheds = function () {
+                        if (window.gaWsLayer || !gaWs.enabled) return;
+                        window.gaWsLayer = new WsTiles('', {
+                            maxZoom: 19, opacity: gaWs.opacity, zIndex: 5,
+                            errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==',
+                            attribution: 'Watersheds: USGS WBD'
+                        });
+                        window.gaWsLayer.on('tileerror', function () { wsShowNotice(true); });
+                        window.gaWsLayer.on('tileload', function () { wsShowNotice(false); });
+                        window.gaOverlay(gaWs.layerName).addLayer(window.gaWsLayer);
+                        window.map.on('click', wsIdentify);
+                    };
+                    function esc(s) {
+                        return String(s).replace(/[&<>"]/g, function (ch) {
+                            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[ch];
+                        });
+                    }
+                    function fmtArea(km2, acres) {
+                        var k = parseFloat(km2), a = parseFloat(acres), out = [];
+                        if (!isNaN(k)) out.push(k.toLocaleString(undefined, {maximumFractionDigits: 1}) + ' km&sup2;');
+                        if (!isNaN(a)) out.push(a.toLocaleString(undefined, {maximumFractionDigits: 0}) + ' acres');
+                        return out.join(' (') + (out.length > 1 ? ')' : '');
+                    }
+                    function wsIdentify(e) {
+                        if (!window.gaWsLayer || !window.map.hasLayer(window.gaWsLayer)) return;
+                        var ids = gaWsLayerIds(window.map.getZoom());
+                        var popup = L.popup({maxWidth: 360}).setLatLng(e.latlng)
+                            .setContent('Looking up watersheds&hellip;').openOn(window.map);
+                        var url = '/__watersheds/identify?lat=' + e.latlng.lat + '&lng=' + e.latlng.lng +
+                                  '&layers=' + ids.join(',');
+                        fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+                            if (!d.ok) { popup.setContent(esc(d.message)); return; }
+                            if (!d.units.length) { popup.setContent('No watershed here (outside the WBD coverage).'); return; }
+                            popup.setContent(d.units.map(function (u) {
+                                var lines = ['<b>' + esc(u.level) + (u.unit ? ' ' + esc(u.unit) : '') + ':</b> ' +
+                                             esc(u.name || '(unnamed)')];
+                                if (u.huc) lines.push('<b>Code:</b> ' + esc(u.huc));
+                                var area = fmtArea(u.area_km2, u.area_acres);
+                                if (area) lines.push('<b>Area:</b> ' + area);
+                                if (u.states) lines.push('<b>States:</b> ' + esc(u.states));
+                                return lines.join('<br>');
+                            }).join('<hr style="margin:4px 0">'));
+                        }).catch(function () {
+                            popup.setContent('Watershed details unavailable (lookup failed).');
+                        });
+                    }
+
                     (function attach() {
                         if (!mapReady()) return setTimeout(attach, 100);
+                        try { window.gaAddWatersheds(); } catch (err) { console.error('Watersheds not added: ' + err); }
                         if (!window.gaBoxSelectEnabled) window.map.boxZoom.enable(); else window.map.boxZoom.disable();
                         window.map.on('moveend', onMoveEnd);
                         window.map.on('mousedown', onMouseDown);
@@ -852,7 +1157,19 @@ class OpenStreetMapWidget(QWidget):
                   .replace("__OVERLAY_VISIBLE__", json.dumps(self._overlay_visible))
                   .replace("__CLUSTER_RADIUS_PX__", str(int(self.CLUSTER_RADIUS_PX)))
                   .replace("__CLUSTER_OFF_AT_ZOOM__", str(int(self.CLUSTER_OFF_AT_ZOOM)))
-                  .replace("__CLUSTER_OVERLAP_PX__", str(int(self.CLUSTER_OVERLAP_PX))))
+                  .replace("__CLUSTER_OVERLAP_PX__", str(int(self.CLUSTER_OVERLAP_PX)))
+                  .replace("__WATERSHED_CONFIG__", json.dumps(self._watershed_config())))
+
+    def _watershed_config(self):
+        return {
+            "enabled": True,
+            "layerName": self.WATERSHED_LAYER_NAME,
+            "serviceUrl": self.WATERSHED_SERVICE_URL,
+            "finestByZoom": [list(p) for p in self.WATERSHED_FINEST_BY_ZOOM],
+            "widths": {str(k): v for k, v in self.WATERSHED_LINE_WIDTH_PT.items()},
+            "rgba": list(self.WATERSHED_LINE_RGBA),
+            "opacity": self.WATERSHED_OPACITY,
+        }
 
     # --------------------------------------------------------------------------------------------------------------
     # Internal: build and load HTML
@@ -890,6 +1207,8 @@ class OpenStreetMapWidget(QWidget):
                 .ga-count {{ position: absolute; top: -6px; right: -12px; min-width: 14px; padding: 0 4px;
                             background: #fff; color: #000; border: 1.5px solid #000; border-radius: 9px;
                             font: bold 11px sans-serif; text-align: center; line-height: 15px; }}
+                .ga-ws-notice {{ background: #fff; color: #000; padding: 3px 6px; border: 1px solid #000;
+                                font: 12px sans-serif; }}
             </style>
         </head>
         <body>

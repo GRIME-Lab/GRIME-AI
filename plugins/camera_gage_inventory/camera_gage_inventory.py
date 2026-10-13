@@ -136,6 +136,7 @@ STATUSES = ["Active sensor at site", "Active sensor nearby", "Discontinued senso
 
 CAMERA_MARKER_LAYER = "hivis_cameras"
 SENSOR_SITE_MARKER_LAYER = "sensor_sites"
+SENSOR_SITE_OVERLAY = "Active sensor sites (US gages)"   # map layer-panel checkbox, off by default
 
 
 # ======================================================================================================================
@@ -298,7 +299,8 @@ class InventoryWorker(QThread):
             for code in codes:
                 self.status.emit(f"Fetching sites nationwide that record {code}\u2026")
                 national[code] = self._features({"parameter_code": code, "computation_period_identifier": "Points",
-                                                 "properties": "monitoring_location_id,parameter_code,end_utc",
+                                                 "properties": "monitoring_location_id,parameter_code,"
+                                                               "parameter_name,end_utc",
                                                  "limit": page, "f": "json"})
 
             self.status.emit("Building inventory\u2026")
@@ -369,18 +371,24 @@ def _build_inventory(cams, site_series, national, codes, s):
     cutoff = run_time - timedelta(days=float(s["active_days"]))
     nearby_km = float(s["nearby_km"])
 
-    # Sites nationwide with a checked measurement: site -> last value time and location
+    # Sites nationwide with a checked measurement: site -> last value time, location, and per-measurement last time
     sensor_sites = {}
-    for feats in national.values():
+    sensor_code_names = {}   # checked code -> measurement name (from the national query)
+    for code, feats in national.items():
         for f in feats:
             p = f.get("properties", {})
             sid = p.get("monitoring_location_id")
             if not sid:
                 continue
-            g = sensor_sites.setdefault(sid, {"last": None, "lat": None, "lon": None})
+            if code not in sensor_code_names and p.get("parameter_name"):
+                sensor_code_names[code] = p.get("parameter_name")
+            g = sensor_sites.setdefault(sid, {"last": None, "lat": None, "lon": None, "codes": {}})
             end = _parse_utc(p.get("end_utc"))
             if end and (g["last"] is None or end > g["last"]):
                 g["last"] = end
+            g["codes"].setdefault(code, None)
+            if end and (g["codes"][code] is None or end > g["codes"][code]):
+                g["codes"][code] = end
             if g["lat"] is None:
                 g["lat"], g["lon"] = _point(f.get("geometry"))
     active_sites = {sid: g for sid, g in sensor_sites.items() if g["last"] and g["last"] >= cutoff}
@@ -508,8 +516,16 @@ def _build_inventory(cams, site_series, national, codes, s):
         "nearby_km": nearby_km,
     }
 
-    sensor_site_points = [(sid, g["lat"], g["lon"], g["last"]) for sid, g in active_sites.items()
-                          if g["lat"] is not None]
+    sensor_site_points = []
+    for sid, g in active_sites.items():
+        if g["lat"] is None:
+            continue
+        sensors = [{"code": code,
+                    "name": sensor_code_names.get(code) or param_names.get(code, ("", ""))[0] or code,
+                    "last": last, "active": bool(last and last >= cutoff)}
+                   for code, last in sorted(g["codes"].items())]
+        sensor_site_points.append({"sid": sid, "lat": g["lat"], "lon": g["lon"],
+                                   "last": g["last"], "sensors": sensors})
     return {"summary": summary, "rows": rows, "param_names": param_names, "cutoff": cutoff,
             "sensor_site_points": sensor_site_points}
 
@@ -694,7 +710,7 @@ class CameraSensorInventoryTab(QWidget):
         self._camera_empty.setFont(f)
         self._camera_stack.addWidget(self._camera_empty)
         self._camera_stack.addWidget(self._camera_table)
-        self._tabs.addTab(self._camera_stack, "Cameras")
+        self._tabs.addTab(self._build_cameras_tab(), "Cameras")
         self._tabs.addTab(self._param_table, "Measurements at Camera Sites")
         self._param_table.itemChanged.connect(self._on_param_item_changed)
         self._tabs.addTab(self._build_map(), "Map")
@@ -753,10 +769,6 @@ class CameraSensorInventoryTab(QWidget):
         self._hidden_chk.setChecked(bool(s["include_hidden"]))
         self._hidden_chk.toggled.connect(self._refresh_views)
         form.addRow(self._hidden_chk)
-        self._sensor_sites_chk = QCheckBox("Show active sensor sites on map")
-        self._sensor_sites_chk.setChecked(bool(s["show_sensor_sites_on_map"]))
-        self._sensor_sites_chk.toggled.connect(self._refresh_map)
-        form.addRow(self._sensor_sites_chk)
         v.addWidget(opts)
 
         out = QGroupBox("Output folder")
@@ -781,6 +793,27 @@ class CameraSensorInventoryTab(QWidget):
         self._show_summary(None)
         v.addStretch()
         return panel
+
+    def _build_cameras_tab(self):
+        """Cameras tab: an Expand all / Collapse all row above the camera tree.
+        The buttons stay disabled until the first run fills the tree."""
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(6)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        self._expand_all_btn = QPushButton("Expand all")
+        self._collapse_all_btn = QPushButton("Collapse all")
+        self._expand_all_btn.clicked.connect(lambda: self._camera_table.expandAll())
+        self._collapse_all_btn.clicked.connect(lambda: self._camera_table.collapseAll())
+        for b in (self._expand_all_btn, self._collapse_all_btn):
+            b.setEnabled(False)
+            row.addWidget(b)
+        row.addStretch(1)
+        v.addLayout(row)
+        v.addWidget(self._camera_stack)
+        return page
 
     def _build_map(self):
         MapWidget = _import_map_widget()
@@ -826,7 +859,6 @@ class CameraSensorInventoryTab(QWidget):
         s["active_days"] = self._active_spin.value()
         s["nearby_km"] = self._nearby_spin.value()
         s["include_hidden"] = self._hidden_chk.isChecked()
-        s["show_sensor_sites_on_map"] = self._sensor_sites_chk.isChecked()
         _save_settings(s)
 
     def _run(self):
@@ -1201,6 +1233,8 @@ class CameraSensorInventoryTab(QWidget):
         for j in range(len(cols)):
             tree.resizeColumnToContents(j)
         self._apply_hidden_columns(tree, "Cameras")
+        for b in (self._expand_all_btn, self._collapse_all_btn):
+            b.setEnabled(bool(rows))
 
     @staticmethod
     def _fill_table(table, records):
@@ -1228,7 +1262,9 @@ class CameraSensorInventoryTab(QWidget):
             return
         s = self._settings
         style = {"radius": s["dot_radius"], "weight": s["dot_border_width"], "fill_opacity": s["dot_fill_opacity"]}
-        markers = []
+        # One marker layer per co-location status, so each status is a checkbox in the
+        # map's layer panel (the same list as Watersheds) and can be filtered on or off.
+        by_status = {st: [] for st in STATUSES}
         for r in self._shown_rows():
             if r["Camera Latitude"] is None or r["Camera Longitude"] is None:
                 continue
@@ -1242,13 +1278,34 @@ class CameraSensorInventoryTab(QWidget):
                              + (f", {sen['Distance (km)']:.2f} km" if sen['Distance (km)'] is not None
                                 and sen['Status'] == STATUSES[1] else "")
                              for sen in r["_sensors"]))
-            markers.append({"id": r["Camera ID"], "lat": r["Camera Latitude"], "lng": r["Camera Longitude"],
-                            "tooltip": tip, "color": fill, "border": border})
-        self._map.clear_marker_layer(SENSOR_SITE_MARKER_LAYER)
-        if self._sensor_sites_chk.isChecked():
-            fill, border = s["colors"]["sensor_site"]
-            sites = [{"id": sid, "lat": lat, "lng": lon, "color": fill, "border": border,
-                      "tooltip": f"<b>{sid}</b><br>Last value: {_utc_text(last)} UTC"}
-                     for sid, lat, lon, last in self._result["sensor_site_points"]]
-            self._map.add_marker_layer(SENSOR_SITE_MARKER_LAYER, sites, {**style, "radius": s["sensor_site_dot_radius"]})
-        self._map.add_marker_layer(CAMERA_MARKER_LAYER, markers, style)
+            by_status[r["Co-location Status"]].append(
+                {"id": r["Camera ID"], "lat": r["Camera Latitude"], "lng": r["Camera Longitude"],
+                 "tooltip": tip, "color": fill, "border": border})
+        for st in STATUSES:
+            self._map.add_marker_layer(f"{CAMERA_MARKER_LAYER}::{st}", by_status[st], style,
+                                       group=st, group_color=s["colors"][st][0])
+        # Active sensor sites nationwide (black dots) are a separate layer, off by default: the
+        # map is about co-located cameras, so the full gage network is opt-in from the layer panel.
+        fill, border = s["colors"]["sensor_site"]
+
+        def _sensor_line(sen):
+            t = _utc_text(sen["last"])
+            return f"&nbsp;&nbsp;{sen['name']} ({sen['code']})" + (f", last {t} UTC" if t else "")
+
+        sites = []
+        for pt in self._result["sensor_site_points"]:
+            active = [sen for sen in pt["sensors"] if sen["active"]]
+            inactive = [sen for sen in pt["sensors"] if not sen["active"]]
+            lines = [f"<b>{pt['sid']}</b>"]
+            if active:
+                lines.append("<b>Active sensors:</b>")
+                lines += [_sensor_line(sen) for sen in active]
+            if inactive:
+                lines.append("<b>Inactive sensors:</b>")
+                lines += [_sensor_line(sen) for sen in inactive]
+            sites.append({"id": pt["sid"], "lat": pt["lat"], "lng": pt["lon"],
+                          "color": fill, "border": border, "tooltip": "<br>".join(lines)})
+        self._map.add_marker_layer(SENSOR_SITE_MARKER_LAYER, sites,
+                                   {**style, "radius": s["sensor_site_dot_radius"]},
+                                   group=SENSOR_SITE_OVERLAY, group_default_visible=False,
+                                   group_color=s["colors"]["sensor_site"][0])
