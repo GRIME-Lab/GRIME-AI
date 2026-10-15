@@ -19,7 +19,7 @@
 # network. AmeriFlux is the one enrichment, kept in its own AmeriFlux_API class,
 # so other flux networks (ICOS, etc.) can be added later the same way.
 #
-# Output goes to <output folder>/PhenocamFluxInventory_YYYYMMDD_HHMMSS/:
+# Output goes to <output folder>/PhenoCamFluxInventory_YYYYMMDD_HHMMSS/:
 #   Summary.txt, Cameras.csv, Camera_Flux_Sensors.csv (one row per camera and
 #   AmeriFlux sensor).
 
@@ -53,7 +53,7 @@ except Exception:
 
 PLUGIN = {
     "title":       "PhenoCam Flux Co-location Inventory",
-    "class":       "PhenocamFluxInventoryTab",
+    "class":       "PhenoCamFluxInventoryTab",
     "description": "List PhenoCam cameras co-located with flux towers and the sensors at AmeriFlux sites",
     "surface":     "tools",
     "api_version": 2,
@@ -359,7 +359,7 @@ class _SortableTreeItem(QTreeWidgetItem):
         return self.text(col).lower() < other.text(col).lower()
 
 
-class PhenocamFluxInventoryTab(QWidget):
+class PhenoCamFluxInventoryTab(QWidget):
 
     # Child rows show each AmeriFlux sensor under its camera, in the camera's first column
     SENSOR_CHILD_COLUMN = "Camera"
@@ -680,7 +680,7 @@ class PhenocamFluxInventoryTab(QWidget):
     # ------------------------------------------------------------------------------------------------------------------
     def _write_output(self, result):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        folder = Path(self._settings["output_folder"]) / f"PhenocamFluxInventory_{stamp}"
+        folder = Path(self._settings["output_folder"]) / f"PhenoCamFluxInventory_{stamp}"
         folder.mkdir(parents=True, exist_ok=True)
         rows = result["rows"]
 
