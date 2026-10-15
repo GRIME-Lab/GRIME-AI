@@ -105,6 +105,18 @@ class USGSClient:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
+    def get_image_date_range(self, cam_id: str, list_keys: int, timeout_s: float):
+        """(first image UTC, newest image UTC) for a camera; see USGSService.image_date_range."""
+        return self._svc.image_date_range(cam_id, list_keys, timeout_s)
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def get_camera_tz(self, cam_id: str) -> Optional[str]:
+        """The camera's time zone name (e.g. 'US/Central'), or None."""
+        return self._svc.camera_info(cam_id).tz
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
     def get_latest_pixmap(self, site_name: str) -> Tuple[int, Optional[QPixmap]]:
         """
         Return (error_code, QPixmap) for the latest image.
@@ -175,14 +187,16 @@ class USGSClient:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def get_midday_pixmap(self, site_name: str) -> Tuple[int, Optional[QPixmap], bool]:
+    def get_midday_pixmap(self, site_name: str, window_hours: float, search_days: int,
+                          list_keys: int, timeout_s: float) -> Tuple[int, Optional[QPixmap], bool]:
         """
         Return (error_code, QPixmap, is_midday).
         is_midday=True if a midday window image was found,
-        False if fell back to latest image.
+        False if fell back to latest image. See USGSService.midday_image.
         """
         info = self._svc.camera_info(site_name)
-        latest, is_midday = self._svc.midday_image(site_name, info.tz)
+        latest, is_midday = self._svc.midday_image(site_name, info.tz, window_hours, search_days,
+                                                   list_keys, timeout_s)
         if latest.error_code == 404 or latest.content is None:
             return 404, None, False
         pix = QPixmap()
