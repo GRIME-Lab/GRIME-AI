@@ -84,9 +84,9 @@ def parse_NEON_field_site_metadata(filename_with_path):
             on any parsing error.
 
     Usage Example:
-        from phenocam_csv_parser import PhenocamParser, siteData
+        from phenocam_csv_parser import PhenoCamParser, siteData
 
-        parser = PhenocamParser()
+        parser = PhenoCamParser()
         try:
             sites = parser.parse_NEON_field_site_metadata("/data/site_list.csv")
         except ValueError as e:

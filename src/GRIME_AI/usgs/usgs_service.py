@@ -32,6 +32,9 @@ def _to_float(x) -> Optional[float]:
 
 
 from datetime import datetime, date, time, timedelta
+
+# Local noon, the center of the midday window for the midday preview image
+MIDDAY           = time(12, 0, 0)
 from typing import List, Tuple, Union
 from urllib.parse import quote
 
@@ -289,6 +292,70 @@ class USGSService:
 
     # ------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------
+    def image_date_range(self, cam_id: str, list_keys: int, timeout_s: float):
+        """
+        (first image UTC, newest image UTC) for a camera, each a timezone-aware datetime
+        or None when unknown. Never raises: a failed image-folder request returns first=None.
+
+        First: S3 lists a folder's files in name order, and image names carry their UTC
+        capture time (CAMID___YYYY-MM-DDTHH-MM-SSZ.jpg), so the first image name in the
+        camera's overlay folder is its oldest image. list_keys names are requested so a
+        non-image file at the start of the folder does not hide the first image.
+        Newest: newestImageDT from the camera list.
+        """
+        from datetime import timezone
+        from urllib.parse import urlparse
+        import xml.etree.ElementTree as ET
+
+        cam = self._all_camera_dict.get(cam_id, {})
+
+        newest = None
+        text = cam.get("newestImageDT")
+        if not cam:
+            print(f"[USGSService] Newest image for {cam_id}: camera not in the loaded camera list")
+        elif not text:
+            print(f"[USGSService] Newest image for {cam_id}: no newestImageDT in its camera record "
+                  f"(camera list from {self._endpoint})")
+        else:
+            # e.g. 2026-10-15T00:15:03.000Z; the fraction is dropped so any length parses
+            stamp = str(text).strip().replace("Z", "").split(".")[0].split("+")[0]
+            try:
+                newest = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+            except ValueError:
+                print(f"[USGSService] Newest image for {cam_id}: could not read newestImageDT {text!r}")
+
+        folder = cam.get("overlayDir") or f"{IMAGE_ENDPOINT}/{cam_id}/"
+        u = urlparse(folder)
+        bucket = f"{u.scheme}://{u.netloc}/"
+        prefix = u.path.lstrip("/")
+        if not prefix.endswith("/"):
+            prefix += "/"
+
+        first = None
+        ns = "{http://s3.amazonaws.com/doc/2006-03-01/}"   # S3 ListObjectsV2 XML namespace
+        try:
+            resp = requests.get(bucket, params={"list-type": "2", "prefix": prefix, "max-keys": int(list_keys)},
+                                timeout=float(timeout_s))
+            resp.raise_for_status()
+            nodes = ET.fromstring(resp.text).findall(f"{ns}Contents")
+        except Exception as e:
+            # The newest date is still known from the camera list; only the first is lost.
+            print(f"[USGSService] First image for {cam_id} unavailable: {e}")
+            nodes = []
+        for node in nodes:
+            name = os.path.basename(node.findtext(f"{ns}Key") or "")
+            if "___" not in name:
+                continue
+            stamp = os.path.splitext(name.split("___", 1)[1])[0]
+            try:
+                first = datetime.strptime(stamp, "%Y-%m-%dT%H-%M-%SZ").replace(tzinfo=timezone.utc)
+                break
+            except ValueError:
+                continue
+        return first, newest
+
+    # ------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     def latest_image(self, site_name: str) -> LatestImage:
         url = f"{IMAGE_ENDPOINT}/{site_name}/{site_name}_newest.jpg"
         r = requests.get(url, stream=True)
@@ -466,100 +533,122 @@ class USGSService:
             print(f"[USGS] get_available_parameters error for nwis_id={nwis_id}: {e}")
             return []
 
-    def midday_image(self, site_name: str, tz_str: Optional[str]) -> LatestImage:
+    def midday_image(self, site_name: str, tz_str: Optional[str], window_hours: float,
+                     search_days: int, list_keys: int, timeout_s: float):
         """
-        Return the image whose timestamp is closest to 12:00 local time
-        for the most recent date that has any images.
-        Uses _collect_image_names with a 10:00-14:00 local time window.
-        Returns LatestImage(404, None) if no images are found.
+        (LatestImage, is_midday): the image closest to local noon on the most recent day
+        whose local noon has passed, searching back up to search_days days.
+
+        Images within window_hours of local noon count as midday. The camera's image folder
+        on S3 is listed one UTC hour at a time (image names carry their UTC capture time,
+        CAMID___YYYY-MM-DDTHH-MM-SSZ.jpg), starting with the hour around noon and working
+        outward, so a day usually needs one small request. Local time comes from the
+        camera's time zone, so daylight saving time is handled.
+
+        When no midday image is found, returns the newest image with is_midday=False.
         """
-        # Resolve UTC offset
-        TZ_OFFSETS = {
-            'EST': -5, 'EDT': -4, 'CST': -6, 'CDT': -5,
-            'MST': -7, 'MDT': -6, 'PST': -8, 'PDT': -7,
-            'AKST': -9, 'AKDT': -8, 'HST': -10, 'UTC': 0,
-        }
-        PYTZ_OFFSETS = {
-            'US/EASTERN': -5, 'AMERICA/NEW_YORK': -5,
-            'US/CENTRAL': -6, 'AMERICA/CHICAGO': -6,
-            'US/MOUNTAIN': -7, 'AMERICA/DENVER': -7,
-            'US/PACIFIC': -8, 'AMERICA/LOS_ANGELES': -8,
-            'US/ALASKA': -9, 'AMERICA/ANCHORAGE': -9,
-            'US/HAWAII': -10, 'PACIFIC/HONOLULU': -10,
-            'UTC': 0,
-        }
-        tz_key = (tz_str or '').upper().strip().replace(' ', '_')
-        if tz_key in TZ_OFFSETS:
-            offset_h = TZ_OFFSETS[tz_key]
-        elif tz_key in PYTZ_OFFSETS:
-            offset_h = PYTZ_OFFSETS[tz_key]
-        else:
+        from datetime import timezone
+        from urllib.parse import urlparse
+        import xml.etree.ElementTree as ET
+
+        tz = None
+        if tz_str:
             try:
                 import pytz
-                tz_obj = pytz.timezone(tz_str)
-                now_aware = datetime.utcnow().replace(tzinfo=pytz.utc).astimezone(tz_obj)
-                offset_h = now_aware.utcoffset().total_seconds() / 3600
+                tz = pytz.timezone(tz_str)
             except Exception:
-                offset_h = 0
-        utc_delta = timedelta(hours=offset_h)
+                try:
+                    from zoneinfo import ZoneInfo
+                    tz = ZoneInfo(tz_str)
+                except Exception:
+                    tz = None
+        if tz is None:
+            print(f"[USGS midday] Unknown time zone {tz_str!r} for {site_name}; using UTC")
+            tz = timezone.utc
 
-        # Today in local time
-        today_local = datetime.utcnow() + utc_delta
-        today_date  = today_local.date()
+        def localize(naive):
+            return tz.localize(naive) if hasattr(tz, "localize") else naive.replace(tzinfo=tz)
 
-        # Convert 10:00-14:00 local to UTC for _collect_image_names
-        win_start_utc = datetime.combine(today_date, time(10, 0, 0)) - utc_delta
-        win_end_utc   = datetime.combine(today_date, time(14, 0, 0)) - utc_delta
+        cam = self._all_camera_dict.get(site_name, {})
+        folder = cam.get("overlayDir") or f"{IMAGE_ENDPOINT}/{site_name}/"
+        u = urlparse(folder)
+        bucket = f"{u.scheme}://{u.netloc}/"
+        prefix = u.path.lstrip("/")
+        if not prefix.endswith("/"):
+            prefix += "/"
+        ns = "{http://s3.amazonaws.com/doc/2006-03-01/}"   # S3 ListObjectsV2 XML namespace
 
-        # _collect_image_names treats times as UTC
-        names = self._collect_image_names(
-            site_name,
-            win_start_utc.date(), win_end_utc.date(),
-            win_start_utc.time(), win_end_utc.time(),
-            progress=None
-        )
+        def images_in_hour(hour_utc):
+            """(UTC time, file name) for every image whose name falls in this UTC hour."""
+            stamp = hour_utc.strftime("%Y-%m-%dT%H")
+            resp = requests.get(bucket, params={"list-type": "2", "max-keys": int(list_keys),
+                                                "prefix": f"{prefix}{site_name}___{stamp}"},
+                                timeout=float(timeout_s))
+            resp.raise_for_status()
+            found = []
+            for node in ET.fromstring(resp.text).findall(f"{ns}Contents"):
+                name = os.path.basename(node.findtext(f"{ns}Key") or "")
+                try:
+                    t = datetime.strptime(os.path.splitext(name.split("___", 1)[1])[0], "%Y-%m-%dT%H-%M-%SZ")
+                    found.append((t.replace(tzinfo=timezone.utc), name))
+                except (IndexError, ValueError):
+                    continue
+            return found
 
-        if not names:
-            print(f"[USGS midday] No images in window for {site_name}, falling back to latest")
-            return self.latest_image(site_name), False
+        now_local = datetime.now(timezone.utc).astimezone(tz)
+        day = now_local.date()
+        if now_local < localize(datetime.combine(day, MIDDAY)):
+            day -= timedelta(days=1)            # today's noon hasn't happened yet
+        half = timedelta(hours=float(window_hours))
 
-        print(f"[USGS midday] Got {len(names)} filenames. First: {names[0]}")
+        for _ in range(int(search_days)):
+            noon_utc = localize(datetime.combine(day, MIDDAY)).astimezone(timezone.utc)
+            lo, hi = noon_utc - half, noon_utc + half
+            one_hour = timedelta(hours=1)
 
-        # Find the image closest to noon local time.
-        # Filename format: SITE_NAME___YYYY-MM-DDTHH-MM-SSZ.jpg  (timestamps are UTC)
-        noon_local = datetime.combine(today_date, time(12, 0, 0))
-        best_name  = None
-        best_delta = None
+            def closest_possible(hour):
+                """Smallest distance from noon that any image in this UTC hour can have."""
+                if hour <= noon_utc < hour + one_hour:
+                    return timedelta(0)
+                return hour - noon_utc if hour > noon_utc else noon_utc - (hour + one_hour)
 
-        for name in names:
-            base = os.path.basename(name)
-            if '___' not in base:
-                continue
+            # UTC hours covering the window, nearest to noon first
+            hours, h = [], lo.replace(minute=0, second=0, microsecond=0)
+            while h <= hi:
+                hours.append(h)
+                h += one_hour
+            hours.sort(key=closest_possible)
+
+            best = None
             try:
-                ts_str = base.split('___')[1]
-                ts_str = ts_str.replace('.jpg', '').replace('.JPG', '')
-                dt_utc   = datetime.strptime(ts_str, '%Y-%m-%dT%H-%M-%SZ')
-                dt_local = dt_utc + utc_delta
-                delta    = abs((dt_local - noon_local).total_seconds())
-                if best_delta is None or delta < best_delta:
-                    best_delta = delta
-                    best_name  = name
-            except (ValueError, IndexError):
-                continue
+                for i, hour in enumerate(hours):
+                    for t, name in images_in_hour(hour):
+                        if lo <= t <= hi and (best is None or abs(t - noon_utc) < abs(best[0] - noon_utc)):
+                            best = (t, name)
+                    # Stop once no unchecked hour can hold an image closer to noon
+                    if best is not None and (i + 1 == len(hours)
+                                             or abs(best[0] - noon_utc) <= closest_possible(hours[i + 1])):
+                        break
+            except Exception as e:
+                print(f"[USGS midday] Could not list images for {site_name}: {e}")
+                break
 
-        if not best_name:
-            print(f"[USGS midday] Could not parse timestamp from any filename, falling back to latest")
-            return self.latest_image(site_name), False
+            if best is not None:
+                t, name = best
+                print(f"[USGS midday] {site_name}: {name} ({t.astimezone(tz):%Y-%m-%d %H:%M %Z})")
+                try:
+                    content = requests.get(f"{IMAGE_ENDPOINT}/{site_name}/{name}", timeout=float(timeout_s)).content
+                    return LatestImage(error_code=0, content=content), True
+                except Exception as e:
+                    print(f"[USGS midday] Could not download {name}: {e}")
+                    break
+            day -= timedelta(days=1)
 
-        print(f"[USGS midday] Best match: {best_name} (delta={best_delta}s from noon)")
+        print(f"[USGS midday] No midday image for {site_name} in the last {search_days} days; showing the newest image")
+        return self.latest_image(site_name), False
 
-        url = f"{IMAGE_ENDPOINT}/{site_name}/{os.path.basename(best_name)}"
-        try:
-            content = urllib.request.urlopen(url, timeout=15).read()
-            return LatestImage(error_code=0, content=content), True
-        except Exception:
-            return self.latest_image(site_name), False
-
+    # ------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------
     def fetch_stage_and_discharge(self, nwis_id: str, site_name: str,
                                   start_date: date, end_date: date,
                                   start_time: time, end_time: time,

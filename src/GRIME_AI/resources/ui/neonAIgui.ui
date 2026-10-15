@@ -847,13 +847,13 @@
       </widget>
       <widget class="QWidget" name="tab_phenocam_sites">
        <attribute name="title">
-        <string>Phenocam Sites</string>
+        <string>PhenoCam Sites</string>
        </attribute>
-       <layout class="QHBoxLayout" name="horizontalLayout_Phenocam">
+       <layout class="QHBoxLayout" name="horizontalLayout_PhenoCam">
         <item>
-         <layout class="QVBoxLayout" name="verticalLayout_PhenocamLeft">
+         <layout class="QVBoxLayout" name="verticalLayout_PhenoCamLeft">
           <item>
-           <widget class="QTreeWidget" name="treeWidget_Phenocam">
+           <widget class="QTreeWidget" name="treeWidget_PhenoCam">
             <property name="sizePolicy">
              <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
               <horstretch>0</horstretch>
@@ -876,9 +876,9 @@
          </layout>
         </item>
         <item>
-         <layout class="QVBoxLayout" name="verticalLayout_PhenocamRight">
+         <layout class="QVBoxLayout" name="verticalLayout_PhenoCamRight">
           <item>
-           <widget class="QLabel" name="labelPhenocamImageTitle">
+           <widget class="QLabel" name="labelPhenoCamImageTitle">
             <property name="font">
              <font>
               <family>Arial</family>
@@ -894,7 +894,7 @@
            </widget>
           </item>
           <item>
-           <widget class="QLabel" name="labelPhenocamImageTitle">
+           <widget class="QLabel" name="labelPhenoCamImageTitle">
             <property name="font">
              <font>
               <family>Arial</family>
@@ -910,7 +910,7 @@
            </widget>
           </item>
           <item>
-           <widget class="QLabel" name="labelPhenocamImage">
+           <widget class="QLabel" name="labelPhenoCamImage">
             <property name="sizePolicy">
              <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
               <horstretch>0</horstretch>
@@ -932,7 +932,7 @@
            </widget>
           </item>
           <item>
-           <spacer name="verticalSpacer_PhenocamRight">
+           <spacer name="verticalSpacer_PhenoCamRight">
             <property name="orientation">
              <enum>Qt::Vertical</enum>
             </property>
