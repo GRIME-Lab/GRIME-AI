@@ -25,6 +25,7 @@ import seaborn as sns
 from sklearn.metrics import (
     confusion_matrix,
     precision_recall_curve,
+    average_precision_score,
     roc_curve,
     auc
 )
@@ -189,8 +190,8 @@ class ModelTrainingVisualization:
         ax.plot(vl_ep, vl_acc, label="Val Accuracy", lw=1, color="tab:orange")
 
         ax.set_xlabel("Epoch")
-        ax.set_ylabel("Accuracy")
-        ax.set_title(self._make_title("Accuracy", site_name, lr, model_name))  # ✅ Use helper
+        ax.set_ylabel("Pixel accuracy")
+        ax.set_title(self._make_title("Pixel Accuracy (includes background)", site_name, lr, model_name))
         _yall = list(tr_acc) + list(vl_acc)
         _ymin, _ymax = min(_yall), max(_yall)
         _ypad = max(0.005, (_ymax - _ymin) * 0.05)
@@ -290,7 +291,8 @@ class ModelTrainingVisualization:
             lr: float = 0.0,
             normalize: bool = False,
             file_prefix: str = "",
-            target_label: str = ""
+            target_label: str = "",
+            sample_weight=None,
     ):
         # val_true_list and val_pred_list are binary: 0 = background, 1 = target class.
         pos_name = target_label if target_label else "target"
@@ -298,7 +300,10 @@ class ModelTrainingVisualization:
         class_names = ["background", pos_name]
 
         # force inclusion of both classes even if one is absent
-        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        # sample_weight undoes class-stratified pixel sampling, so counts
+        # estimate full-image pixel counts.
+        cm = confusion_matrix(y_true, y_pred, labels=labels,
+                              sample_weight=sample_weight if sample_weight else None)
 
         if normalize:
             # compute row sums (shape: [n_classes, 1])
@@ -353,11 +358,14 @@ class ModelTrainingVisualization:
             site_name=None,
             lr=None,
             model_name=None,
-            file_prefix=None
+            file_prefix=None,
+            sample_weight=None,
     ):
         # vectorize & cast
         y_true_arr = np.asarray(y_true)
         y_scores_arr = np.asarray(y_scores)  # ✅ Let numpy decide dtype
+        w_arr = (np.asarray(sample_weight, dtype=np.float64) if sample_weight
+                 else np.ones(y_true_arr.shape, dtype=np.float64))
 
         if y_true_arr.size == 0 or y_scores_arr.size == 0:
             print("Cannot plot precision-recall: empty inputs.")
@@ -373,9 +381,13 @@ class ModelTrainingVisualization:
             idxs = np.linspace(0, y_scores_arr.size - 1, self.max_samples, dtype=int)
             y_true_arr = y_true_arr[idxs]
             y_scores_arr = y_scores_arr[idxs]
+            w_arr = w_arr[idxs]
             print(f"[plot_precision_recall] downsampled to {y_true_arr.size} points")
 
-        precision, recall, _ = precision_recall_curve(y_true_arr, y_scores_arr)
+        precision, recall, _ = precision_recall_curve(y_true_arr, y_scores_arr, sample_weight=w_arr)
+        ap = float(average_precision_score(y_true_arr, y_scores_arr, sample_weight=w_arr))
+        # No-skill baseline = fraction of pixels that are target (weighted)
+        baseline = float((w_arr * y_true_arr).sum() / w_arr.sum()) if w_arr.sum() > 0 else 0.0
 
         # subsample PR curve
         if precision.size > self.max_samples:
@@ -384,8 +396,11 @@ class ModelTrainingVisualization:
             recall = recall[idxs]
 
         fig, ax = plt.subplots(figsize=(6, 4))
-        ax.plot(recall, precision, lw=1, color="tab:blue")
-        ax.set_title(self._make_title("Precision-Recall Curve", site_name, lr, model_name))  # ✅ Use helper
+        ax.plot(recall, precision, lw=1, color="tab:blue", label=f"AP={ap:.3f}")
+        ax.axhline(baseline, color="black", lw=1, linestyle="--",
+                   label=f"No-skill baseline (target fraction {baseline:.4f})")
+        ax.legend(loc="lower left")
+        ax.set_title(self._make_title("Precision-Recall Curve (target class)", site_name, lr, model_name))
         ax.set_xlabel("Recall")
         ax.set_ylabel("Precision")
         ax.grid(True, alpha=self.grid_alpha)  # ✅ Added grid
@@ -411,11 +426,14 @@ class ModelTrainingVisualization:
             site_name=None,
             lr=None,
             model_name=None,
-            file_prefix=None
+            file_prefix=None,
+            sample_weight=None,
     ):
         # vectorize & cast
         y_true_arr = np.asarray(y_true)
         y_scores_arr = np.asarray(y_scores)  # ✅ Let numpy decide dtype
+        w_arr = (np.asarray(sample_weight, dtype=np.float64) if sample_weight
+                 else np.ones(y_true_arr.shape, dtype=np.float64))
 
         if y_true_arr.size == 0 or y_scores_arr.size == 0:
             print("Cannot plot ROC: empty inputs.")
@@ -430,10 +448,10 @@ class ModelTrainingVisualization:
             idxs = np.linspace(0, y_scores_arr.size - 1, self.max_samples, dtype=int)
             y_true_arr = y_true_arr[idxs]
             y_scores_arr = y_scores_arr[idxs]
+            w_arr = w_arr[idxs]
             print(f"[plot_roc_curve] downsampled to {y_true_arr.size} points")
 
-        # ✅ REMOVED: Redundant try-catch (already downsampled above)
-        fpr, tpr, _ = roc_curve(y_true_arr, y_scores_arr)
+        fpr, tpr, _ = roc_curve(y_true_arr, y_scores_arr, sample_weight=w_arr)
         roc_auc = auc(fpr, tpr)
 
         # subsample ROC curve points if still too large
@@ -445,7 +463,7 @@ class ModelTrainingVisualization:
         ax.plot(fpr, tpr, color="tab:blue", lw=1, label=f"AUC={roc_auc:.2f}")
         ax.plot([0, 1], [0, 1], color="gray", lw=1, linestyle="--", label="Random")
 
-        ax.set_title(self._make_title("ROC Curve", site_name, lr, model_name))  # ✅ Use helper
+        ax.set_title(self._make_title("ROC Curve (includes background pixels)", site_name, lr, model_name))
         ax.set_xlabel("False Positive Rate")
         ax.set_ylabel("True Positive Rate")
         ax.legend(loc="lower right")
@@ -472,10 +490,13 @@ class ModelTrainingVisualization:
             site_name: str = None,
             lr: float = None,
             model_name: str = None,
-            file_prefix: str = None
+            file_prefix: str = None,
+            sample_weight=None,
     ):
         y_true_arr = np.asarray(y_true)
         y_scores_arr = np.asarray(y_scores)  # ✅ Let numpy decide dtype
+        w_arr = (np.asarray(sample_weight, dtype=np.float64) if sample_weight
+                 else np.ones(y_true_arr.shape, dtype=np.float64))
 
         if y_true_arr.size == 0 or y_scores_arr.size == 0:
             print("Cannot plot F1: empty inputs.")
@@ -485,7 +506,7 @@ class ModelTrainingVisualization:
         if not np.all(np.isin(labels, [0, 1])):
             y_true_arr = (y_true_arr == labels.max()).astype(int)
 
-        precision, recall, thresholds = precision_recall_curve(y_true_arr, y_scores_arr)
+        precision, recall, thresholds = precision_recall_curve(y_true_arr, y_scores_arr, sample_weight=w_arr)
         f1_scores = 2 * (precision * recall) / (precision + recall + 1e-8)
 
         f1 = f1_scores[:-1]
@@ -512,7 +533,7 @@ class ModelTrainingVisualization:
             label=f"Max F1={best_f1:.2f} @thr={best_thr:.2f}"
         )
 
-        ax.set_title(self._make_title("F1 Score vs Threshold", site_name, lr, model_name))  # ✅ Use helper
+        ax.set_title(self._make_title("F1 (= Dice) vs Threshold, target class", site_name, lr, model_name))  # ✅ Use helper
         ax.set_xlabel("Threshold")
         ax.set_ylabel("F1 Score")
         ax.legend(loc="best")
@@ -585,8 +606,8 @@ class ModelTrainingVisualization:
         fig, ax = plt.subplots(figsize=(6, 4))
         ax.plot(ep, mi, color="tab:blue", lw=1)
         ax.set_xlabel("Epoch")
-        ax.set_ylabel("Mean IoU")
-        ax.set_title(self._make_title("Mean IoU over Epochs", site_name, lr, model_name))  # ✅ Use helper
+        ax.set_ylabel("Pooled IoU (target)")
+        ax.set_title(self._make_title("Pooled IoU, Target Class (sampled pixels)", site_name, lr, model_name))
         _yall = list(mi)
         _ymin, _ymax = min(_yall), max(_yall)
         _ypad = max(0.005, (_ymax - _ymin) * 0.05)
@@ -604,7 +625,7 @@ class ModelTrainingVisualization:
             miou_path = os.path.join(self.graphs_folder, filename)
             fig.savefig(miou_path, dpi=self.plot_dpi)  # ✅ Consistent DPI
             plt.close(fig)
-            print(f"Mean IoU plot saved to {filename}")
+            print(f"Pooled IoU plot saved to {filename}")
             return miou_path
         else:
             plt.close(fig)  # ✅ Ensure cleanup
@@ -760,6 +781,8 @@ class ModelTrainingVisualization:
             early_stopped: bool = False,
             best_epoch: int = None,
             val_best_threshold: float = None,
+            train_dice: list[float] = None,
+            val_dice: list[float] = None,
     ) -> dict:
         """
         Analyzes training curves and returns a structured diagnostic report.
@@ -824,9 +847,23 @@ class ModelTrainingVisualization:
         tr_loss = np.asarray(train_loss)
         vl_loss = np.asarray(val_loss)
 
-        n_epochs = len(vl_acc)
         final_train_acc = float(tr_acc[-1])
         final_val_acc = float(vl_acc[-1])
+
+        # Quality metric for every rule below. Pixel accuracy counts background
+        # pixels, so for a small target (staff gage) it sits near 1.0 regardless
+        # of segmentation quality. Dice on the target class does not, so it is
+        # used whenever both train and validation Dice series are available.
+        if train_dice and val_dice and len(train_dice) == len(val_dice) and \
+                not any(v is None for v in list(train_dice) + list(val_dice)):
+            metric_name = "Dice"
+            tr_acc = np.asarray(train_dice, dtype=float)
+            vl_acc = np.asarray(val_dice, dtype=float)
+        else:
+            metric_name = "pixel accuracy"
+
+        n_epochs = len(vl_acc)
+        final_val_q = float(vl_acc[-1])
         final_train_loss = float(tr_loss[-1])
         final_val_loss = float(vl_loss[-1])
 
@@ -837,10 +874,10 @@ class ModelTrainingVisualization:
 
         overfit = mean_gap > overfit_gap_threshold * 2
         if overfit:
-            findings.append(("critical", f"Severe overfitting: train/val accuracy gap is {mean_gap:.3f} {window_txt}."))
+            findings.append(("critical", f"Severe overfitting: train/val {metric_name} gap is {mean_gap:.3f} {window_txt}."))
         elif mean_gap > overfit_gap_threshold:
-            findings.append(("warning", f"Mild overfitting: train/val accuracy gap is {mean_gap:.3f} {window_txt}."))
-            suggestions.append("If deploying, prefer the checkpoint with the best validation accuracy rather than the final epoch.")
+            findings.append(("warning", f"Mild overfitting: train/val {metric_name} gap is {mean_gap:.3f} {window_txt}."))
+            suggestions.append("Deploy the saved best checkpoint (lowest validation loss) rather than the final epoch.")
 
         # 2. Underfitting
         max_val_acc = float(np.max(vl_acc))
@@ -858,11 +895,11 @@ class ModelTrainingVisualization:
         elif underfit:
             suggestions.append("Increase the number of training epochs.")
             suggestions.append("Try a higher learning rate — current value may be too conservative.")
-            suggestions.append("Check annotation quality: low accuracy may indicate label errors.")
+            suggestions.append("Check annotation quality: low Dice/accuracy may indicate label errors.")
             if lr is not None and lr < 1e-4:
                 suggestions.append(f"Learning rate {lr:.5f} may be too low — consider trying 3e-4 or 1e-3.")
         if underfit:
-            findings.append(("critical", f"Underfitting: peak validation accuracy is only {max_val_acc:.3f} (threshold: {underfit_threshold:.2f})."))
+            findings.append(("critical", f"Underfitting: peak validation {metric_name} is only {max_val_acc:.3f} (threshold: {underfit_threshold:.2f})."))
 
         # 3. Early plateau
         if n_epochs >= plateau_window * 2:
@@ -874,7 +911,7 @@ class ModelTrainingVisualization:
             # that is still (slowly) improving and peaks at the end is not one.
             if late_max - early_max < 0.005 and best_epoch_1b <= midpoint:
                 plateau_epoch = best_epoch_1b
-                findings.append(("warning", f"Validation accuracy plateaued at epoch {plateau_epoch} ({early_max:.3f}) with no meaningful improvement in the second half of training."))
+                findings.append(("warning", f"Validation {metric_name} plateaued at epoch {plateau_epoch} ({early_max:.3f}) with no meaningful improvement in the second half of training."))
                 suggestions.append(f"Consider stopping training at epoch {plateau_epoch} to save time.")
                 if lr_scheduler_enabled is False:
                     suggestions.append("A learning rate scheduler (e.g., ReduceLROnPlateau) may help break through the plateau.")
@@ -886,7 +923,7 @@ class ModelTrainingVisualization:
             # Measure over the tail only; a steep early rise is learning, not instability.
             val_std = float(np.std(vl_acc[-window:]))
             if val_std > instability_std_threshold:
-                findings.append(("warning", f"Unstable validation accuracy over the final {window} epochs (std dev: {val_std:.4f})."))
+                findings.append(("warning", f"Unstable validation {metric_name} over the final {window} epochs (std dev: {val_std:.4f})."))
                 suggestions.append("Reduce the learning rate — instability often indicates the learning rate is too high.")
                 suggestions.append("Increase batch size if GPU memory allows.")
 
@@ -903,10 +940,10 @@ class ModelTrainingVisualization:
         if miou_values and len(miou_values) > 0:
             max_miou = float(np.max(miou_values))
             if max_miou < 0.5:
-                findings.append(("critical", f"Mean IoU is very low (peak: {max_miou:.3f}). Segmentation quality is poor."))
-                suggestions.append("Review mask annotations — very low mIoU may indicate annotation errors or class imbalance.")
+                findings.append(("critical", f"Pooled IoU is very low (peak: {max_miou:.3f}). Segmentation quality is poor."))
+                suggestions.append("Review mask annotations — very low IoU may indicate annotation errors or class imbalance.")
             elif max_miou < 0.70:
-                findings.append(("warning", f"Mean IoU is moderate (peak: {max_miou:.3f}). Further tuning may improve segmentation quality."))
+                findings.append(("warning", f"Pooled IoU is moderate (peak: {max_miou:.3f}). Further tuning may improve segmentation quality."))
 
         # 7. Dice check
         if dice_values and len(dice_values) > 0:
@@ -917,7 +954,7 @@ class ModelTrainingVisualization:
 
         # 8. Good convergence fallback
         if not findings:
-            findings.append(("good", f"Good convergence: validation accuracy reached {final_val_acc:.3f} with a train/val gap of {mean_gap:.3f}."))
+            findings.append(("good", f"Good convergence: validation {metric_name} reached {final_val_q:.3f} with a train/val gap of {mean_gap:.3f}."))
 
         # ------------------------------------------------------------------
         # Concrete, config-aware recommendations for the next run.
@@ -935,6 +972,7 @@ class ModelTrainingVisualization:
             early_stopped=early_stopped, best_epoch=best_epoch,
             val_best_threshold=val_best_threshold,
             underfit_threshold=underfit_threshold,
+            metric_name=metric_name,
         )
         for r in recommendations:
             if r.get("severity") == "warning":
@@ -971,9 +1009,10 @@ class ModelTrainingVisualization:
         report_lines.append(f"  Final Train Loss: {final_train_loss:.4f}")
         report_lines.append(f"  Final Val Loss:   {final_val_loss:.4f}")
         if miou_values:
-            report_lines.append(f"  Final mIoU:       {float(miou_values[-1]):.4f}")
+            report_lines.append(f"  Final Pooled IoU: {float(miou_values[-1]):.4f}")
         if dice_values:
             report_lines.append(f"  Final Dice:       {float(dice_values[-1]):.4f}")
+        report_lines.append(f"  Diagnostics on:   {metric_name}")
         report_lines.append("-" * 70)
         report_lines.append(f"  Overall Status:   {overall_severity.upper()}")
         report_lines.append("-" * 70)
@@ -1014,7 +1053,7 @@ class ModelTrainingVisualization:
     def _build_recommendations(config, n_epochs, vl_acc, vl_loss, mean_gap, max_val_acc,
                                overfit, underfit, lr, lr_scheduler_enabled, lr_reductions,
                                num_train_images, num_val_images, early_stopped, best_epoch,
-                               val_best_threshold, underfit_threshold):
+                               val_best_threshold, underfit_threshold, metric_name="accuracy"):
         """
         Rule-based translation of diagnostics into concrete config changes.
         Deterministic and explainable: every entry names the site_config key,
@@ -1085,7 +1124,7 @@ class ModelTrainingVisualization:
         if overfit and not underfit:
             wd = float(_get("weight_decay", 0.01))
             _add("weight_decay", wd, round(min(wd * 5, 0.1), 4),
-                 f"Train/val gap of {mean_gap:.3f} with good validation accuracy: more regularization "
+                 f"Train/val {metric_name} gap of {mean_gap:.3f} with good validation {metric_name}: more regularization "
                  f"or more training images will narrow it.")
             if num_train_images is not None and num_train_images < 200:
                 _add("training images", num_train_images, ">= 200",
@@ -1093,7 +1132,7 @@ class ModelTrainingVisualization:
         if underfit and not overfit:
             if lr_val < 1e-4:
                 _add("learningRates", [lr_val], [1e-4],
-                     f"Peak validation accuracy {max_val_acc:.3f} < {underfit_threshold:.2f} with a low "
+                     f"Peak validation {metric_name} {max_val_acc:.3f} < {underfit_threshold:.2f} with a low "
                      f"learning rate; 1e-4 is a safe step up for decoder-only SAM2 fine-tuning.")
             if n_epochs < 10:
                 _add("number_of_epochs", epochs_cfg, max(epochs_cfg, 30),
@@ -1146,6 +1185,9 @@ class ModelTrainingVisualization:
             val_best_threshold: float = None,     # F1-optimal threshold from validator
             val_dice_best_threshold: float = None,  # Dice at that threshold
             time_breakdown: dict = None,          # {"encode","train","validate"} seconds
+            best_eval: dict = None,               # metrics of the saved best checkpoint
+            foreground_stats: dict = None,        # {"train": {...}, "val": {...}} target pixel fraction
+            train_dice: list[float] = None,       # per-epoch train Dice (diagnostics)
     ) -> dict:
         """
         Runs analyze_training_results() and saves a formatted PDF report
@@ -1198,6 +1240,8 @@ class ModelTrainingVisualization:
             early_stopped=early_stopped,
             best_epoch=best_epoch,
             val_best_threshold=val_best_threshold,
+            train_dice=train_dice,
+            val_dice=dice_values,
         )
 
         severity = result["severity"]
@@ -1261,23 +1305,44 @@ class ModelTrainingVisualization:
         pdf.set_text_color(0, 0, 0)
         pdf.ln(6)
 
+        def _f(v, fmt="{:.4f}"):
+            return fmt.format(v) if v is not None else "N/A"
+
+        # --- Saved model (best checkpoint) ---
+        if best_eval:
+            _section_header(f"Saved Model: Best Checkpoint (epoch {best_eval.get('epoch')}, "
+                            f"lowest validation loss)")
+            _meta_table([
+                ("Checkpoint File",          best_eval.get("checkpoint_file") or "N/A"),
+                ("Val Dice (target)",        _f(best_eval.get("dice"))),
+                ("Val IoU (target)",         _f(best_eval.get("iou"))),
+                ("Val Precision (target)",   _f(best_eval.get("precision"))),
+                ("Val Recall (target)",      _f(best_eval.get("recall"))),
+                ("Average Precision (PR)",   _f(best_eval.get("average_precision"))),
+                ("Val Loss",                 _f(best_eval.get("val_loss"))),
+                ("Dice @ F1-opt thr",        f"{_f(best_eval.get('dice_at_f1_optimal_threshold'))} "
+                                             f"(thr {_f(best_eval.get('f1_optimal_threshold'), '{:.2f}')}; "
+                                             f"0.50 = calibrated)"),
+                ("Pixel Accuracy (incl. background)", _f(best_eval.get("pixel_accuracy"))),
+            ])
+
         # --- Training Summary ---
-        _section_header("Training Summary")
+        _section_header("Training Summary (final epoch, for reference)")
         meta_rows = [
             ("Site",               site_name or "N/A"),
             ("Model",              model_type or "N/A"),
             ("Learning Rate",      f"{lr:.5f}" if lr is not None else "N/A"),
             ("Epochs Completed",   str(len(val_acc))),
-            ("Final Train Accuracy", f"{train_acc[-1]:.4f}" if train_acc else "N/A"),
-            ("Final Val Accuracy",   f"{val_acc[-1]:.4f}"   if val_acc   else "N/A"),
             ("Final Train Loss",     f"{train_loss[-1]:.4f}" if train_loss else "N/A"),
             ("Final Val Loss",       f"{val_loss[-1]:.4f}"   if val_loss  else "N/A"),
         ]
-        if miou_values:
-            meta_rows.append(("Final mIoU", f"{float(miou_values[-1]):.4f}"))
         if dice_values:
-            meta_rows.append(("Final Dice", f"{float(dice_values[-1]):.4f}"))
-        if val_best_threshold is not None:
+            meta_rows.append(("Final Val Dice", f"{float(dice_values[-1]):.4f}"))
+        if miou_values:
+            meta_rows.append(("Final Pooled IoU (target)", f"{float(miou_values[-1]):.4f}"))
+        meta_rows.append(("Final Train Pixel Acc (incl. bg)", f"{train_acc[-1]:.4f}" if train_acc else "N/A"))
+        meta_rows.append(("Final Val Pixel Acc (incl. bg)", f"{val_acc[-1]:.4f}" if val_acc else "N/A"))
+        if val_best_threshold is not None and not best_eval:
             _thr = f"{val_best_threshold:.2f}"
             _d = f"{val_dice_best_threshold:.4f}" if val_dice_best_threshold is not None else "N/A"
             meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr}; 0.50 = calibrated)"))
@@ -1293,8 +1358,8 @@ class ModelTrainingVisualization:
             meta_rows.append(("Batch Size", str(batch_size)))
         if best_epoch is not None:
             meta_rows.append(("Best Checkpoint Epoch", str(best_epoch)))
-        if best_val_acc is not None:
-            meta_rows.append(("Best Val Accuracy",     f"{best_val_acc:.4f}"))
+        if best_val_acc is not None and not best_eval:
+            meta_rows.append(("Best Val Pixel Acc (incl. bg)", f"{best_val_acc:.4f}"))
         if early_stopped:
             stop_ep = str(early_stop_epoch) if early_stop_epoch is not None else "unknown"
             meta_rows.append(("Early Stopping",        f"Triggered at epoch {stop_ep}"))
@@ -1319,6 +1384,12 @@ class ModelTrainingVisualization:
                 ds_rows.append(("Training Images", str(num_train_images)))
             if num_val_images is not None:
                 ds_rows.append(("Validation Images", str(num_val_images)))
+            for split in ("train", "val"):
+                st = (foreground_stats or {}).get(split) or {}
+                if st.get("count"):
+                    ds_rows.append((f"Target Pixel Fraction ({split})",
+                                    f"mean {st['mean']:.4f}, median {st['median']:.4f}, "
+                                    f"std {st['std']:.4f}"))
             _meta_table(ds_rows)
 
         # --- Model Parameters (SAM2-specific) ---
