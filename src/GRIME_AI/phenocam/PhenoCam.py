@@ -227,7 +227,7 @@ class PhenoCam:
     # ==================================================================================================================
     #
     # ==================================================================================================================
-    def getPhenocamImageCount(self, siteCode, domainCode, start_date, end_date, start_time, end_time):
+    def getPhenoCamImageCount(self, siteCode, domainCode, start_date, end_date, start_time, end_time):
 
         imageList = dailyList([], [])
 
@@ -242,11 +242,11 @@ class PhenoCam:
         while date <= end_date:
             progressBar.setValue(i)
 
-            PhenocamURL = 'https://phenocam.nau.edu/webcam/browse/NEON.D10.ARIK.DP1.20002' + '/' + str(date.year) + '/' + str(date.month).zfill(2) + '/' + str(date.day).zfill(2)
+            PhenoCamURL = 'https://phenocam.nau.edu/webcam/browse/NEON.D10.ARIK.DP1.20002' + '/' + str(date.year) + '/' + str(date.month).zfill(2) + '/' + str(date.day).zfill(2)
 
-            PhenocamURL = PhenocamURL.replace('ARIK', siteCode); PhenocamURL = PhenocamURL.replace('D10', domainCode)
+            PhenoCamURL = PhenoCamURL.replace('ARIK', siteCode); PhenoCamURL = PhenoCamURL.replace('D10', domainCode)
 
-            tmpList = PhenoCam().getVisibleImages(PhenocamURL, start_time, end_time)
+            tmpList = PhenoCam().getVisibleImages(PhenoCamURL, start_time, end_time)
 
             imageList.setVisibleList(tmpList.getVisibleList())
 

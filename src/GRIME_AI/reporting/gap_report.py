@@ -10,7 +10,9 @@ Design:
   * If imagery occupies only part of each day (e.g. 11:00-13:00), the daily
     active window is detected and gaps are judged against that window only.
   * Output is dependency-free HTML (inline CSS + SVG heatmap) plus a CSV,
-    written into the download folder itself.
+    written to a "reports" folder so nothing is added among the images:
+    the sister of an "Images" folder (<site>/Images -> <site>/reports),
+    otherwise a subfolder of the download folder (<folder>/reports).
 
 Usage:
     from gap_report import generate_gap_report
@@ -40,6 +42,7 @@ except ImportError:  # pragma: no cover
     ZoneInfo = None
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+REPORTS_FOLDER_NAME = "reports"
 
 # (regex, is_utc). First match wins. Extend as new networks are added.
 FILENAME_PATTERNS: List[Tuple[re.Pattern, bool]] = [
@@ -482,12 +485,22 @@ def write_pdf_report(a: dict, out_dir) -> Optional[str]:
     return out_path
 
 
+def reports_folder_for(image_folder, name: str = REPORTS_FOLDER_NAME) -> str:
+    """Where reports about an image folder go: the sister of an "Images" folder
+    (<site>/Images -> <site>/<name>), otherwise a subfolder (<folder>/<name>)."""
+    p = Path(image_folder)
+    if p.name.lower() == "images":
+        return str(p.parent / name)
+    return str(p / name)
+
+
 def generate_gap_report(download_folder, tz: Optional[str] = None,
                         cadence_minutes: Optional[int] = None,
                         out_dir=None) -> Tuple[str, str]:
-    """Analyze a download folder and write the HTML + CSV report into it."""
+    """Analyze a download folder and write the HTML + CSV (+ PDF) report to
+    out_dir, or by default to its reports folder (see reports_folder_for)."""
     a = analyze(download_folder, resolve_usgs_tz(tz), cadence_minutes)
-    dest = out_dir or download_folder
+    dest = out_dir or reports_folder_for(download_folder)
     h, c = write_report(a, dest)
     try:
         write_pdf_report(a, dest)          # optional; needs matplotlib

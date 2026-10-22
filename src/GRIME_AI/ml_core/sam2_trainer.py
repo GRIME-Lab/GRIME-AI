@@ -88,12 +88,18 @@ def _normalize_centroid(cx: float, cy: float, w: int, h: int):
 # = = =                     HELPER FUNCTIONS                        = = =
 # =======================================================================
 # =======================================================================
-def compute_mean_iou(y_true: list[int], y_pred: list[int]) -> float:
+def compute_mean_iou(y_true: list[int], y_pred: list[int], weights: list[float] = None) -> float:
+    """
+    Pooled IoU of the TARGET class over the sampled validation pixels.
+    (Historically labeled "mIoU"; it is not a mean over classes.)
+    weights: per-pixel sample weights that undo class-stratified sampling.
+    """
     arr_t = np.array(y_true, dtype=bool)
     arr_p = np.array(y_pred, dtype=bool)
-    inter = np.logical_and(arr_t, arr_p).sum()
-    union = np.logical_or(arr_t, arr_p).sum()
-    return float(inter) / float(union) if union > 0 else 1.0
+    w = np.ones(arr_t.shape, dtype=np.float64) if weights is None else np.asarray(weights, dtype=np.float64)
+    inter = float((w * np.logical_and(arr_t, arr_p)).sum())
+    union = float((w * np.logical_or(arr_t, arr_p)).sum())
+    return inter / union if union > 0 else 1.0
 
 # --- Add below compute_mean_iou ---
 class DiceLoss(nn.Module):
@@ -190,6 +196,21 @@ class SAM2Trainer:
         self.val_true_list = []
         self.val_pred_list = []
         self.val_score_list = []
+        self.val_weight_list = []      # per-pixel sample weights (class-stratified sampling)
+
+        # Target-class pixel metrics per validation epoch
+        self.val_precision_values = []
+        self.val_recall_values = []
+        self.val_ap_values = []
+
+        # Metrics of the saved best checkpoint (re-evaluated after training)
+        self.best_eval = None
+        self.foreground_stats = None
+        self.split_manifest_path = None
+        self.split_manifest = None
+        self.base_checkpoint_name = None
+        self.early_stopped = False
+        self.early_stop_epoch = None
 
         # track mean–IoU per epoch
         self.miou_values = []
@@ -484,7 +505,6 @@ class SAM2Trainer:
             _diag_folder,
             f"{self.formatted_time}_{self.site_name}_training_and_validation_sets.json"
         )
-        self.dataset_util.save_split_dataset(train_images, val_images, split_dataset_filename)
 
         # Preflight: verify all image files exist before training starts
         missing_files = [f for f in train_images + val_images if not os.path.isfile(f)]
@@ -498,8 +518,15 @@ class SAM2Trainer:
                 f"The COCO JSON and the image folder may not match."
             )
 
+        # Portable record of exactly which images trained and validated the
+        # model: dataset roots, root-relative paths and SHA-256 content hashes.
+        self._save_split_manifest(train_images, val_images, split_dataset_filename,
+                                  train_split=train_split, val_split=val_split,
+                                  holdout_seasons=holdout_seasons, season_type=season_type)
+
         stats_train = self.summarize_mask_imbalance(train_images)
         stats_val = self.summarize_mask_imbalance(val_images)
+        self.foreground_stats = {"train": stats_train, "val": stats_val}
         print(f"Foreground ratio (train): {stats_train}")
         print(f"Foreground ratio (val):   {stats_val}")
 
@@ -548,6 +575,7 @@ class SAM2Trainer:
         # --- REPLACEMENT FOR HYDRA THAT IS A BEAR TO USE AND MAINTAIN
         cfg_file = os.path.join(main_dir, "configs", "sam2.1", "sam2.1_hiera_l.yaml")
         checkpoint = os.path.join(main_dir, "checkpoints", "sam2.1_hiera_large.pt")
+        self.base_checkpoint_name = os.path.basename(checkpoint)
 
         cfg_intern = OmegaConf.load(cfg_file)
         raw_model_cfg = OmegaConf.to_container(cfg_intern.model, resolve=True)
@@ -672,7 +700,7 @@ class SAM2Trainer:
         # epochs re-enter Phase 1 only for transient retries, which are
         # negligible against this budget.
         total_iterations = epochs * (len(train_images) + (len(val_images) if val_images else 0)) \
-            + 2 * len(train_images)
+            + 2 * len(train_images) + (len(val_images) if val_images else 0)
 
         progressBar = QProgressWheel(
             title="Training in-progress...", total=total_iterations,
@@ -766,6 +794,10 @@ class SAM2Trainer:
         divergence_threshold = 1e3
         last_completed_epoch = 0
         self._overlays_written = False
+        self._run_best_epoch = None
+        self.best_eval = None
+        self.early_stopped = False
+        self.early_stop_epoch = None
 
         # VRAM trend tracking
         _prev_train_vram_mb = None
@@ -908,14 +940,21 @@ class SAM2Trainer:
                     self.miou_values.append(miou)
                     self.val_dice_values.append(avg_val_dice)
                     self.val_iou_values.append(avg_val_iou)
+                    _extra = getattr(self, "last_val_extra", {}) or {}
+                    self.val_precision_values.append(_extra.get("precision"))
+                    self.val_recall_values.append(_extra.get("recall"))
+                    self.val_ap_values.append(_extra.get("average_precision"))
 
                     print(f"Epoch {epoch + 1} Validation Loss: {avg_val_loss:.4f} "
-                          f"Acc: {val_accuracy:.4f} Dice: {avg_val_dice:.4f} "
-                          f"IoU: {avg_val_iou:.4f} mIoU: {miou:.4f}")
+                          f"Dice: {avg_val_dice:.4f} IoU: {avg_val_iou:.4f} "
+                          f"Precision: {_extra.get('precision', float('nan')):.4f} "
+                          f"Recall: {_extra.get('recall', float('nan')):.4f} "
+                          f"Pooled IoU: {miou:.4f} Pixel acc (incl. background): {val_accuracy:.4f}")
 
                     if avg_val_loss < best_val_loss:
                         best_val_loss = avg_val_loss
                         patience_counter = 0
+                        self._run_best_epoch = epoch + 1
                         self._save_model_checkpoint(
                             predictor, learnrate, epoch + 1,
                             suffix=f"valbest_ep{epoch + 1:03d}",
@@ -926,6 +965,8 @@ class SAM2Trainer:
                         patience_counter += 1
                         if self.early_stopping and patience_counter >= self.patience:
                             print(f"Early stopping triggered at epoch {epoch + 1}.")
+                            self.early_stopped = True
+                            self.early_stop_epoch = epoch + 1
                             break
 
                     # ============================================================================
@@ -934,6 +975,13 @@ class SAM2Trainer:
                     # LEARNING RATE IF NO IMPROVEMENT IS DETECTED FOR PATIENCE=3 EPOCHS
                     # ============================================================================
                     self._step_lr_scheduler(scheduler, optimizer, avg_val_loss, epoch + 1)
+
+            # ----------------------------------------------------------------
+            # POST-TRAINING: re-validate the SAVED best checkpoint so the report,
+            # plots, overlays and model card describe the model a user deploys,
+            # not the last epoch.
+            # ----------------------------------------------------------------
+            self._evaluate_best_checkpoint(val_cache, predictor, progressBar, target_label, learnrate)
 
             # ----------------------------------------------------------------
             # POST-TRAINING: backstop so an early exit still produces overlays
@@ -972,6 +1020,10 @@ class SAM2Trainer:
         self.val_true_list.clear()
         self.val_pred_list.clear()
         self.val_score_list.clear()
+        self.val_weight_list.clear()
+        self.val_precision_values.clear()
+        self.val_recall_values.clear()
+        self.val_ap_values.clear()
         self.miou_values.clear()
         self.train_dice_values.clear()
         self.train_iou_values.clear()
@@ -2076,7 +2128,7 @@ class SAM2Trainer:
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     def _validate_one_epoch(self, val_cache, predictor, progressBar, target_label,
-                            save_overlays=False):
+                            save_overlays=False, overlay_tag=None):
         """
         Runs one validation epoch using pre-cached image embeddings.
 
@@ -2090,11 +2142,14 @@ class SAM2Trainer:
         dice_sum, iou_sum = 0.0, 0.0
         val_correct, val_total = 0, 0
         n_items = 0
+        tp_total, fp_total, fn_total = 0.0, 0.0, 0.0
+        self.last_val_extra = {}
 
         # Clear per-epoch pixel lists to prevent unbounded memory growth across epochs
         self.val_true_list.clear()
         self.val_pred_list.clear()
         self.val_score_list.clear()
+        self.val_weight_list.clear()
 
         self.sam2_model.eval()
         progressBar.setWindowTitle("Validation in-progress")
@@ -2252,12 +2307,38 @@ class SAM2Trainer:
 
                 true_flat  = true_binary_np.flatten()
                 pred_flat  = pred_binary_np.flatten()
-                max_samples = self.site_config.get('max_pixel_samples', 10000)
+
+                # Target-class pixel counts over the FULL image (not sampled)
+                _t = true_flat > 0.5
+                _p = pred_flat > 0.5
+                tp_total += float(np.count_nonzero(_t & _p))
+                fp_total += float(np.count_nonzero(~_t & _p))
+                fn_total += float(np.count_nonzero(_t & ~_p))
+
+                max_samples = int(self.site_config.get('max_pixel_samples', 10000))
+                target_fraction = float(self.site_config.get('pixel_sample_target_fraction', 0.5))
                 total_pixels = len(true_flat)
                 score_flat = prob_upsampled.squeeze().cpu().numpy().flatten()
 
                 if total_pixels > max_samples:
-                    sample_indices = np.random.choice(total_pixels, max_samples, replace=False)
+                    # Class-stratified sampling: a small target (e.g. a staff
+                    # gage at <1% of the frame) would otherwise contribute only a
+                    # handful of pixels. Each sampled pixel carries a weight equal
+                    # to (class population / class sample size), so weighted
+                    # curves and confusion matrices estimate full-image values.
+                    pos_idx = np.flatnonzero(_t)
+                    neg_idx = np.flatnonzero(~_t)
+                    n_pos = min(len(pos_idx), int(round(max_samples * target_fraction)))
+                    n_neg = min(len(neg_idx), max_samples - n_pos)
+                    sel_pos = (np.random.choice(pos_idx, n_pos, replace=False)
+                               if n_pos < len(pos_idx) else pos_idx)
+                    sel_neg = (np.random.choice(neg_idx, n_neg, replace=False)
+                               if n_neg < len(neg_idx) else neg_idx)
+                    sample_indices = np.concatenate([sel_pos, sel_neg])
+                    w_pos = (len(pos_idx) / len(sel_pos)) if len(sel_pos) else 0.0
+                    w_neg = (len(neg_idx) / len(sel_neg)) if len(sel_neg) else 0.0
+                    weight_sampled = np.concatenate([np.full(len(sel_pos), w_pos),
+                                                     np.full(len(sel_neg), w_neg)])
                     true_sampled  = true_flat[sample_indices]
                     pred_sampled  = pred_flat[sample_indices]
                     score_sampled = score_flat[sample_indices]
@@ -2265,10 +2346,12 @@ class SAM2Trainer:
                     true_sampled  = true_flat
                     pred_sampled  = pred_flat
                     score_sampled = score_flat
+                    weight_sampled = np.ones(total_pixels, dtype=np.float64)
 
                 self.val_true_list.extend(int(x) for x in true_sampled)
                 self.val_pred_list.extend(int(x) for x in pred_sampled)
                 self.val_score_list.extend(score_sampled.tolist())
+                self.val_weight_list.extend(weight_sampled.tolist())
 
                 # Overlay images: only on the last epoch to avoid repeated disk I/O
                 if save_overlays and val_idx < self.validation_overlay_samples:
@@ -2283,9 +2366,10 @@ class SAM2Trainer:
                                + heat.astype(np.float32) * alpha).astype(np.uint8)
                     overlay_dir = os.path.join(self.model_output_folder, "validation_overlays")
                     os.makedirs(overlay_dir, exist_ok=True)
+                    _tag = overlay_tag if overlay_tag else f"e{len(self.epoch_list)}"
                     out_path = os.path.join(
                         overlay_dir,
-                        f"{self.formatted_time}_{self.site_name}_val_overlay_e{len(self.epoch_list)}_{val_idx}.png"
+                        f"{self.formatted_time}_{self.site_name}_val_overlay_{_tag}_{val_idx}.png"
                     )
                     cv2.imwrite(out_path, blended)  # already BGR
                     self._overlays_written = True
@@ -2299,14 +2383,35 @@ class SAM2Trainer:
         val_accuracy = val_correct / val_total if val_total > 0 else 0.0
         avg_val_dice = dice_sum / n_items if n_items > 0 else 0.0
         avg_val_iou = iou_sum / n_items if n_items > 0 else 0.0
-        miou = compute_mean_iou(self.val_true_list, self.val_pred_list)
+        miou = compute_mean_iou(self.val_true_list, self.val_pred_list, self.val_weight_list)
+
+        # Target-class precision / recall from full-image pixel counts, and
+        # average precision (area under the PR curve) from weighted samples.
+        _prec = tp_total / (tp_total + fp_total) if (tp_total + fp_total) > 0 else 0.0
+        _rec = tp_total / (tp_total + fn_total) if (tp_total + fn_total) > 0 else 0.0
+        _ap = None
+        try:
+            from sklearn.metrics import average_precision_score
+            if self.val_true_list and 0 < sum(self.val_true_list) < len(self.val_true_list):
+                _ap = float(average_precision_score(self.val_true_list, self.val_score_list,
+                                                    sample_weight=self.val_weight_list))
+        except Exception as e:
+            print(f"[SAM2Trainer] Average precision not computed: {e}")
+        _w = np.asarray(self.val_weight_list, dtype=np.float64)
+        _prevalence = (float((_w * np.asarray(self.val_true_list)).sum() / _w.sum())
+                       if _w.size and _w.sum() > 0 else None)
+        self.last_val_extra = {
+            "precision": _prec, "recall": _rec, "average_precision": _ap,
+            "target_pixel_fraction": _prevalence,
+            "tp": tp_total, "fp": fp_total, "fn": fn_total, "n_images": n_items,
+        }
 
         # Calibration check: Dice/IoU at the F1-optimal threshold on the
         # sampled pixels. A large gap vs the 0.5-threshold numbers means the
         # model ranks pixels well but its logits are shifted -- a prompt /
         # protocol problem, not a capacity problem.
         self.val_best_thr, self.val_dice_best_thr, self.val_iou_best_thr = (
-            self._threshold_optimal_metrics(self.val_true_list, self.val_score_list))
+            self._threshold_optimal_metrics(self.val_true_list, self.val_score_list, self.val_weight_list))
         print(f"[SAM2Trainer] Val @0.5: dice={avg_val_dice:.3f} iou={avg_val_iou:.3f} | "
               f"@thr={self.val_best_thr:.2f} (F1-opt): dice={self.val_dice_best_thr:.3f} "
               f"iou={self.val_iou_best_thr:.3f}")
@@ -2330,18 +2435,174 @@ class SAM2Trainer:
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
     @staticmethod
-    def _threshold_optimal_metrics(y_true, y_score):
-        """Pixel-level Dice/IoU at the threshold maximising F1 (Dice == F1)."""
+    def _sha256_file(path, chunk_bytes):
+        import hashlib
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(chunk_bytes), b""):
+                h.update(block)
+        return h.hexdigest()
+
+    def _save_split_manifest(self, train_images, val_images, out_path,
+                             train_split=None, val_split=None,
+                             holdout_seasons=None, season_type=None):
+        """
+        Write a portable record of the training/validation split.
+
+        Each image is identified by (dataset root, root-relative path, SHA-256),
+        so the exact set can be confirmed on any machine regardless of where
+        the image pool lives. The model output folder is separate from the
+        image pool, so absolute roots are kept only as a local reference.
+        """
+        chunk = int(self.site_config.get("hash_chunk_bytes", 1 << 20))
+
+        configured = sorted({os.path.normpath(os.path.abspath(f)) for f in self.all_folders},
+                            key=len, reverse=True)
+        roots = []          # ordered list of absolute roots actually used
+
+        def _root_for(img):
+            a = os.path.normpath(os.path.abspath(img))
+            for r in configured:
+                if a == r or a.startswith(r + os.sep):
+                    return r
+            return os.path.dirname(a)
+
+        def _entry(img):
+            r = _root_for(img)
+            if r not in roots:
+                roots.append(r)
+            rel = os.path.relpath(os.path.abspath(img), r).replace("\\", "/")
+            return {
+                "root": f"root_{roots.index(r)}",
+                "relative_path": rel,
+                "file_name": os.path.basename(img),
+                "bytes": os.path.getsize(img),
+                "sha256": self._sha256_file(img, chunk),
+            }
+
+        train_entries = [_entry(p) for p in train_images]
+        val_entries = [_entry(p) for p in val_images]
+
+        annotations = []
+        for a in self.all_annotations:
+            try:
+                annotations.append({
+                    "file_name": os.path.basename(a),
+                    "sha256": self._sha256_file(a, chunk),
+                    "local_path": os.path.normpath(os.path.abspath(a)),
+                })
+            except OSError as e:
+                annotations.append({"file_name": os.path.basename(a), "sha256": None,
+                                    "error": str(e)})
+
+        manifest = {
+            "schema": "grime-ai/training-split-manifest",
+            "schema_version": "1.0",
+            "created_utc": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "site_name": self.site_name,
+            "hash_algorithm": "sha256",
+            "dataset_roots": {f"root_{i}": r for i, r in enumerate(roots)},
+            "dataset_roots_note": "Absolute roots are a local reference only; "
+                                  "identify images by relative_path and sha256.",
+            "annotation_files": annotations,
+            "split_settings": {
+                "train_split": train_split,
+                "val_split": val_split,
+                "holdout_seasons": list(holdout_seasons or []),
+                "season_type": season_type,
+            },
+            "counts": {"train": len(train_entries), "val": len(val_entries)},
+            "train": train_entries,
+            "val": val_entries,
+        }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        self.split_manifest_path = out_path
+        self.split_manifest = manifest
+        print(f"[SAM2Trainer] Split manifest written: {out_path}")
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def _find_run_best_checkpoint(self, target_label, learnrate, epoch_num):
+        """Path of this run's best checkpoint (files are renamed by rank)."""
+        tag = f"_{target_label}_epoch{epoch_num:03d}_"
+        suffix = f"_lr{learnrate}.torch"
+        for _, p in self.best_checkpoints:
+            if p and tag in os.path.basename(p) and p.endswith(suffix) and os.path.isfile(p):
+                return p
+        return None
+
+    def _evaluate_best_checkpoint(self, val_cache, predictor, progressBar, target_label, learnrate):
+        """
+        Load the run's best checkpoint (lowest validation loss), run one
+        validation pass, and store its metrics in self.best_eval. The pixel
+        lists used by the confusion matrix, ROC, PR and F1 plots then describe
+        the saved model. The in-memory weights are restored afterwards so any
+        following learning-rate run starts exactly as before.
+        """
+        ep = getattr(self, "_run_best_epoch", None)
+        if ep is None or not val_cache:
+            return
+        path = self._find_run_best_checkpoint(target_label, learnrate, ep)
+        if path is None:
+            print(f"[SAM2Trainer] Best checkpoint for epoch {ep} not found; "
+                  f"report will use final-epoch values.")
+            return
+
+        last_state = {k: v.detach().cpu().clone() for k, v in self.sam2_model.state_dict().items()}
+        try:
+            ckpt = torch.load(path, map_location="cpu", weights_only=False)
+            self.sam2_model.load_state_dict(ckpt["model_state_dict"])
+            del ckpt
+            print(f"[SAM2Trainer] Re-validating best checkpoint (epoch {ep}): {os.path.basename(path)}")
+            result = self._validate_one_epoch(
+                val_cache=val_cache, predictor=predictor, progressBar=progressBar,
+                target_label=target_label, save_overlays=True, overlay_tag=f"best_ep{ep:03d}")
+            if result is None or result[0] is None:
+                return
+            v_loss, v_acc, v_pooled_iou, v_dice, v_iou = result
+            extra = getattr(self, "last_val_extra", {}) or {}
+            self.best_eval = {
+                "epoch": ep,
+                "checkpoint_file": os.path.basename(path),
+                "selection_rule": "lowest validation loss",
+                "val_loss": v_loss,
+                "dice": v_dice,
+                "iou": v_iou,
+                "precision": extra.get("precision"),
+                "recall": extra.get("recall"),
+                "average_precision": extra.get("average_precision"),
+                "target_pixel_fraction": extra.get("target_pixel_fraction"),
+                "pooled_iou": v_pooled_iou,
+                "pixel_accuracy": v_acc,
+                "f1_optimal_threshold": getattr(self, "val_best_thr", None),
+                "dice_at_f1_optimal_threshold": getattr(self, "val_dice_best_thr", None),
+                "n_val_images": extra.get("n_images"),
+            }
+            self._overlays_written = True
+        except Exception as e:
+            print(f"[SAM2Trainer] Best-checkpoint evaluation failed: {e}")
+        finally:
+            self.sam2_model.load_state_dict(last_state)
+            del last_state
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    @staticmethod
+    def _threshold_optimal_metrics(y_true, y_score, weights=None):
+        """Pixel-level Dice/IoU at the threshold maximising F1 (Dice == F1).
+        weights: per-pixel sample weights from class-stratified sampling."""
         if not y_true:
             return 0.5, 0.0, 0.0
-        t = np.asarray(y_true, dtype=np.int8)
+        t = np.asarray(y_true, dtype=np.float64)
         p = np.asarray(y_score, dtype=np.float32)
+        w = np.ones_like(t) if weights is None else np.asarray(weights, dtype=np.float64)
         order = np.argsort(-p)
-        t, p = t[order], p[order]
-        tp = np.cumsum(t)
-        fp = np.cumsum(1 - t)
-        fn = t.sum() - tp
-        f1 = 2 * tp / np.maximum(2 * tp + fp + fn, 1)
+        t, p, w = t[order], p[order], w[order]
+        tp = np.cumsum(w * t)
+        fp = np.cumsum(w * (1 - t))
+        fn = (w * t).sum() - tp
+        f1 = 2 * tp / np.maximum(2 * tp + fp + fn, 1e-12)
         k = int(np.argmax(f1))
         dice = float(f1[k])
         iou = dice / (2 - dice) if dice < 1 else 1.0
@@ -2370,7 +2631,12 @@ class SAM2Trainer:
             "num_classes": num_classes,
             "val_loss": val_loss,
             "val_accuracy": val_accuracy,
-            "miou": miou,
+            "miou": miou,                      # kept for compatibility
+            "pooled_target_iou": miou,         # same value, accurate name
+            "selection_rule": "lowest validation loss",
+            "base_checkpoint": self.base_checkpoint_name,
+            "training_split_manifest": (os.path.basename(self.split_manifest_path)
+                                        if self.split_manifest_path else None),
             "target_category_name": target_category_name,
             "base_model": "sam2",
             "category_centroids": self.category_centroids,
@@ -2550,6 +2816,9 @@ class SAM2Trainer:
             if getattr(self, "time_train_seconds", None) is not None:
                 text_file.write(f"Time (encode/train/val): {self.time_encode_seconds:.0f}s / "
                                 f"{self.time_train_seconds:.0f}s / {self.time_val_seconds:.0f}s\n")
+            text_file.write(f"Base Checkpoint: {self.base_checkpoint_name}\n")
+            if self.split_manifest_path:
+                text_file.write(f"Training Split Manifest: {os.path.basename(self.split_manifest_path)}\n")
             text_file.write(f"Device: {device}\n")
             # self.folders / self.annotation_files are never populated after
             # __init__; the real inputs live in all_folders / all_annotations.
@@ -2582,8 +2851,9 @@ class SAM2Trainer:
                 w.writerow([
                     "epoch", "train_loss", "val_loss",
                     "train_accuracy", "val_accuracy",
-                    "miou", "train_dice", "val_dice",
-                    "train_iou", "val_iou", "lr",
+                    "pooled_iou", "train_dice", "val_dice",
+                    "train_iou", "val_iou", "val_precision", "val_recall",
+                    "val_average_precision", "lr",
                 ])
                 for i in range(n):
                     epoch = _at(self.epoch_list, i) or (i + 1)
@@ -2598,6 +2868,9 @@ class SAM2Trainer:
                         _at(getattr(self, "val_dice_values", None), i),
                         _at(getattr(self, "train_iou_values", None), i),
                         _at(getattr(self, "val_iou_values", None), i),
+                        _at(getattr(self, "val_precision_values", None), i),
+                        _at(getattr(self, "val_recall_values", None), i),
+                        _at(getattr(self, "val_ap_values", None), i),
                         _at(getattr(self, "lr_values", None), i),
                     ])
             print(f"[metrics] wrote per-epoch CSV: {path}")
@@ -2662,6 +2935,8 @@ class SAM2Trainer:
         cm_png = viz.plot_confusion_matrix(
             y_true=self.val_true_list,
             y_pred=self.val_pred_list,
+            sample_weight=self.val_weight_list,
+            target_label=self._report_target_label(),
             site_name=self.site_name,
             lr=lr,
             normalize=True,
@@ -2674,6 +2949,7 @@ class SAM2Trainer:
         roc_png = viz.plot_roc_curve(
             y_true=self.val_true_list,
             y_scores=self.val_score_list,
+            sample_weight=self.val_weight_list,
             site_name=self.site_name,
             lr=lr,
             file_prefix=f"{self.formatted_time}_{self.site_name}_lr{lr:.5f}"
@@ -2685,6 +2961,7 @@ class SAM2Trainer:
         pr_png = viz.plot_precision_recall(
             y_true=self.val_true_list,
             y_scores=self.val_score_list,
+            sample_weight=self.val_weight_list,
             site_name=self.site_name,
             lr=lr,
             file_prefix=f"{self.formatted_time}_{self.site_name}_lr{lr:.5f}"
@@ -2696,6 +2973,7 @@ class SAM2Trainer:
         f1_png = viz.plot_f1_score(
             y_true=self.val_true_list,
             y_scores=self.val_score_list,
+            sample_weight=self.val_weight_list,
             site_name=self.site_name,
             lr=lr,
             file_prefix=f"{self.formatted_time}_{self.site_name}_lr{lr:.5f}"
@@ -2762,8 +3040,9 @@ class SAM2Trainer:
         # Same series that feed every per-epoch plot, written to disk so the
         # curves can be reproduced/analyzed outside the app. Additive only.
         self._save_metrics_csv(viz.graphs_folder, lr)
-        graphs = [g for g in [acc_png, loss_png, cm_png, roc_png, pr_png,
-                           f1_png, miou_png, dice_png, iou_png] if g and os.path.isfile(g)]
+        # Target-class metrics first; background-dominated ones last.
+        graphs = [g for g in [dice_png, iou_png, pr_png, f1_png, cm_png, loss_png,
+                           miou_png, acc_png, roc_png] if g and os.path.isfile(g)]
         viz.save_training_report(
             train_acc=self.train_accuracy_values,
             val_acc=self.val_accuracy_values,
@@ -2780,12 +3059,11 @@ class SAM2Trainer:
             blob_radius_pct=round(self._report_blob_radius_frac * 100, 1),
             weight_decay=self.weight_decay,
             categories=self.categories,
-            best_epoch=self._extract_epoch_from_path(self.best_checkpoints[0][1])
-                if self.best_checkpoints else None,
-            best_val_acc=self.val_accuracy_values[
-                self.epoch_list.index(self._extract_epoch_from_path(self.best_checkpoints[0][1]))
-            ] if self.best_checkpoints and self.val_accuracy_values and
-                self._extract_epoch_from_path(self.best_checkpoints[0][1]) in self.epoch_list else None,
+            best_epoch=(self.best_eval or {}).get("epoch", getattr(self, "_run_best_epoch", None)),
+            best_val_acc=(self.best_eval or {}).get("pixel_accuracy"),
+            best_eval=self.best_eval,
+            foreground_stats=self.foreground_stats,
+            train_dice=self.train_dice_values,
             early_stopped=getattr(self, "early_stopped", False),
             early_stop_epoch=getattr(self, "early_stop_epoch", None),
             training_time_seconds=getattr(self, "training_time_seconds", None),
@@ -2801,6 +3079,72 @@ class SAM2Trainer:
                 "validate": getattr(self, "time_val_seconds", None),
             },
         )
+
+        # ── Model card ─────────────────────────────────────────────────────
+        try:
+            from appcore.ml_core.model_card import write_model_card
+            card_path = os.path.join(
+                self.model_output_folder,
+                f"{self.formatted_time}_{self.site_name}_model_card.md")
+            write_model_card(card_path, self._model_card_info(lr))
+        except Exception as e:
+            print(f"[SAM2Trainer] Model card not written: {e}")
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def _report_target_label(self):
+        cats = self.site_config.get("train_model", {}).get("TRAINING_CATEGORIES", [])
+        return cats[0].get("label_name", "") if cats else ""
+
+    def _model_card_info(self, lr):
+        """Everything the model card needs, gathered from this run."""
+        def _last(seq):
+            return seq[-1] if seq else None
+        final = {
+            "epoch": _last(self.epoch_list),
+            "val_loss": _last(self.val_loss_values),
+            "dice": _last(self.val_dice_values),
+            "iou": _last(self.val_iou_values),
+            "precision": _last(self.val_precision_values),
+            "recall": _last(self.val_recall_values),
+            "average_precision": _last(self.val_ap_values),
+            "pooled_iou": _last(self.miou_values),
+            "pixel_accuracy": _last(self.val_accuracy_values),
+        }
+        return {
+            "site_name": self.site_name,
+            "formatted_time": self.formatted_time,
+            "model_type": "SAM2",
+            "base_checkpoint": self.base_checkpoint_name,
+            "target_label": self._report_target_label(),
+            "categories": self.categories,
+            "learning_rate": lr,
+            "optimizer": self.optimizer_type,
+            "loss_function": self.loss_function,
+            "weight_decay": self.weight_decay,
+            "batch_size": getattr(self, "batch_size", None),
+            "epochs_configured": self.num_epochs,
+            "epochs_completed": len(self.epoch_list),
+            "early_stopped": self.early_stopped,
+            "early_stop_epoch": self.early_stop_epoch,
+            "lr_scheduler_enabled": getattr(self, "lr_scheduler_enabled", None),
+            "prompt_protocol": {
+                "train": self.site_config.get("train_prompt_mode", "pooled"),
+                "val": self.site_config.get("val_prompt_mode", "pooled"),
+                "max_positives": self.site_config.get("max_positives", _DEFAULT_MAX_POSITIVES),
+                "negative_balance": self.site_config.get("negative_balance", _DEFAULT_NEGATIVE_BALANCE),
+            },
+            "blob_filter_radius_pct": round(self._report_blob_radius_frac * 100, 1),
+            "split_manifest": self.split_manifest,
+            "split_manifest_file": (os.path.basename(self.split_manifest_path)
+                                    if self.split_manifest_path else None),
+            "foreground_stats": self.foreground_stats,
+            "best_eval": self.best_eval,
+            "final_epoch": final,
+            "checkpoint_files": [os.path.basename(p) for _, p in self.best_checkpoints if p],
+            "training_time_seconds": getattr(self, "training_time_seconds", None),
+            "device": str(device),
+        }
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------

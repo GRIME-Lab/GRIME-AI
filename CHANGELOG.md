@@ -23,8 +23,8 @@ All notable changes to GRIME AI will be documented in this file.
 
 ### Added
 - Radio buttons for selecting between 3 ML models when training: SAM2, LoRA, or Mask R-CNN (note: currently only SAM2 is active)
-- New Phenocam_API class for interacting with Phenocam website using Phenocam API
-- New Phenocam tab on main GRIME AI canvas
+- New Phenocam_API class for interacting with PhenoCam website using PhenoCam API
+- New PhenoCam tab on main GRIME AI canvas
 - Additional map colors for enhanced visualization
 - HYDRA_FULL_ERROR environment variable (os.environ["HYDRA_FULL_ERROR"] = "1") for complete stack traces
 - R. Issa to authorized users list for beta features
@@ -34,14 +34,14 @@ All notable changes to GRIME AI will be documented in this file.
 - .venv to list of folders to ignore
 - Console messages to isolate DNS errors
 - Windows and Linux scripts to help developers install SAM2 (install_sam2.bat and shell script)
-- Scripts to display OpenStreetMap and Google Maps with push pins for USGS and Phenocam sites
+- Scripts to display OpenStreetMap and Google Maps with push pins for USGS and PhenoCam sites
 - Script to snapshot user's torch environment (CUDA version, torch version, etc.)
 - Script to check GRIME AI code for Linux and Windows compatibility
 
 ### Changed
 - Refactored all LoRA code to integrate into GRIME AI (initial incorporation, three modeling pipelines: SAM2, Mask R-CNN, and LoRA)
 - Moved core NEON API and NEON interaction code to separate subfolder
-- Refactored older Phenocam API and created new Phenocam API with new functionality (intent to obsolesce older API)
+- Refactored older PhenoCam API and created new PhenoCam API with new functionality (intent to obsolesce older API)
 - Made NEON site interaction more robust when using VPN (addressed SSL handshake failures/SSLError)
 - Incorporated latest fixes/updates from Razin to Image Organizer class
 - Improved cross-platform path handling (cleaned up Linux vs Windows path issues, replaced backslash with forward slash)
@@ -116,7 +116,7 @@ All notable changes to GRIME AI will be documented in this file.
 ### Added
 - Capability to overlay shape files onto maps
 - Nebraska counties shape file as proof-of-concept
-- Map pin color variations (USGS sites: green, Phenocam sites: gold, Lincoln NE: red)
+- Map pin color variations (USGS sites: green, PhenoCam sites: gold, Lincoln NE: red)
 - Diagnostic outputs for NEON data fetching issues
 
 ### Changed
@@ -379,7 +379,7 @@ All notable changes to GRIME AI will be documented in this file.
 ## [0.0.5.11b] - 2025-01-13
 
 ### Changed
-- Unified NEON/Phenocam download completion messages
+- Unified NEON/PhenoCam download completion messages
 
 ## [0.0.5.11a] - 2025-01-10
 
@@ -620,7 +620,7 @@ All notable changes to GRIME AI will be documented in this file.
 
 ### Fixed
 - Color cluster display in feature table
-- Phenocam site reference updated
+- PhenoCam site reference updated
 
 ## [0.0.2.1] - 2022-09-19
 
@@ -645,7 +645,7 @@ All notable changes to GRIME AI will be documented in this file.
 ## [0.0.1.7] - 2022-06-10
 
 ### Added
-- Limited capability release as NEON/Phenocam Download Manager only
+- Limited capability release as NEON/PhenoCam Download Manager only
 
 ## [0.0.1.6] - 2022-04-06
 
@@ -714,4 +714,4 @@ All notable changes to GRIME AI will be documented in this file.
 ## [0.0.0.0] - 2021-04-xx
 
 ### Added
-- Initial NEON/Phenocam prototype (Blade Vision Systems presentation)
+- Initial NEON/PhenoCam prototype (Blade Vision Systems presentation)
