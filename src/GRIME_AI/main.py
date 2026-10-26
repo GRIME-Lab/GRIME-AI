@@ -306,6 +306,7 @@ PHENOCAM_TAB_DEFAULTS = {
     "PhenoCam_Preview_Height_px":    None,   # saved splitter position; None = use the default fraction
     "PhenoCam_Preview_Fraction":     2 / 3,  # preview share of the panel height when none is saved
     "PhenoCam_Preview_Search_Days":  30,     # days searched back from a site's last image date
+    "PhenoCam_Midday_Window_Hours":  1.0,    # site preview: images within this many hours of noon count as midday
     "PhenoCam_Count_Max_Days":       366,    # most browse pages fetched per site for a narrow time window
     "PhenoCam_Count_Parallel_Pages": 4,      # browse pages fetched at once for narrow-window counts
     "PhenoCam_Count_Debounce_ms":    800,    # pause after a date/time edit before counting starts
@@ -335,6 +336,11 @@ USGS_TAB_DEFAULTS = {
     "USGS_Midday_Search_Days":   7,      # days searched back for a midday image before showing the newest
     "USGS_Midday_List_Keys":     1000,   # image names listed per UTC hour (S3 returns at most 1000)
 }
+
+
+# Title over the site image on the NEON, USGS and PhenoCam tabs
+SITE_PREVIEW_TITLE          = "Site Preview"
+SITE_PREVIEW_FALLBACK_TITLE = "Site Preview (last available image)"   # no midday image was found
 
 
 def _phenocam_setting(key):
@@ -827,7 +833,13 @@ class ZoomImagePanel(QtWidgets.QWidget):
 # PHENOCAM BACKGROUND WORKERS
 # ======================================================================================================================
 class PhenoCamPreviewFetcher(QtCore.QThread):
-    result = QtCore.pyqtSignal(object, str)
+    """Finds the site preview image for a PhenoCam camera (used by the PhenoCam and NEON tabs).
+
+    The preview is the image closest to noon within PhenoCam_Midday_Window_Hours, on the
+    newest day that has one. If no day in the search has a midday image, the newest image
+    is shown instead and is_midday is False.
+    """
+    result = QtCore.pyqtSignal(object, str, bool)  # (QPixmap or None, error text, is_midday)
     def __init__(self, site_name, parent=None, roi_name=None, last_date=None, search_days=30):
         super().__init__(parent)
         self.site_name = site_name
@@ -837,16 +849,31 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
         # walking back from today through days that never will.
         self.last_date   = last_date
         self.search_days = search_days
+        # Settings are read here, on the UI thread, before the fetch starts
+        self.midday_window_hours = float(_phenocam_setting("PhenoCam_Midday_Window_Hours"))
         self._cancelled  = False
     def cancel(self):
         self._cancelled = True
-    def run(self):
-        import urllib.request, datetime as dt_mod
+
+    @staticmethod
+    def _image_time(filename):
+        """Time of day from a PhenoCam filename (..._YYYY_MM_DD_HHMMSS.jpg), or None."""
+        import re, datetime as dt_mod
+        m = re.search(r"_(\d{4})_(\d{2})_(\d{2})_(\d{2})(\d{2})(\d{2})\.\w+$", filename)
+        if not m:
+            return None
+        try:
+            return dt_mod.time(int(m.group(4)), int(m.group(5)), int(m.group(6)))
+        except ValueError:
+            return None
+
+    def _find_image(self, start_day, t0, t1, closest_to=None):
+        """URL of an image between t0 and t1 on the newest day searched that has one.
+
+        closest_to: pick the image nearest this time of day; None picks the newest image.
+        """
+        import datetime as dt_mod
         from appcore.phenocam.PhenoCam import PhenoCam
-        today = dt_mod.date.today()
-        if self.last_date is not None and self.last_date < today:
-            today = self.last_date
-        t0, t1 = dt_mod.time(11, 0), dt_mod.time(13, 0)
         # Extract ROI type prefix for filename filtering (e.g. "DB" from "..._DB_1000")
         roi_filter = None
         if self.roi_name:
@@ -854,11 +881,10 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
             # roi_name format: sitename_TYPE_NNNN — TYPE is second-to-last segment
             if len(parts) >= 2:
                 roi_filter = parts[-2]  # e.g. "DB", "EN", "SH", etc.
-        img_url = None
         for offset in range(self.search_days):
             if self._cancelled:
-                return
-            check = today - dt_mod.timedelta(days=offset)
+                return None
+            check = start_day - dt_mod.timedelta(days=offset)
             url = (f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
                    f"{check.year}/{str(check.month).zfill(2)}/{str(check.day).zfill(2)}")
             try:
@@ -870,23 +896,48 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
                                     if f"_{roi_filter}_" in i.fullPathAndFilename
                                     or f"_{roi_filter}." in i.fullPathAndFilename]
                         imgs = filtered if filtered else imgs
-                    img_url = imgs[-1].fullPathAndFilename
-                    break
+                    if closest_to is None:
+                        return imgs[-1].fullPathAndFilename
+                    target_s = closest_to.hour * 3600 + closest_to.minute * 60 + closest_to.second
+                    def _distance(img):
+                        t = self._image_time(img.fullPathAndFilename)
+                        if t is None:
+                            return float("inf")
+                        return abs(t.hour * 3600 + t.minute * 60 + t.second - target_s)
+                    return min(imgs, key=_distance).fullPathAndFilename
             except Exception:
                 pass
+        return None
+
+    def run(self):
+        import urllib.request, datetime as dt_mod
+        today = dt_mod.date.today()
+        if self.last_date is not None and self.last_date < today:
+            today = self.last_date
+        noon = dt_mod.datetime.combine(today, dt_mod.time(12, 0))
+        window = dt_mod.timedelta(hours=max(0.0, min(self.midday_window_hours, 12.0)))
+        t0 = max(noon - window, dt_mod.datetime.combine(today, dt_mod.time.min)).time()
+        t1 = min(noon + window, dt_mod.datetime.combine(today, dt_mod.time.max)).time()
+
+        is_midday = True
+        img_url = self._find_image(today, t0, t1, closest_to=noon.time())
+        if img_url is None and not self._cancelled:
+            # No midday image in the search: fall back to the newest image at any time of day
+            is_midday = False
+            img_url = self._find_image(today, dt_mod.time.min, dt_mod.time.max)
         if self._cancelled:
             return
         if img_url is None:
-            self.result.emit(None, "No image available.")
+            self.result.emit(None, "No image available.", False)
             return
         try:
             data = urllib.request.urlopen(img_url, timeout=15).read()
             qimg = QtGui.QImage()
             qimg.loadFromData(data)
             self.result.emit(QtGui.QPixmap.fromImage(qimg) if not qimg.isNull() else None,
-                             "" if not qimg.isNull() else "Could not decode image.")
+                             "" if not qimg.isNull() else "Could not decode image.", is_midday)
         except Exception as e:
-            self.result.emit(None, f"Error: {e}")
+            self.result.emit(None, f"Error: {e}", False)
 
 
 class PhenoCamDailyCountsWorker(QtCore.QThread):
@@ -1720,7 +1771,7 @@ class MainWindow(QMainWindow):
         self.USGS_labelLatestImage.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
 
         # Title label shown above the USGS image
-        self._usgs_image_title_label = QtWidgets.QLabel("", self.USGS_labelLatestImage.parent())
+        self._usgs_image_title_label = QtWidgets.QLabel(SITE_PREVIEW_TITLE, self.USGS_labelLatestImage.parent())
         self._usgs_image_title_label.setAlignment(QtCore.Qt.AlignCenter)
         self._usgs_image_title_label.setFont(QFont("Arial", 10, QFont.Bold))
         parent_layout = self.USGS_labelLatestImage.parent().layout()
@@ -2755,8 +2806,21 @@ class MainWindow(QMainWindow):
         # Zoomable panel around the label (label shows messages; the panel shows the image)
         self.phenocam_image_panel = ZoomImagePanel(self.phenocam_preview_label)
         self.phenocam_image_panel.setMinimumHeight(int(_phenocam_setting("PhenoCam_Preview_Min_Height_px")))
-        self.phenocam_image_panel.showMessage("Select a site to preview the latest image")
+        self.phenocam_image_panel.showMessage("Select a site to see its preview")
         self._phenocam_pixmap = None
+
+        # Title over the image, matching the NEON and USGS tabs
+        self.phenocam_image_title_label = QtWidgets.QLabel(SITE_PREVIEW_TITLE)
+        self.phenocam_image_title_label.setAlignment(QtCore.Qt.AlignCenter)
+        _usgs_title = getattr(self, "_usgs_image_title_label", None)
+        if _usgs_title is not None:
+            self.phenocam_image_title_label.setFont(_usgs_title.font())
+        phenocam_preview = QtWidgets.QWidget()
+        _ppl = QtWidgets.QVBoxLayout(phenocam_preview)
+        _ppl.setContentsMargins(0, 0, 0, 0)
+        _ppl.setSpacing(2)
+        _ppl.addWidget(self.phenocam_image_title_label, 0)
+        _ppl.addWidget(self.phenocam_image_panel, 1)
 
         bottom = QtWidgets.QWidget()
         bl = QtWidgets.QVBoxLayout(bottom)
@@ -2829,7 +2893,7 @@ class MainWindow(QMainWindow):
 
         self.phenocam_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.phenocam_splitter.setChildrenCollapsible(False)
-        self.phenocam_splitter.addWidget(self.phenocam_image_panel)
+        self.phenocam_splitter.addWidget(phenocam_preview)
         self.phenocam_splitter.addWidget(bottom)
         self.phenocam_splitter.setStretchFactor(0, 0)
         self.phenocam_splitter.setStretchFactor(1, 1)
@@ -3498,7 +3562,8 @@ class MainWindow(QMainWindow):
         import datetime as dt_mod
         label = roi_name if roi_name else site_name
         self._phenocam_pixmap = None
-        self.phenocam_image_panel.showMessage(f"Loading latest image for {label}...")
+        self.phenocam_image_panel.showMessage(f"Loading site preview for {label}...")
+        self.phenocam_image_title_label.setText(SITE_PREVIEW_TITLE)
 
         # Stop any preview search still running for a previously clicked site.
         previous = getattr(self, "_phenocam_preview_fetcher", None)
@@ -3515,15 +3580,18 @@ class MainWindow(QMainWindow):
         fetcher = PhenoCamPreviewFetcher(site_name, self, roi_name=roi_name, last_date=last_date,
                                          search_days=int(_phenocam_setting("PhenoCam_Preview_Search_Days")))
 
-        def _on_result(pixmap, err):
+        def _on_result(pixmap, err, is_midday):
             if self._phenocam_preview_fetcher is not fetcher:
                 return   # result from a site the user has since moved away from
             if pixmap is None:
                 self._phenocam_pixmap = None
+                self.phenocam_image_title_label.setText(SITE_PREVIEW_TITLE)
                 self.phenocam_image_panel.showMessage("No image available.")
                 if err and err != "No image available.":
                     print(f"[PhenoCam] Preview for {label}: {err}")
             else:
+                self.phenocam_image_title_label.setText(
+                    SITE_PREVIEW_TITLE if is_midday else SITE_PREVIEW_FALLBACK_TITLE)
                 self._phenocam_pixmap = pixmap
                 self._phenocam_fit_preview_height()
             self._phenocam_preview_fetcher = None
@@ -3965,6 +4033,11 @@ class MainWindow(QMainWindow):
         pl = QtWidgets.QVBoxLayout(preview)
         pl.setContentsMargins(0, 0, 0, 0)
         pl.setSpacing(2)
+        self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
+        self.labelLatestImageTitle.setAlignment(QtCore.Qt.AlignCenter)
+        _usgs_title = getattr(self, "_usgs_image_title_label", None)
+        if _usgs_title is not None:
+            self.labelLatestImageTitle.setFont(_usgs_title.font())   # same title font on all tabs
         pl.addWidget(self.labelLatestImageTitle, 0)
         self.NEON_labelLatestImage.setStyleSheet("QLabel { background: transparent; color: palette(text); }")
         self.neon_image_panel = ZoomImagePanel(self.NEON_labelLatestImage)
@@ -4518,12 +4591,27 @@ class MainWindow(QMainWindow):
                 if num_matches > 0:
                     strFirstProductID = matches[0]
                     strProductID = strFirstProductID.split('.')[1]
-                    self._show_image_message("neon", "Loading latest image...")
-                    self._neon_preview_fetcher = NEONPreviewFetcher(SITECODE, DOMAINCODE, strProductID)
-                    self._neon_preview_fetcher.result.connect(self._neon_preview_received)
+                    self._show_image_message("neon", "Loading site preview...")
+                    self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
+                    # NEON cameras are PhenoCam cameras, so the PhenoCam tab's midday search is reused.
+                    previous = getattr(self, "_neon_preview_fetcher", None)
+                    if previous is not None and hasattr(previous, "cancel"):
+                        previous.cancel()
+                    neon_camera = f"NEON.{DOMAINCODE}.{SITECODE}.DP1.{strProductID}"
+                    self._neon_preview_fetcher = PhenoCamPreviewFetcher(
+                        neon_camera, self,
+                        search_days=int(_phenocam_setting("PhenoCam_Preview_Search_Days")))
+                    fetcher = self._neon_preview_fetcher
+                    self._neon_preview_fetcher.result.connect(
+                        lambda pix, err, is_midday, f=fetcher: self._neon_preview_received(pix, err, is_midday, f))
                     self._neon_preview_fetcher.start()
                 else:
                     gWebImagesAvailable = 0
+                    previous = getattr(self, "_neon_preview_fetcher", None)
+                    if previous is not None and hasattr(previous, "cancel"):
+                        previous.cancel()
+                    self._neon_preview_fetcher = None   # ignore a search still running for the previous site
+                    self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
                     self._show_image_message("neon", "No image available.")
 
                 gProcessClick = 0
@@ -5498,7 +5586,9 @@ class MainWindow(QMainWindow):
             self._on_usgs_site_expanded(currentItem)
 
             # Fetch latest image in background thread
-            self._show_image_message("usgs", "Loading midday image...")
+            self._show_image_message("usgs", "Loading site preview...")
+            if hasattr(self, '_usgs_image_title_label'):
+                self._usgs_image_title_label.setText(SITE_PREVIEW_TITLE)
             if self._usgs_image_fetcher and self._usgs_image_fetcher.isRunning():
                 self._usgs_image_fetcher.quit()
                 self._usgs_image_fetcher.wait()
@@ -5526,12 +5616,12 @@ class MainWindow(QMainWindow):
             self.USGS_latestImage = []
             self._show_image_message("usgs", "No image available.")
             if hasattr(self, '_usgs_image_title_label'):
-                self._usgs_image_title_label.setText("")
+                self._usgs_image_title_label.setText(SITE_PREVIEW_TITLE)
         else:
             self.USGS_latestImage = pix
             if hasattr(self, '_usgs_image_title_label'):
                 self._usgs_image_title_label.setText(
-                    "Midday Image:" if is_midday else "Last Available Image:")
+                    SITE_PREVIEW_TITLE if is_midday else SITE_PREVIEW_FALLBACK_TITLE)
             self.USGS_DisplayLatestImage()
 
     def _on_usgs_site_expanded(self, item):
@@ -7739,17 +7829,22 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     # THIS FUNCTION WILL DISPLAY THE LATEST IMAGE ON THE GUI.
     # ======================================================================================================================
-    def _neon_preview_received(self, pixmap, error_msg):
+    def _neon_preview_received(self, pixmap, error_msg, is_midday=True, fetcher=None):
         global gWebImagesAvailable
+        if fetcher is not None and getattr(self, "_neon_preview_fetcher", None) is not fetcher:
+            return   # result from a site the user has since moved away from
         if pixmap and not pixmap.isNull():
             gWebImagesAvailable = 1
             self.NEON_latestImage = pixmap
+            self.labelLatestImageTitle.setText(
+                SITE_PREVIEW_TITLE if is_midday else SITE_PREVIEW_FALLBACK_TITLE)
             self.NEON_DisplayLatestImage()
         else:
             gWebImagesAvailable = 0
+            self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
             self._show_image_message("neon", "No image available.")
             if error_msg:
-                print(f"[NEON] Latest image: {error_msg}")
+                print(f"[NEON] Site preview: {error_msg}")
 
     def _neon_tree_item_clicked(self, item, column):
         """Open URL in browser if the clicked NEON tree item is a hyperlink."""
