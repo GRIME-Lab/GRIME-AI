@@ -59,6 +59,7 @@ class GreenImageGenerator:
         self.solid_dir = None
         self.splotch_dir = None
         self.mask_dir = None
+        self.edge_case_dir = None
 
     @staticmethod
     def hsv_to_rgb8(h, s, v):
@@ -74,9 +75,11 @@ class GreenImageGenerator:
         self.solid_dir = os.path.join(self.OUT_DIR, "solids")
         self.splotch_dir = os.path.join(self.OUT_DIR, "splotches")
         self.mask_dir = os.path.join(self.OUT_DIR, "masks")
+        self.edge_case_dir = os.path.join(self.OUT_DIR, "edge_cases")
         os.makedirs(self.solid_dir, exist_ok=True)
         os.makedirs(self.splotch_dir, exist_ok=True)
         os.makedirs(self.mask_dir, exist_ok=True)
+        os.makedirs(self.edge_case_dir, exist_ok=True)
 
     def generate_textured_image(self, base_color, size):
         arr = np.full((size[1], size[0], 3), base_color, dtype=np.float32)
@@ -326,12 +329,94 @@ class GreenImageGenerator:
 
         print(f"Mask images saved to {self.mask_dir}")
 
+    # Value a greenness index records when it cannot be computed (matches Vegetation_Indices.get_greenness).
+    INDEX_FAILURE_VALUE = -999.0
+
+    # Reference green used by the edge cases that should give a normal result. Red and blue
+    # differ, so an image loaded in BGR order instead of RGB gives wrong NDVI and RGI.
+    EDGE_REFERENCE_RGB = (40, 100, 60)
+
+    @classmethod
+    def expected_indices(cls, rgb):
+        """
+        Expected GCC, NDVI (RGB, (G - R) / (G + R)) and RGI (G / R) for a solid color,
+        following Vegetation_Indices: GCC is 0 for an all-black image; NDVI and RGI record
+        the failure value when their denominator is 0; every index records the failure
+        value when rgb is None (the image has no three color channels).
+        """
+        if rgb is None:
+            return cls.INDEX_FAILURE_VALUE, cls.INDEX_FAILURE_VALUE, cls.INDEX_FAILURE_VALUE
+        r, g, b = (float(c) for c in rgb)
+        total = r + g + b
+        gcc = g / total if total > 0 else 0.0
+        ndvi = (g - r) / (g + r) if (g + r) != 0 else cls.INDEX_FAILURE_VALUE
+        rgi = g / r if r != 0 else cls.INDEX_FAILURE_VALUE
+        return round(gcc, 4), round(ndvi, 4), round(rgi, 4)
+
+    def generate_edge_case_images(self):
+        """
+        Images for the greenness edge cases: color layouts other than 3-channel RGB,
+        one-pixel-wide images, and colors that make an index's denominator 0.
+        Saved as lossless PNG so pixel values are exact, with an XLSX of the expected
+        GCC, NDVI and RGI for each image.
+        """
+        if self.edge_case_dir is None:
+            self.edge_case_dir = os.path.join(self.OUT_DIR, "edge_cases")
+        os.makedirs(self.edge_case_dir, exist_ok=True)
+        base_time = datetime.now().replace(hour=9, minute=0, second=0, microsecond=0)
+        ref = self.EDGE_REFERENCE_RGB
+        gray_level = int(round(sum(ref) / 3))
+
+        # (case name, PIL mode, fill, (width, height), RGB the indices see or None, description)
+        cases = [
+            ("rgb_reference", "RGB", ref, (self.W, self.H), ref,
+             "Control: 3-channel RGB; every other normal case should match it. Red and blue differ, "
+             "so wrong NDVI or RGI here means the red and blue channels were swapped (BGR order)."),
+            ("rgba_4channel", "RGBA", ref + (255,), (self.W, self.H), ref,
+             "4-channel RGBA; the alpha channel is ignored, so results match the control."),
+            ("grayscale_1channel", "L", gray_level, (self.W, self.H), None,
+             "1-channel grayscale; no color channels, so every index records the failure value "
+             "when the image is passed with one channel."),
+            ("single_row", "RGB", ref, (self.W, 1), ref,
+             "One pixel tall; results match the control."),
+            ("single_column", "RGB", ref, (1, self.H), ref,
+             "One pixel wide; results match the control."),
+            ("all_black", "RGB", (0, 0, 0), (self.W, self.H), (0, 0, 0),
+             "R + G + B = 0: GCC is 0; NDVI and RGI record the failure value."),
+            ("zero_red", "RGB", (0, 255, 0), (self.W, self.H), (0, 255, 0),
+             "R = 0: GCC and NDVI are 1; RGI (G / R) records the failure value."),
+            ("zero_red_and_green", "RGB", (0, 0, 255), (self.W, self.H), (0, 0, 255),
+             "R = G = 0: GCC is 0; NDVI and RGI record the failure value."),
+        ]
+
+        header = ["filename", "case", "PIL_mode", "channels", "width", "height", "pixel_value",
+                  "expected_GCC", "expected_NDVI", "expected_RGI", "description"]
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Edge Case Images"
+        ws.append(header)
+
+        for idx, (case, mode, fill, size, rgb_seen, description) in enumerate(cases):
+            img = Image.new(mode, size, fill)
+            fname = f"{TEST_IMAGE_PREFIX}_{case}{self.timestamp_suffix(base_time, idx)}.png".lower()
+            img.save(os.path.join(self.edge_case_dir, fname))
+
+            gcc, ndvi, rgi = self.expected_indices(rgb_seen)
+            ws.append([fname, case, mode, len(img.getbands()), size[0], size[1], str(fill),
+                       gcc, ndvi, rgi, description])
+
+        xlsx_path = os.path.join(self.edge_case_dir,
+                                 f"{base_time.strftime('%Y%m%d_%H%M')}_Edge_Case_Images_Info.xlsx")
+        wb.save(xlsx_path)
+        print(f"Edge case XLSX created → {xlsx_path}")
+
     def generate_all(self):
         """
         Convenience method to generate:
         - Solid images (both flat and textured)
         - Splotch images (all texture permutations)
         - Mask images
+        - Edge case images
         """
         self.make_dirs()
         self.generate_solid_images(texture="flat")
@@ -342,3 +427,4 @@ class GreenImageGenerator:
                 self.generate_splotch_images(background_texture=bg, splotch_texture=sp)
 
         self.generate_mask_images()
+        self.generate_edge_case_images()

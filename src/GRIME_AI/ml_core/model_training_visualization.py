@@ -1184,6 +1184,9 @@ class ModelTrainingVisualization:
             config: dict = None,                  # site_config used for the run
             val_best_threshold: float = None,     # F1-optimal threshold from validator
             val_dice_best_threshold: float = None,  # Dice at that threshold
+            check_threshold_calibration: bool = True,  # False when the threshold is the model's
+                                                       # decision rule (SegFormer), not a SAM2
+                                                       # train/validation consistency check
             time_breakdown: dict = None,          # {"encode","train","validate"} seconds
             best_eval: dict = None,               # metrics of the saved best checkpoint
             foreground_stats: dict = None,        # {"train": {...}, "val": {...}} target pixel fraction
@@ -1239,7 +1242,7 @@ class ModelTrainingVisualization:
             num_val_images=num_val_images,
             early_stopped=early_stopped,
             best_epoch=best_epoch,
-            val_best_threshold=val_best_threshold,
+            val_best_threshold=val_best_threshold if check_threshold_calibration else None,
             train_dice=train_dice,
             val_dice=dice_values,
         )
@@ -1345,7 +1348,10 @@ class ModelTrainingVisualization:
         if val_best_threshold is not None and not best_eval:
             _thr = f"{val_best_threshold:.2f}"
             _d = f"{val_dice_best_threshold:.4f}" if val_dice_best_threshold is not None else "N/A"
-            meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr}; 0.50 = calibrated)"))
+            if check_threshold_calibration:
+                meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr}; 0.50 = calibrated)"))
+            else:
+                meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr})"))
         if time_breakdown and any(v is not None for v in time_breakdown.values()):
             def _fmt(v):
                 if v is None: return "N/A"
