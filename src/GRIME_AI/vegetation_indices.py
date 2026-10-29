@@ -653,8 +653,9 @@ class Vegetation_Indices:
             if greenness.get_name() == self.WI:
                 greenness.set_value(self.compute_Woebbecke_Index(green_sum, blue_sum, red_sum))
                 return greenness
-        except (ValueError, TypeError, ArithmeticError):
+        except (ValueError, TypeError, ArithmeticError, IndexError):
             # ArithmeticError covers ZeroDivisionError (e.g. an all-black ROI).
+            # IndexError covers images without three color channels (e.g. grayscale).
             greenness.set_value(-999.0)
             return greenness
 

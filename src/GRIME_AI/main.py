@@ -3732,32 +3732,46 @@ class MainWindow(QMainWindow):
     #
     # ------------------------------------------------------------------------------------------------------------------
     def _usgs_progress(self, idx: int, total: int, label: str | None) -> None:
-        """Progress callback for USGSClient operations."""
-        if not hasattr(self, "_usgsProgress"):
-            self._usgsProgress = QProgressWheel(parent=self)
-            self._usgsProgress.setRange(0, total)
-            self._usgsProgress.setWindowTitle("USGS Operation")
-            self._usgsProgress.show()
+        """Progress callback for USGSClient operations. Closing the progress window cancels the download."""
+        wheel = getattr(self, "_usgsProgress", None)
+        if wheel is None:
+            wheel = QProgressWheel(parent=self, on_close=self._usgs_progress_closed)
+            wheel.setRange(0, total)
+            wheel.setWindowTitle("USGS Operation")
+            wheel.show()
+            self._usgsProgress = wheel
 
-        self._usgsProgress.setMaximum(total)
-        self._usgsProgress.setValue(idx)
-
+        wheel.setMaximum(total)
         if label:
-            self._usgsProgress.setWindowTitle(str(label))
+            wheel.setWindowTitle(str(label))
+
+        # setValue processes pending events, so this is where a user's close of the window is handled.
+        wheel.setValue(idx)
 
         # Clean up when finished
         if idx >= total:
-            self._usgsProgress.close()
+            self.force_close_progress()
+
+    def _usgs_progress_closed(self):
+        """Called when the USGS progress window closes. A close by the user cancels the download;
+        a close by the program (force_close_progress) does not."""
+        if not getattr(self, "_usgs_closing_progress", False):
+            self._usgs_cancel_requested = True
+        if hasattr(self, "_usgsProgress"):
             del self._usgsProgress
 
     def force_close_progress(self):
         """Forcefully close and clean up the progress wheel if it exists."""
-        if hasattr(self, "_usgsProgress"):
-            try:
-                self._usgsProgress.close()  # triggers closeEvent
-                self._usgsProgress.deleteLater()  # ensure cleanup
-            finally:
-                del self._usgsProgress
+        wheel = getattr(self, "_usgsProgress", None)
+        if wheel is None:
+            return
+        del self._usgsProgress
+        self._usgs_closing_progress = True
+        try:
+            wheel.close()  # triggers closeEvent
+            wheel.deleteLater()  # ensure cleanup
+        finally:
+            self._usgs_closing_progress = False
 
     # ------------------------------------------------------------------------------------------------------------------
     #
@@ -5251,6 +5265,9 @@ class MainWindow(QMainWindow):
                 progress=self._usgs_progress,
                 cancel_check=lambda: self._usgs_cancel_requested)
             self.force_close_progress()
+            if self._usgs_cancel_requested:
+                results.append(f"{cam_id}: cancelled after {downloaded} new image(s); no sensor data downloaded")
+                continue
             line = f"{cam_id}: {downloaded} new image(s)" + (f", {missing} failed" if missing else "")
             if nwis:
                 self.myHIVIS.fetchStageAndDischarge(nwis, cam_id, sd, ed, st, et, data_folder)
@@ -5261,7 +5278,8 @@ class MainWindow(QMainWindow):
             self.statusBar().clearMessage()
         except Exception:
             pass
-        App_QMessageBox("USGS Download", "Download complete.\n\n" + "\n".join(results),
+        status = "Download cancelled." if self._usgs_cancel_requested else "Download complete."
+        App_QMessageBox("USGS Download", status + "\n\n" + "\n".join(results),
                         QMessageBox.Close).displayMsgBox()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -6470,6 +6488,13 @@ class MainWindow(QMainWindow):
                 progress=self._usgs_progress,
                 cancel_check = lambda: self._usgs_cancel_requested
             )
+
+            if self._usgs_cancel_requested:
+                self.force_close_progress()
+                App_QMessageBox("USGS Download",
+                                f"Download cancelled after {downloaded} new image(s). No sensor data was downloaded.",
+                                QMessageBox.Close).displayMsgBox()
+                return
 
             saveFolder = os.path.join(downloadsFilePath, "data")
             if not os.path.exists(saveFolder):

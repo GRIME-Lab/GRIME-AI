@@ -11,6 +11,7 @@ from PyQt5.QtGui import QDesktopServices
 import json
 from PyQt5.QtCore import QObject, pyqtSlot, QStandardPaths
 from PyQt5.QtWebChannel import QWebChannel
+from appcore import PROJECT_ROOT
 
 
 class _ExternalLinkPage(QWebEnginePage):
@@ -120,6 +121,10 @@ class OpenStreetMapWidget(QWidget):
         # Start local HTTP server so OSM tiles receive a valid Referer/Origin
         self._server = None
         self._server_thread = None
+        # The generated page goes in the user's Documents/GRIME-AI folder, never the
+        # install folder (read-only for shared installs). The local server returns it
+        # at /map.html.
+        self._map_html_path = os.path.join(str(PROJECT_ROOT), "map.html")
         self._server_port = self._start_tile_server()
 
         # Cleanup guard so server shutdown / file deletion only ever runs once,
@@ -168,6 +173,13 @@ class OpenStreetMapWidget(QWidget):
             def do_GET(self):
                 # Watershed click lookups go through Python so the page never depends on the
                 # USGS server's cross-origin settings. Everything else is served from disk as before.
+                if urllib.parse.urlparse(self.path).path == "/map.html":
+                    try:
+                        with open(widget._map_html_path, "rb") as fh:
+                            self._reply(200, "text/html; charset=utf-8", fh.read())
+                    except OSError:
+                        self._reply(404, "text/plain", b"map.html not found")
+                    return
                 if self.path.startswith("/__watersheds/tile"):
                     query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                     self._reply(*widget._watershed_tile(query))
@@ -227,7 +239,7 @@ class OpenStreetMapWidget(QWidget):
             self._server.shutdown()
             self._server = None
 
-        map_html_path = os.path.join(self._serve_root, "map.html")
+        map_html_path = self._map_html_path
         if os.path.exists(map_html_path):
             try:
                 os.remove(map_html_path)
@@ -1254,8 +1266,10 @@ class OpenStreetMapWidget(QWidget):
         </body>
         </html>"""
 
-        # Write HTML to disk inside the served directory so it has an HTTP origin
-        map_html_path = os.path.join(serve_root, "map.html")
+        # Write HTML to the user's Documents/GRIME-AI folder; the local server
+        # returns it at /map.html so the page has an HTTP origin
+        map_html_path = self._map_html_path
+        os.makedirs(os.path.dirname(map_html_path), exist_ok=True)
         with open(map_html_path, "w", encoding="utf-8") as f:
             f.write(html)
 
