@@ -347,10 +347,12 @@ class App_Utils:
                     requests.exceptions.ConnectionError,
                     requests.exceptions.Timeout,
                     requests.exceptions.RequestException) as e:
+                # NO DIALOG HERE: THIS RUNS IN A BACKGROUND THREAD AT STARTUP (NEONStartupFetcher),
+                # AND QT WIDGETS MAY ONLY BE SHOWN FROM THE GUI THREAD. THE CALLER REPORTS THE
+                # FAILURE TO THE USER ON THE GUI THREAD, AS THE USGS AND PHENOCAM STARTUP PATHS DO.
                 if nRetryCount == 1:
                     strError = f"We failed to reach a server.\nReason: {e}"
-                    msgBox = App_QMessageBox('NEON SITE Info URL Error', strError)
-                    response = msgBox.displayMsgBox()
+                    print(f"[check_url_validity] {my_url}: {strError}")
                 nErrorCode = -1
                 nRetryCount -= 1
 

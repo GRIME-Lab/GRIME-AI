@@ -342,6 +342,10 @@ USGS_TAB_DEFAULTS = {
 SITE_PREVIEW_TITLE          = "Site Preview"
 SITE_PREVIEW_FALLBACK_TITLE = "Site Preview (last available image)"   # no midday image was found
 
+# Text in place of the site image on the NEON, USGS and PhenoCam tabs when there is no image to show
+NO_IMAGE_MESSAGE    = "No image available."      # internet is up, but the site has no image
+NO_INTERNET_MESSAGE = "No internet available."   # the internet can't be reached
+
 
 def _phenocam_setting(key):
     """JsonEditor value for key if one is stored, else the PhenoCam or USGS tab default."""
@@ -366,6 +370,26 @@ def _phenocam_setting(key):
         except (TypeError, ValueError):
             return default
     return value
+
+
+def _internet_check_settings():
+    """(host, port, timeout) for _image_unavailable_message. Read before a worker starts,
+    as the other fetcher settings are."""
+    return (str(_phenocam_setting("Internet_Check_Host")),
+            int(_phenocam_setting("Internet_Check_Port")),
+            float(_phenocam_setting("Internet_Check_Timeout_s")))
+
+
+def _image_unavailable_message(check):
+    """NO_INTERNET_MESSAGE if the internet can't be reached, else NO_IMAGE_MESSAGE.
+    It opens a network connection, so it is called from worker threads, not the UI thread."""
+    import socket
+    host, port, timeout = check
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return NO_IMAGE_MESSAGE
+    except OSError:
+        return NO_INTERNET_MESSAGE
 
 
 def _data_table_header_style():
@@ -663,6 +687,9 @@ IMAGE_VIEW_DEFAULTS = {
     "Image_Zoom_Min_Percent":    5.0,    # smallest zoom allowed
     "Image_Zoom_Max_Percent":    800.0,  # largest zoom allowed
     "Image_Zoom_Button_Size_px": 30,     # width and height of the zoom buttons
+    "Internet_Check_Host":       "1.1.1.1",  # host contacted to tell "no internet" from "no image"
+    "Internet_Check_Port":       443,
+    "Internet_Check_Timeout_s":  3.0,
 }
 
 
@@ -851,6 +878,8 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
         self.search_days = search_days
         # Settings are read here, on the UI thread, before the fetch starts
         self.midday_window_hours = float(_phenocam_setting("PhenoCam_Midday_Window_Hours"))
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when no image is found
         self._cancelled  = False
     def cancel(self):
         self._cancelled = True
@@ -928,7 +957,8 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
         if self._cancelled:
             return
         if img_url is None:
-            self.result.emit(None, "No image available.", False)
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+            self.result.emit(None, self.unavailable_message, False)
             return
         try:
             data = urllib.request.urlopen(img_url, timeout=15).read()
@@ -937,6 +967,7 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
             self.result.emit(QtGui.QPixmap.fromImage(qimg) if not qimg.isNull() else None,
                              "" if not qimg.isNull() else "Could not decode image.", is_midday)
         except Exception as e:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
             self.result.emit(None, f"Error: {e}", False)
 
 
@@ -1192,13 +1223,17 @@ class USGSLatestImageFetcher(QtCore.QThread):
                         int(_phenocam_setting("USGS_Midday_Search_Days")),
                         int(_phenocam_setting("USGS_Midday_List_Keys")),
                         float(_phenocam_setting("USGS_Range_Timeout_s")))
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when no image is found
 
     def run(self):
         try:
             code, pix, is_midday = self._usgs.get_midday_pixmap(self._cam_id, *self._midday)
-            self.result.emit(code, pix, is_midday)
         except Exception:
-            self.result.emit(404, None, False)
+            code, pix, is_midday = 404, None, False
+        if code == 404 or pix is None:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(code, pix, is_midday)
 
 
 class USGSImageRangeFetcher(QtCore.QThread):
@@ -1228,14 +1263,18 @@ class PhenoCamStartupFetcher(QtCore.QThread):
     def __init__(self, neon_api, parent=None):
         super().__init__(parent)
         self._neon_api = neon_api
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when the site table can't be read
 
     def run(self):
         try:
             data = self._neon_api.scrape_phenocam_table()
-            self.result.emit(data)
         except Exception as e:
             print(f"[PhenoCamStartupFetcher] Error: {e}")
-            self.result.emit(None)
+            data = None
+        if not data:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(data)
 
 
 class USGSStartupFetcher(QtCore.QThread):
@@ -1245,6 +1284,8 @@ class USGSStartupFetcher(QtCore.QThread):
     def __init__(self, usgs_client, parent=None):
         super().__init__(parent)
         self._usgs = usgs_client
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when no cameras are found
 
     def run(self):
         try:
@@ -1252,10 +1293,12 @@ class USGSStartupFetcher(QtCore.QThread):
             hivis    = USGS_HIVIS()
             cam_dict = hivis.get_camera_dictionary()
             cam_list = hivis.get_camera_list()
-            self.result.emit(hivis, cam_dict, cam_list)
         except Exception as e:
             print(f"[USGSStartupFetcher] Error: {e}")
-            self.result.emit(None, {}, [])
+            hivis, cam_dict, cam_list = None, {}, []
+        if not cam_dict:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(hivis, cam_dict, cam_list)
 
 
 def _fix_mojibake(text):
@@ -1320,14 +1363,18 @@ class NEONStartupFetcher(QtCore.QThread):
     def __init__(self, neon_api, parent=None):
         super().__init__(parent)
         self._neon_api = neon_api
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when the site table can't be read
 
     def run(self):
         try:
             status, site_list = self._neon_api.readFieldSiteTable()
-            self.result.emit(status, site_list)
         except Exception as e:
             print(f"[NEONStartupFetcher] Error: {e}")
-            self.result.emit(None, [])
+            status, site_list = None, []
+        if not site_list:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(status, site_list)
 
 
 class NWISParameterFetcher(QtCore.QThread):
@@ -2219,11 +2266,30 @@ class MainWindow(QMainWindow):
 
         dlg.exec_()
 
+    def _report_startup_failure(self, unavailable_message, title=None, text=None):
+        """Dialog for a data source that could not be loaded at startup.
+
+        With no internet, one "No Internet Access" dialog is shown for all of USGS, PhenoCam
+        and NEON, however many of them fail, and the source's own dialog is not shown.
+        With internet, the source's own dialog (title, text) is shown, if it has one.
+        """
+        if unavailable_message == NO_INTERNET_MESSAGE:
+            if not getattr(self, "_no_internet_reported", False):
+                self._no_internet_reported = True
+                msgBox = App_QMessageBox('No Internet Access',
+                                         'No internet access is available.\n\n'
+                                         'USGS, PhenoCam and NEON sites cannot be loaded.')
+                msgBox.displayMsgBox()
+        elif title is not None:
+            msgBox = App_QMessageBox(title, text)
+            msgBox.displayMsgBox()
+
     def _on_usgs_startup_result(self, hivis, camera_dict, camera_list):
         """Callback when USGS HIVIS data has been fetched in background."""
         if hivis is None:
-            msgBox = App_QMessageBox('USGS NIMS Error', 'Unable to access USGS NIMS/HIVIS Database!')
-            msgBox.displayMsgBox()
+            self._show_image_message("usgs", self._usgs_startup_fetcher.unavailable_message)
+            self._report_startup_failure(self._usgs_startup_fetcher.unavailable_message,
+                                         'USGS NIMS Error', 'Unable to access USGS NIMS/HIVIS Database!')
             return
 
         self.myHIVIS         = hivis
@@ -2261,12 +2327,17 @@ class MainWindow(QMainWindow):
         self._usgs_startup_ready = True
         self._check_and_dismiss_splash()
 
+        if not self.cameraDictionary:
+            self._show_image_message("usgs", self._usgs_startup_fetcher.unavailable_message)
+            self._report_startup_failure(self._usgs_startup_fetcher.unavailable_message)
+
     def _on_neon_startup_result(self, status, site_list):
         """Callback when NEON field site table has been fetched in background."""
         self.NEON_siteList = site_list if site_list else []
 
         if not self.NEON_siteList:
             print("NEON Field Site Table from NEON website FAILED...")
+            self._show_image_message("neon", self._neon_startup_fetcher.unavailable_message)
         else:
             print("Populate NEON Sites tab on GUI...")
             self.NEON_listboxSites.clear()
@@ -2299,6 +2370,12 @@ class MainWindow(QMainWindow):
         self._check_and_dismiss_splash()
         #JES self._check_startup_complete()
 
+        # REPORT THE FAILURE HERE, ON THE GUI THREAD, AFTER THE PHENOCAM FETCH HAS STARTED
+        # AND NEON IS MARKED READY, SO THE DIALOG DOES NOT HOLD UP THE REST OF STARTUP.
+        if not self.NEON_siteList:
+            self._report_startup_failure(self._neon_startup_fetcher.unavailable_message,
+                                         'NEON Field Sites Error', 'Unable to access NEON field site information!')
+
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def _on_phenocam_startup_result(self, data):
@@ -2311,8 +2388,16 @@ class MainWindow(QMainWindow):
             # site table) so the splash can dismiss and the app proceeds with
             # PhenoCam features simply unavailable.
             self.phenocam_site_dictionary = {}
+            # Build the tab anyway so it shows its own layout (Site Preview title, search,
+            # download table) instead of the placeholder labels from the .ui file.
+            try:
+                self.setup_phenocam_right_panel()
+                self.phenocam_image_panel.showMessage(self._phenocam_startup_fetcher.unavailable_message)
+            except Exception as _e:
+                print(f"[PhenoCam startup] Could not build the PhenoCam tab: {_e}")
             self._phenocam_startup_ready = True
             self._check_and_dismiss_splash()
+            self._report_startup_failure(self._phenocam_startup_fetcher.unavailable_message)
             return
         self.phenocam_site_dictionary = data
         for site_id, info in self.phenocam_site_dictionary.items():
@@ -3586,8 +3671,8 @@ class MainWindow(QMainWindow):
             if pixmap is None:
                 self._phenocam_pixmap = None
                 self.phenocam_image_title_label.setText(SITE_PREVIEW_TITLE)
-                self.phenocam_image_panel.showMessage("No image available.")
-                if err and err != "No image available.":
+                self.phenocam_image_panel.showMessage(fetcher.unavailable_message)
+                if err and err != fetcher.unavailable_message:
                     print(f"[PhenoCam] Preview for {label}: {err}")
             else:
                 self.phenocam_image_title_label.setText(
@@ -4626,7 +4711,7 @@ class MainWindow(QMainWindow):
                         previous.cancel()
                     self._neon_preview_fetcher = None   # ignore a search still running for the previous site
                     self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
-                    self._show_image_message("neon", "No image available.")
+                    self._show_image_message("neon", NO_IMAGE_MESSAGE)
 
                 gProcessClick = 0
         except Exception:
@@ -5632,7 +5717,8 @@ class MainWindow(QMainWindow):
     def _on_usgs_latest_image_received(self, code: int, pix, is_midday: bool):
         if code == 404 or pix is None:
             self.USGS_latestImage = []
-            self._show_image_message("usgs", "No image available.")
+            fetcher = self.sender()
+            self._show_image_message("usgs", getattr(fetcher, "unavailable_message", NO_IMAGE_MESSAGE))
             if hasattr(self, '_usgs_image_title_label'):
                 self._usgs_image_title_label.setText(SITE_PREVIEW_TITLE)
         else:
@@ -5740,6 +5826,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     def _show_image_message(self, tab, text):
         """Text in place of the image on the "neon" or "usgs" tab (zoom panel if built, else the label)."""
+        setattr(self, f"_{tab}_image_message", text)   # redrawn by NEON_DisplayLatestImage on resize
         panel = getattr(self, f"{tab}_image_panel", None)
         if panel is not None:
             panel.showMessage(text)
@@ -7867,7 +7954,7 @@ class MainWindow(QMainWindow):
         else:
             gWebImagesAvailable = 0
             self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
-            self._show_image_message("neon", "No image available.")
+            self._show_image_message("neon", fetcher.unavailable_message if fetcher is not None else NO_IMAGE_MESSAGE)
             if error_msg:
                 print(f"[NEON] Site preview: {error_msg}")
 
@@ -7883,13 +7970,13 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "neon_image_panel", None)
         if panel is not None:
             if self.NEON_latestImage == []:
-                panel.showMessage("No image available.")
+                panel.showMessage(getattr(self, "_neon_image_message", NO_IMAGE_MESSAGE))
             else:
                 panel.setPixmap(self.NEON_latestImage)   # same image keeps the user's zoom
             return
 
         if self.NEON_latestImage == []:
-            self.NEON_labelLatestImage.setText("No image available.")
+            self.NEON_labelLatestImage.setText(getattr(self, "_neon_image_message", NO_IMAGE_MESSAGE))
         elif self.NEON_labelLatestImage.width() > 1:
             self.NEON_labelLatestImage.clear()
             self.NEON_labelLatestImage.setPixmap(self.NEON_latestImage.scaled(self.NEON_labelLatestImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
