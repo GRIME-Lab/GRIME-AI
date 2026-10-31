@@ -20,16 +20,17 @@ from torch import nn
 from torch.cuda.amp import autocast, GradScaler
 
 # ===== Local infra =====
-from opsilum.QProgressWheel import QProgressWheel
-from opsilum.Save_Utils import Save_Utils
-from opsilum.ml_core.model_training_visualization import ModelTrainingVisualization
-from opsilum.JSON_Editor import JsonEditor
-from opsilum.opsilum_QMessageBox import QMessageBox
-from opsilum.utils.datasetutils import DatasetUtils
+from appcore.QProgressWheel import QProgressWheel
+from appcore.Save_Utils import Save_Utils
+from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.JSON_Editor import JsonEditor
+from appcore.App_QMessageBox import App_QMessageBox
+from appcore.utils.datasetutils import DatasetUtils
 
 # ===== Import adapter/predictor =====
-from opsilum.ml_core.sam3_adapter import SAM3ImagePredictor
-from opsilum.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.ml_core.sam3_adapter import SAM3ImagePredictor
+from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from appcore.ml_core.convergence_analysis import ImprovementTracker
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -122,6 +123,9 @@ class SAM3Trainer:
             'max_best_checkpoints', ModelConfigManager.get_default('max_best_checkpoints')))
         self.early_stopping = self.site_config['early_stopping']
         self.patience = self.site_config['patience']
+        # An improvement must exceed this many noise standard deviations to reset patience.
+        self.improvement_threshold_sigmas = float(self.site_config.get(
+            'improvement_threshold_sigmas', ModelConfigManager.get_default('improvement_threshold_sigmas')))
         self.device = self.site_config.get('device', str(device))
 
         self.dataset = {}
@@ -248,7 +252,7 @@ class SAM3Trainer:
         use_amp = False
 
         best_val_loss = float("inf")
-        patience_counter = 0
+        improvement_tracker = ImprovementTracker(self.improvement_threshold_sigmas)
         divergence_threshold = 1e3
         last_completed_epoch = 0
 
@@ -304,19 +308,23 @@ class SAM3Trainer:
                           f"Acc: {val_accuracy:.4f} Dice: {avg_val_dice:.4f} "
                           f"IoU: {avg_val_iou:.4f} mIoU: {miou:.4f}")
 
+                    # Checkpoints: every new lowest validation loss is saved.
                     if avg_val_loss < best_val_loss:
                         best_val_loss = avg_val_loss
-                        patience_counter = 0
                         self._save_model_checkpoint(
                             predictor, learnrate, epoch + 1,
                             suffix=f"valbest_ep{epoch + 1:03d}",
                             val_loss=avg_val_loss, val_accuracy=val_accuracy, miou=miou
                         )
-                    else:
-                        patience_counter += 1
-                        if self.early_stopping and patience_counter >= self.patience:
-                            print(f"Early stopping triggered at epoch {epoch + 1}.")
-                            break
+
+                    # Early stopping: patience resets only on a meaningful improvement
+                    # (larger than improvement_threshold_sigmas x noise), the same test
+                    # the training report uses.
+                    improvement_tracker.update(epoch + 1, avg_val_loss)
+                    if self.early_stopping and \
+                            improvement_tracker.epochs_without_improvement >= self.patience:
+                        print(f"Early stopping triggered at epoch {epoch + 1}.")
+                        break
         finally:
             if last_completed_epoch > 0:
                 self._save_model_checkpoint(predictor, learnrate, last_completed_epoch, suffix="final")
@@ -532,7 +540,7 @@ class SAM3Trainer:
                         alpha = 0.4
                         blended = cv2.addWeighted(img_vis, 1.0, overlay_color, alpha, 0.0)
                         out_path = os.path.join(self.model_output_folder,
-                                                f"{self.formatted_time}_{self.site_name}_val_overlay_e{len(self.epoch_list)}_{val_idx}.png")
+                                                f"{self.formatted_time}_{self.site_name}_val_overlay_ep{len(self.epoch_list):03d}_{val_idx}.png")
                         cv2.imwrite(out_path, cv2.cvtColor(blended, cv2.COLOR_RGB2BGR))
 
                     score_flat = prob_full.squeeze(0).squeeze(0).cpu().numpy().flatten()
@@ -643,6 +651,7 @@ class SAM3Trainer:
             text_file.write(f"Best Checkpoints Kept: {self.max_best_checkpoints}\n")
             text_file.write(f"Early Stopping: {self.early_stopping}\n")
             text_file.write(f"Patience: {self.patience}\n")
+            text_file.write(f"Improvement Threshold (noise std devs): {self.improvement_threshold_sigmas}\n")
             text_file.write(f"Device: {device}\n")
             text_file.write(f"Folders: {self.folders}\n")
             text_file.write(f"Annotations: {self.annotation_files}\n")
@@ -738,7 +747,7 @@ class SAM3Trainer:
     # ------------------------------------------------------------------------------------------------------------------
     def _terminate_training(self, progressBar):
         msg = "You have cancelled the model training currently in-progress. A model has not been generated."
-        msgBox = QMessageBox('Model Training Terminated', msg, QMessageBox.Close)
+        msgBox = App_QMessageBox('Model Training Terminated', msg, App_QMessageBox.Close)
         msgBox.displayMsgBox()
         if progressBar:
             progressBar.close()
@@ -748,7 +757,7 @@ class SAM3Trainer:
     # ------------------------------------------------------------------------------------------------------------------
     def _terminate_validation(self, progressBar):
         msg = "You have cancelled validation. The current validation pass was not completed."
-        msgBox = QMessageBox("Validation Cancelled", msg, QMessageBox.Close)
+        msgBox = App_QMessageBox("Validation Cancelled", msg, App_QMessageBox.Close)
         msgBox.displayMsgBox()
         if progressBar:
             progressBar.close()

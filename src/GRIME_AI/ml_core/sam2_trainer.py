@@ -48,6 +48,7 @@ from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfig
 from appcore.QProgressWheel import QProgressWheel
 from appcore.Save_Utils import Save_Utils
 from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.ml_core.convergence_analysis import ImprovementTracker
 from appcore.App_QMessageBox import App_QMessageBox
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
@@ -264,6 +265,9 @@ class SAM2Trainer:
             'max_best_checkpoints', ModelConfigManager.get_default('max_best_checkpoints')))
         self.early_stopping = self.site_config['early_stopping']
         self.patience = self.site_config['patience']
+        # An improvement must exceed this many noise standard deviations to reset patience.
+        self.improvement_threshold_sigmas = float(self.site_config.get(
+            'improvement_threshold_sigmas', ModelConfigManager.get_default('improvement_threshold_sigmas')))
 
         # Mini-batch size for SAM2 training (GUI "Batch Size" spinbox).
         # Accepts either key spelling; clamped to >= 1. Resolved value is
@@ -790,7 +794,7 @@ class SAM2Trainer:
             scaler = None
 
         best_val_loss = float("inf")
-        patience_counter = 0
+        improvement_tracker = ImprovementTracker(self.improvement_threshold_sigmas)
         divergence_threshold = 1e3
         last_completed_epoch = 0
         self._overlays_written = False
@@ -920,7 +924,8 @@ class SAM2Trainer:
                         predictor=predictor,
                         progressBar=progressBar,
                         target_label=target_label,
-                        save_overlays=self._should_save_overlays(epoch + 1, epochs)
+                        save_overlays=self._should_save_overlays(epoch + 1, epochs),
+                        overlay_tag=f"ep{epoch + 1:03d}"  # 1-based, zero-padded to match checkpoint names
                     )
 
                     _dt_val = _time.perf_counter() - _t_val
@@ -951,9 +956,9 @@ class SAM2Trainer:
                           f"Recall: {_extra.get('recall', float('nan')):.4f} "
                           f"Pooled IoU: {miou:.4f} Pixel acc (incl. background): {val_accuracy:.4f}")
 
+                    # Checkpoints: every new lowest validation loss is saved.
                     if avg_val_loss < best_val_loss:
                         best_val_loss = avg_val_loss
-                        patience_counter = 0
                         self._run_best_epoch = epoch + 1
                         self._save_model_checkpoint(
                             predictor, learnrate, epoch + 1,
@@ -961,13 +966,17 @@ class SAM2Trainer:
                             val_loss=avg_val_loss, val_accuracy=val_accuracy, miou=miou,
                             target_category_name=target_label
                         )
-                    else:
-                        patience_counter += 1
-                        if self.early_stopping and patience_counter >= self.patience:
-                            print(f"Early stopping triggered at epoch {epoch + 1}.")
-                            self.early_stopped = True
-                            self.early_stop_epoch = epoch + 1
-                            break
+
+                    # Early stopping: patience resets only on a meaningful improvement
+                    # (larger than improvement_threshold_sigmas x noise), the same test
+                    # the training report uses.
+                    improvement_tracker.update(epoch + 1, avg_val_loss)
+                    if self.early_stopping and \
+                            improvement_tracker.epochs_without_improvement >= self.patience:
+                        print(f"Early stopping triggered at epoch {epoch + 1}.")
+                        self.early_stopped = True
+                        self.early_stop_epoch = epoch + 1
+                        break
 
                     # ============================================================================
                     # UPDATE LEARNING RATE SCHEDULER BASED ON VALIDATION LOSS
@@ -2366,7 +2375,7 @@ class SAM2Trainer:
                                + heat.astype(np.float32) * alpha).astype(np.uint8)
                     overlay_dir = os.path.join(self.model_output_folder, "validation_overlays")
                     os.makedirs(overlay_dir, exist_ok=True)
-                    _tag = overlay_tag if overlay_tag else f"e{len(self.epoch_list)}"
+                    _tag = overlay_tag if overlay_tag else f"ep{len(self.epoch_list):03d}"
                     out_path = os.path.join(
                         overlay_dir,
                         f"{self.formatted_time}_{self.site_name}_val_overlay_{_tag}_{val_idx}.png"
@@ -2790,6 +2799,7 @@ class SAM2Trainer:
             text_file.write(f"Best Checkpoints Kept: {self.max_best_checkpoints}\n")
             text_file.write(f"Early Stopping: {self.early_stopping}\n")
             text_file.write(f"Patience: {self.patience}\n")
+            text_file.write(f"Improvement Threshold (noise std devs): {self.improvement_threshold_sigmas}\n")
             text_file.write("Early Stopping Monitor: validation loss (mode=min)\n")
             _sched_on = getattr(self, 'lr_scheduler_enabled', True)
             text_file.write(f"LR Scheduler: {'ReduceLROnPlateau' if _sched_on else 'None'}\n")

@@ -23,6 +23,7 @@ from appcore.ml_core.lora_segmentation_losses import (BinaryDiceLoss, MultiClass
                                                           FocalLoss, TverskyLoss)
 from appcore.QProgressWheel import QProgressWheel
 from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.ml_core.convergence_analysis import ImprovementTracker
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 import torchvision.transforms.functional as TF
 from appcore.ml_core.segformer_errors import SegFormerError
@@ -125,6 +126,9 @@ class SegFormerConfig:
     # backends stop on the same criterion.
     early_stopping: bool = False
     patience: int = 10
+    # An improvement must exceed this many noise standard deviations to reset patience.
+    improvement_threshold_sigmas: float = field(
+        default_factory=lambda: ModelConfigManager.get_default("improvement_threshold_sigmas"))
 
     # Learning rate scheduler (ReduceLROnPlateau), monitoring validation loss.
     lr_scheduler_enabled: bool = field(
@@ -714,6 +718,7 @@ class SegFormerTrainer:
                 "weight_decay": float(self.cfg.weight_decay),
                 "early_stopping": bool(self.cfg.early_stopping),
                 "patience": int(self.cfg.patience),
+                "improvement_threshold_sigmas": float(self.cfg.improvement_threshold_sigmas),
                 "lr_scheduler_enabled": bool(self.cfg.lr_scheduler_enabled),
                 "lr_scheduler_patience": int(self.cfg.lr_scheduler_patience),
                 "val_split": getattr(self.cfg, "val_split", None),
@@ -763,9 +768,9 @@ class SegFormerTrainer:
         # If this is a final save or no val_iou provided, use simple naming
         if val_iou is None or suffix == "final":
             if suffix == "final":
-                torch_filename = f"{timestamp}_{site_name}_{suffix}_lr{learnrate}_epoch{epochs}.torch"
+                torch_filename = f"{timestamp}_{site_name}_{suffix}_epoch{epochs:03d}_lr{learnrate}.torch"
             else:
-                torch_filename = f"{timestamp}_{site_name}_epoch{epochs}_lr{learnrate}.torch"
+                torch_filename = f"{timestamp}_{site_name}_epoch{epochs:03d}_lr{learnrate}.torch"
             save_path = os.path.join(output_dir, torch_filename)
             torch.save(ckpt, save_path)
             print(f"Model checkpoint saved to {save_path}")
@@ -979,7 +984,9 @@ class SegFormerTrainer:
         self._loss_spec = self._build_loss_spec(loss_name, ce_loss, dice_loss, focal, tversky)
         scaler = torch.amp.GradScaler("cuda", enabled=self.cfg.amp)
 
-        metrics_log_path = os.path.join(self.cfg.output_dir, "metrics.json")
+        metrics_log_path = os.path.join(
+            self.cfg.output_dir,
+            f"{self.cfg.formatted_time}_{site_name}_metrics_lr{self.cfg.lr:.5f}.json")
 
         # Clear all accumulators at the start of each training run
         self.loss_values.clear()
@@ -996,6 +1003,7 @@ class SegFormerTrainer:
         self.best_checkpoints = []
         self.best_val_loss = float("inf")
         self.patience_counter = 0
+        improvement_tracker = ImprovementTracker(self.cfg.improvement_threshold_sigmas)
 
         # Decision threshold for training accuracy and overlays: the latest
         # validation epoch's F1-optimal threshold (argmax-equivalent before the first).
@@ -1143,9 +1151,9 @@ class SegFormerTrainer:
                     # Early stopping and checkpoint management on validation loss (min).
                     current_val_iou = metrics['mean_iou']   # reported, not used for stopping
 
+                    # Checkpoints: every new lowest validation loss is saved.
                     if avg_val_loss < self.best_val_loss:
                         self.best_val_loss = avg_val_loss
-                        self.patience_counter = 0
                         self._best_epoch = epoch
                         self._best_threshold = epoch_threshold
                         self._best_samples = (list(self.val_true_list),
@@ -1167,9 +1175,14 @@ class SegFormerTrainer:
                             epoch_num=epoch,
                             val_best_threshold=epoch_threshold
                         )
-                    else:
-                        self.patience_counter += 1
-                        print(f"No improvement for {self.patience_counter} epochs")
+
+                    # Early stopping: patience resets only on a meaningful improvement
+                    # (larger than improvement_threshold_sigmas x noise), the same test
+                    # the training report uses.
+                    if not improvement_tracker.update(epoch, avg_val_loss):
+                        print(f"No meaningful improvement for "
+                              f"{improvement_tracker.epochs_without_improvement} epochs")
+                    self.patience_counter = improvement_tracker.epochs_without_improvement
 
                     with open(metrics_log_path, "a") as f:
                         f.write(json.dumps({
