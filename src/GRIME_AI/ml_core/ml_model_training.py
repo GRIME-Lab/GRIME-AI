@@ -280,6 +280,9 @@ class MLModelTraining:
                     num_workers=self.site_config.get('num_workers', SegFormerConfig.num_workers),
                     early_stopping=self.early_stopping,
                     patience=self.patience,
+                    improvement_threshold_sigmas=self.site_config.get(
+                        'improvement_threshold_sigmas',
+                        ModelConfigManager.get_default('improvement_threshold_sigmas')),
                     max_best_checkpoints=self.max_best_checkpoints,
                     lr_scheduler_enabled=self.site_config.get(
                         'lr_scheduler_enabled', ModelConfigManager.get_default('lr_scheduler_enabled')),

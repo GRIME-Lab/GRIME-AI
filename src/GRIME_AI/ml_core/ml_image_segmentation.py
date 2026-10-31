@@ -404,11 +404,12 @@ class MLImageSegmentation:
     def _export_roi_features(self, segmented_folders, save_masks, user_cancelled):
         """
         Second pass after segmentation: extract ROI features for every segmented image
-        and its saved mask into <run date/time>_roi_metrics.csv (and .xlsx) in the
-        predictions output folder. Returns a message for the user.
+        and its saved mask into <run date/time>_roi_features.csv (and .xlsx) in the
+        roi_features subfolder of the predictions folder, beside the panels and
+        probability map subfolders. Returns a message for the user.
         """
         from appcore.dialogs.ML_image_processing.roi_feature_extraction import (
-            export_datasets, segmentation_pairs, load_settings, run_prefix)
+            export_datasets, segmentation_pairs, load_settings, run_prefix, ROI_FEATURES_FOLDER_NAME)
 
         if not save_masks:
             return "ROI features were not exported because predicted masks were not saved."
@@ -431,8 +432,14 @@ class MLImageSegmentation:
         if not datasets:
             return "ROI features were not exported: no segmented images were found."
 
-        # One file for the whole run, in the root of the first dataset (the folder
-        # holding its images and data folders).
+        # One file for the whole run, in the roi_features subfolder of the predictions
+        # folder. With several input folders, each has its own predictions subfolder,
+        # so the file goes in the folder they share.
+        prediction_dirs = [os.path.normpath(d) for _, d, _ in segmented_folders]
+        features_folder = os.path.join(os.path.commonpath(prediction_dirs), ROI_FEATURES_FOLDER_NAME)
+
+        # The sensor analysis report stays in the root of the first dataset (the
+        # folder holding its images and data folders).
         output_folder = os.path.dirname(os.path.normpath(segmented_folders[0][0]))
         total_pairs = sum(len(pairs) for pairs, _ in datasets)
 
@@ -444,7 +451,7 @@ class MLImageSegmentation:
         )
         try:
             result = export_datasets(
-                datasets, output_folder, settings, prefix=run_prefix(),
+                datasets, features_folder, settings, prefix=run_prefix(),
                 progress_callback=lambda done, total: progressBar.setValue(done),
                 cancel_callback=lambda: self.progress_bar_closed)
         except Exception as e:

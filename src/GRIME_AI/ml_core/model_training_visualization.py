@@ -30,6 +30,8 @@ from sklearn.metrics import (
     auc
 )
 from ..app_identity import APP_DISPLAY_NAME
+from ..dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from .convergence_analysis import analyze_convergence, MIN_EPOCHS_LINE
 
 
 # ======================================================================================================================
@@ -783,6 +785,7 @@ class ModelTrainingVisualization:
             val_best_threshold: float = None,
             train_dice: list[float] = None,
             val_dice: list[float] = None,
+            seconds_per_epoch: float = None,
     ) -> dict:
         """
         Analyzes training curves and returns a structured diagnostic report.
@@ -819,6 +822,8 @@ class ModelTrainingVisualization:
             best_epoch:               1-based epoch of the best checkpoint.
             val_best_threshold:       F1-optimal probability threshold on the final
                                       validation pass (0.5 == well calibrated).
+            seconds_per_epoch:        Average wall-clock time per epoch, used to state
+                                      the time cost of a projected improvement.
 
         Returns:
             dict with keys:
@@ -956,6 +961,23 @@ class ModelTrainingVisualization:
         if not findings:
             findings.append(("good", f"Good convergence: validation {metric_name} reached {final_val_q:.3f} with a train/val gap of {mean_gap:.3f}."))
 
+        # 9. Convergence of validation loss: trend (decaying curve or straight line,
+        # chosen by AICc), noise around the trend, and the epochs needed for the
+        # next meaningful decrease. Same test early stopping uses.
+        k_sigmas = float((config or {}).get("improvement_threshold_sigmas")
+                         or ModelConfigManager.get_default("improvement_threshold_sigmas"))
+        convergence = analyze_convergence(np.arange(1, len(vl_loss) + 1), vl_loss, k_sigmas)
+        if not convergence.enough_epochs:
+            findings.append(("good", f"Convergence not assessed: {len(vl_loss)} validation epoch(s); "
+                                     f"at least {MIN_EPOCHS_LINE} are needed to separate the trend from noise."))
+        elif convergence.levelled_off:
+            findings.append(("good", f"Validation loss has levelled off: the remaining possible decrease "
+                                     f"({convergence.remaining_gain:.3g}) is below {k_sigmas:g}x the noise "
+                                     f"({convergence.noise:.3g}); more epochs will not give a meaningful gain."))
+        elif convergence.not_decreasing:
+            findings.append(("good", "Validation loss is no longer decreasing (straight-line trend is flat or rising); "
+                                     "more epochs will not give a meaningful gain."))
+
         # ------------------------------------------------------------------
         # Concrete, config-aware recommendations for the next run.
         # Each is {key, current, suggested, reason}; key is the site_config
@@ -973,6 +995,8 @@ class ModelTrainingVisualization:
             val_best_threshold=val_best_threshold,
             underfit_threshold=underfit_threshold,
             metric_name=metric_name,
+            convergence=convergence,
+            seconds_per_epoch=seconds_per_epoch,
         )
         for r in recommendations:
             if r.get("severity") == "warning":
@@ -1053,7 +1077,8 @@ class ModelTrainingVisualization:
     def _build_recommendations(config, n_epochs, vl_acc, vl_loss, mean_gap, max_val_acc,
                                overfit, underfit, lr, lr_scheduler_enabled, lr_reductions,
                                num_train_images, num_val_images, early_stopped, best_epoch,
-                               val_best_threshold, underfit_threshold, metric_name="accuracy"):
+                               val_best_threshold, underfit_threshold, metric_name="accuracy",
+                               convergence=None, seconds_per_epoch=None):
         """
         Rule-based translation of diagnostics into concrete config changes.
         Deterministic and explainable: every entry names the site_config key,
@@ -1078,7 +1103,12 @@ class ModelTrainingVisualization:
         sched_on = bool(_get("lr_scheduler_enabled", True)) if lr_scheduler_enabled is None else bool(lr_scheduler_enabled)
         lr_val = float(lr) if lr is not None else float((_get("learningRates", [1e-4]) or [1e-4])[0])
         best = int(best_epoch) if best_epoch else int(np.argmax(vl_acc)) + 1
-        val_still_improving = (n_epochs >= 3 and float(vl_loss[-1]) < float(np.min(vl_loss[:-2])))
+        # Meaningful-improvement test (see convergence_analysis): a projected decrease
+        # larger than improvement_threshold_sigmas x the noise around the fitted trend.
+        val_still_improving = bool(convergence is not None
+                                   and convergence.epochs_to_meaningful_gain is not None)
+        val_converged = bool(convergence is not None and convergence.enough_epochs
+                             and (convergence.levelled_off or convergence.not_decreasing))
 
         # --- Calibration / protocol mismatch (highest priority) --------------
         if val_best_threshold is not None and (val_best_threshold < 0.35 or val_best_threshold > 0.65):
@@ -1105,17 +1135,34 @@ class ModelTrainingVisualization:
                  "Long runs without early stopping waste time past convergence and risk overfitting.")
 
         # --- Not converged -------------------------------------------------------
-        if not early_stopped and best >= n_epochs - 1 and val_still_improving:
-            _add("number_of_epochs", epochs_cfg, epochs_cfg + 20,
-                 f"Best checkpoint is epoch {best} of {n_epochs} and validation loss is still falling; "
-                 f"the run ended before converging.")
+        if not early_stopped and val_still_improving:
+            def _cost(epochs):
+                if not seconds_per_epoch:
+                    return ""
+                secs = epochs * seconds_per_epoch
+                return f" (about {secs / 60.0:.0f} min)" if secs >= 60 else f" (about {secs:.0f} s)"
+
+            steps = convergence.epochs_to_meaningful_gain
+            reason = (f"Validation loss is still decreasing ({convergence.trend.kind} fitted to {n_epochs} epochs). "
+                      f"A decrease of {convergence.projected_gain:.3g}, more than {convergence.k_sigmas:g}x the noise "
+                      f"({convergence.noise:.3g}), is projected after {steps} more epoch(s){_cost(steps)}.")
+            if convergence.epochs_to_level_off is not None:
+                # Decaying curve: run until the remaining possible decrease is within the noise.
+                more = convergence.epochs_to_level_off
+                reason += (f" The curve is projected to level off after {more} more epoch(s){_cost(more)}, "
+                           f"when the remaining possible decrease falls below {convergence.k_sigmas:g}x the noise.")
+            else:
+                # Straight line: no level-off point can be projected yet.
+                more = steps
+                reason += " The trend is a straight line, so the point where it levels off cannot be projected yet."
+            _add("number_of_epochs", epochs_cfg, max(epochs_cfg, n_epochs) + more, reason)
 
         # --- Scheduler / ES interplay ------------------------------------------------
         if sched_on and es_on and sched_pat >= patience:
             _add("lr_scheduler_patience", sched_pat, max(1, patience // 2),
                  f"lr_scheduler_patience ({sched_pat}) >= patience ({patience}): training stops before "
                  f"the learning rate is ever reduced.")
-        if sched_on and lr_reductions and lr_reductions >= 2 and not val_still_improving and not early_stopped:
+        if sched_on and lr_reductions and lr_reductions >= 2 and val_converged and not early_stopped:
             _add("number_of_epochs", epochs_cfg, max(5, best + 3),
                  f"LR was reduced {lr_reductions} times with no further validation gain after epoch {best}; "
                  f"the model has converged.")
@@ -1245,6 +1292,8 @@ class ModelTrainingVisualization:
             val_best_threshold=val_best_threshold if check_threshold_calibration else None,
             train_dice=train_dice,
             val_dice=dice_values,
+            seconds_per_epoch=(training_time_seconds / len(train_loss)
+                               if training_time_seconds and train_loss else None),
         )
 
         severity = result["severity"]
