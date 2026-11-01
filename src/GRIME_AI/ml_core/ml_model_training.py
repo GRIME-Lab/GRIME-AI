@@ -19,7 +19,6 @@ from datetime import datetime
 
 from appcore.Save_Utils import Save_Utils
 from appcore.JSON_Editor import JsonEditor
-from appcore.ml_core.segformer_trainer import SegFormerConfig, SegFormerTrainer
 from appcore.ml_core.segformer_errors import SegFormerError
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from appcore.ml_core.lora_wrapper import GeneralLoRAWrapper
@@ -240,6 +239,10 @@ class MLModelTraining:
         # --------------------------------------------------------------------
         elif mode.lower() == "segformer":
             try:
+                # Imported here, not at module level, so a SegFormer import problem
+                # cannot stop SAM2, SAM3 or YOLO training.
+                from appcore.ml_core.segformer_trainer import SegFormerConfig
+
                 # Collect folders and annotations
                 paths = self.site_config.get('Path', [])
                 for path in paths:
@@ -427,7 +430,7 @@ class MLModelTraining:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def run_segformer(self, image_dirs, ann_paths, cfg: SegFormerConfig,
+    def run_segformer(self, image_dirs, ann_paths, cfg: "SegFormerConfig",
                       use_lora: bool = False,
                       lora_target_modules=None,
                       modules_to_save=None,
@@ -439,6 +442,7 @@ class MLModelTraining:
         - Optionally wraps with GeneralLoRAWrapper.
         - Trains using SegFormerTrainer with the correct optimizer.
         """
+        from appcore.ml_core.segformer_trainer import SegFormerTrainer
         trainer = SegFormerTrainer(cfg, parent_widget=self.parent_widget)
 
         # Graphs, report and checkpoints are named for the site being trained.
