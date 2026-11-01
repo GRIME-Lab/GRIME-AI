@@ -1,0 +1,172 @@
+# Author: John Edward Stranzl Jr., PhD
+# Affiliation(s): University of Nebraska-Lincoln, Blade Vision Systems, LLC
+# Contact: jstranzl2@huskers.unl.edu, johnstranzl@gmail.com
+# Created: Nov 1, 2026
+# License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
+
+# push_zenodo.yml
+
+name: Push to Zenodo
+
+# Archives a GRIME AI release on Zenodo and mints its version DOI.
+#
+# Runs automatically after the Official Release workflow succeeds (publishes to
+# real Zenodo), or manually from the Actions tab with a tag and a target
+# (sandbox for testing, zenodo for real).
+#
+# Record details (authors, funding, license, ...) come from zenodo_metadata.json
+# in the repository root. If the Zenodo account has no GRIME AI record yet, the
+# first run creates one; otherwise each run adds a new version to the existing
+# record, so the concept DOI never changes.
+#
+# Secrets:
+#   ZENODO_TOKEN          token for zenodo.org          (deposit:write, deposit:actions)
+#   ZENODO_SANDBOX_TOKEN  token for sandbox.zenodo.org  (deposit:write, deposit:actions)
+
+on:
+  workflow_run:
+    workflows: ["Official Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to archive, for example v2.2.2.2"
+        required: true
+      target:
+        description: "Where to publish"
+        type: choice
+        options: [sandbox, zenodo]
+        default: sandbox
+
+permissions:
+  contents: read
+
+concurrency:
+  group: push-zenodo
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: Archive release on Zenodo
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'zenodo' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Download source zip for the tag
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "::error::'$TAG' is not a release tag (expected v followed by numbers, for example v2.2.2.2)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          ZIP="GRIME-AI-${VERSION}.zip"
+          curl -fsSL -o "$ZIP" "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.zip" \
+            || { echo "::error::Tag $TAG not found on GitHub"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          ls -l "$ZIP"
+
+      - name: Publish to Zenodo
+        env:
+          ZENODO_TOKEN_REAL: ${{ secrets.ZENODO_TOKEN }}
+          ZENODO_TOKEN_SANDBOX: ${{ secrets.ZENODO_SANDBOX_TOKEN }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import datetime, json, os, sys, urllib.error, urllib.request
+
+          SITES = {
+              "zenodo":  ("https://zenodo.org",         "ZENODO_TOKEN_REAL",    "ZENODO_TOKEN"),
+              "sandbox": ("https://sandbox.zenodo.org", "ZENODO_TOKEN_SANDBOX", "ZENODO_SANDBOX_TOKEN"),
+          }
+          target = os.environ["TARGET"]
+          if target not in SITES:
+              sys.exit(f"Unknown target '{target}'")
+          base, token_var, secret_name = SITES[target]
+          token = os.environ.get(token_var, "")
+          if not token:
+              sys.exit(f"The {secret_name} secret is not set in the repository.")
+
+          tag      = os.environ["TAG"]
+          version  = os.environ["VERSION"]
+          zip_path = os.environ["ZIP"]
+          repo_url = os.environ["REPO_URL"].rstrip("/").lower()
+          page_size = 100   # records requested per API page
+
+          def api(method, path, data=None, raw=None, content_type="application/json"):
+              url = path if path.startswith("http") else base + path
+              body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
+              req = urllib.request.Request(url, data=body, method=method)
+              req.add_header("Authorization", f"Bearer {token}")
+              req.add_header("Accept", "application/json")
+              if body is not None:
+                  req.add_header("Content-Type", content_type)
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      text = r.read().decode()
+                      return json.loads(text) if text else {}
+              except urllib.error.HTTPError as e:
+                  sys.exit(f"Zenodo {method} {url} failed ({e.code}):\n{e.read().decode()[:3000]}")
+
+          # Record details from the repository.
+          with open("zenodo_metadata.json", encoding="utf-8") as f:
+              cfg = json.load(f)
+          metadata = dict(cfg["metadata"])
+          metadata["title"] = cfg["release_text"]["title"].format(version=version)
+          metadata["description"] = cfg["release_text"]["description"].format(version=version)
+          metadata["version"] = tag
+          metadata["publication_date"] = datetime.date.today().isoformat()
+          draft_body = {"metadata": metadata,
+                        "custom_fields": cfg.get("custom_fields", {}),
+                        "files": {"enabled": True}}
+
+          # Find this account's existing GRIME AI record (matched by code repository).
+          hits = api("GET", f"/api/user/records?size={page_size}&sort=newest")["hits"]["hits"]
+          ours = [r for r in hits
+                  if r.get("is_published")
+                  and str(r.get("custom_fields", {}).get("code:codeRepository", "")).rstrip("/").lower() == repo_url]
+          latest = next((r for r in ours if r.get("versions", {}).get("is_latest")), ours[0] if ours else None)
+
+          if latest:
+              versions = api("GET", f"/api/records/{latest['id']}/versions?size={page_size}")["hits"]["hits"]
+              for v in versions:
+                  if v.get("metadata", {}).get("version") == tag:
+                      doi = v.get("pids", {}).get("doi", {}).get("identifier", "")
+                      print(f"{tag} is already on {target} as record {v['id']} (DOI {doi}). Nothing to do.")
+                      sys.exit(0)
+              print(f"Adding a new version to record {latest['id']} (concept {latest['parent']['id']}).")
+              draft = api("POST", f"/api/records/{latest['id']}/versions")
+              draft_id = draft["id"]
+              api("PUT", f"/api/records/{draft_id}/draft", draft_body)
+          else:
+              print(f"No GRIME AI record found on {target}; creating the first one.")
+              draft = api("POST", "/api/records", draft_body)
+              draft_id = draft["id"]
+
+          # Upload the source zip.
+          key = os.path.basename(zip_path)
+          api("POST", f"/api/records/{draft_id}/draft/files", [{"key": key}])
+          with open(zip_path, "rb") as f:
+              api("PUT", f"/api/records/{draft_id}/draft/files/{key}/content",
+                  raw=f.read(), content_type="application/octet-stream")
+          api("POST", f"/api/records/{draft_id}/draft/files/{key}/commit")
+
+          # Publish and report the DOIs.
+          record = api("POST", f"/api/records/{draft_id}/draft/actions/publish")
+          doi = record.get("pids", {}).get("doi", {}).get("identifier", "")
+          concept_doi = record.get("parent", {}).get("pids", {}).get("doi", {}).get("identifier", "")
+          page = record.get("links", {}).get("self_html", "")
+
+          print(f"Published {tag} on {target}: DOI {doi} (all versions: {concept_doi})")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"### {tag} archived on {target}\n\n"
+                      f"| | |\n|---|---|\n"
+                      f"| Version DOI | {doi} |\n"
+                      f"| All-versions DOI | {concept_doi} |\n"
+                      f"| Record | {page} |\n")
+          EOF
