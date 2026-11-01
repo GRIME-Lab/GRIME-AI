@@ -104,6 +104,9 @@ os.environ["HYDRA_FULL_ERROR"] = "1"
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
 os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+# Required by torch.use_deterministic_algorithms(True) in the trainers. Set here so it is in
+# place before any CUDA work in the process (e.g. segmentation run before training).
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import sys
 import argparse
