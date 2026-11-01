@@ -1,8 +1,192 @@
 {
-  "@context": "https://schema.org",
-  "@type": "Dataset",
-  "@id": "https://doi.org/10.5281/zenodo.22087225",
-  "name": "GRIME AI water segmentation masks",
-  "creator": { "@type": "Person", "name": "John E. Stranzl Jr." },
-  "license": "https://spdx.org/licenses/Apache-2.0"
+  "_comment": "Record details used by push_zenodo.yml for every GRIME AI release on Zenodo. The workflow fills in title, version, description and publication_date for each release.",
+  "metadata": {
+    "resource_type": {
+      "id": "software"
+    },
+    "publisher": "Zenodo",
+    "creators": [
+      {
+        "person_or_org": {
+          "type": "personal",
+          "given_name": "John Edward",
+          "family_name": "Stranzl Jr.",
+          "identifiers": [
+            {
+              "scheme": "orcid",
+              "identifier": "0000-0003-4942-8481"
+            }
+          ]
+        },
+        "role": {
+          "id": "projectleader"
+        },
+        "affiliations": [
+          {
+            "id": "043mer456"
+          }
+        ]
+      },
+      {
+        "person_or_org": {
+          "type": "personal",
+          "given_name": "Troy E.",
+          "family_name": "Gilmore",
+          "identifiers": [
+            {
+              "scheme": "orcid",
+              "identifier": "0000-0001-9939-4780"
+            }
+          ]
+        },
+        "role": {
+          "id": "supervisor"
+        },
+        "affiliations": [
+          {
+            "id": "043mer456"
+          }
+        ]
+      },
+      {
+        "person_or_org": {
+          "type": "personal",
+          "given_name": "Razin",
+          "family_name": "Bin Issa",
+          "identifiers": [
+            {
+              "scheme": "orcid",
+              "identifier": "0000-0003-2283-3292"
+            }
+          ]
+        },
+        "role": {
+          "id": "projectmember"
+        },
+        "affiliations": [
+          {
+            "id": "043mer456"
+          }
+        ]
+      },
+      {
+        "person_or_org": {
+          "type": "personal",
+          "given_name": "Adam",
+          "family_name": "Caprez",
+          "identifiers": [
+            {
+              "scheme": "orcid",
+              "identifier": "0000-0002-4001-0073"
+            }
+          ]
+        },
+        "role": {
+          "id": "projectmember"
+        },
+        "affiliations": [
+          {
+            "id": "043mer456"
+          }
+        ]
+      },
+      {
+        "person_or_org": {
+          "type": "personal",
+          "given_name": "Michael",
+          "family_name": "Fell",
+          "identifiers": [
+            {
+              "scheme": "orcid",
+              "identifier": "0000-0001-9713-749X"
+            }
+          ]
+        },
+        "role": {
+          "id": "projectmember"
+        },
+        "affiliations": [
+          {
+            "id": "0272j5188"
+          }
+        ]
+      },
+      {
+        "person_or_org": {
+          "type": "personal",
+          "given_name": "Mary J.",
+          "family_name": "Harner",
+          "identifiers": [
+            {
+              "scheme": "orcid",
+              "identifier": "0000-0002-6545-8050"
+            }
+          ]
+        },
+        "role": {
+          "id": "projectmember"
+        },
+        "affiliations": [
+          {
+            "id": "04d5mb615"
+          }
+        ]
+      }
+    ],
+    "copyright": "John E. Stranzl, Jr. 2026",
+    "rights": [
+      {
+        "id": "apache-2.0"
+      }
+    ],
+    "funding": [
+      {
+        "funder": {
+          "name": "U.S. Geological Survey"
+        },
+        "award": {
+          "number": "G23AC00141-00",
+          "title": {
+            "en": "USGS Cooperative Agreement"
+          }
+        }
+      },
+      {
+        "funder": {
+          "id": "021nxhr62"
+        },
+        "award": {
+          "id": "021nxhr62::2411065"
+        }
+      }
+    ]
+  },
+  "custom_fields": {
+    "code:codeRepository": "https://github.com/GRIME-Lab/GRIME-AI",
+    "code:developmentStatus": {
+      "id": "active"
+    },
+    "code:programmingLanguage": [
+      {
+        "id": "python"
+      }
+    ],
+    "meeting:meeting": {
+      "acronym": "AGU24",
+      "dates": "9-13 December 2024",
+      "place": "Washington, D.C.",
+      "title": "GRIME-AI: Open-source Software for Ecohydrological Discovery Using Ground-based Time-lapse Imagery"
+    },
+    "thesis:thesis": {
+      "date_defended": "2026-07-09",
+      "date_submitted": "2026-06-25",
+      "department": "School of Natural Resources",
+      "type": "PhD",
+      "university": "University of Nebraska-Lincoln"
+    }
+  },
+  "release_text": {
+    "title": "GRIME AI - Official v{version}",
+    "description": "GRIME AI official release v{version}"
+  }
 }
