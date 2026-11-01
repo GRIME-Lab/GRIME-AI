@@ -49,6 +49,9 @@ jobs:
   archive:
     name: Archive release on Zenodo
     runs-on: ubuntu-latest
+    # The Zenodo tokens are environment secrets; this line makes them available
+    # and applies the environment's approval and branch rules.
+    environment: zenodo
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
