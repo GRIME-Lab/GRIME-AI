@@ -102,14 +102,14 @@ jobs:
           base, token_var, secret_name, concept_var = SITES[target]
           token = os.environ.get(token_var, "")
           if not token:
-              sys.exit(f"The {secret_name} secret is not set in the repository.")
+              sys.exit(f"The {secret_name} secret is not set in the zenodo environment.")
 
           tag      = os.environ["TAG"]
           version  = os.environ["VERSION"]
           zip_path = os.environ["ZIP"]
           page_size = 100   # records requested per API page
 
-          def api(method, path, data=None, raw=None, content_type="application/json"):
+          def api(method, path, data=None, raw=None, content_type="application/json", missing_ok=False):
               url = path if path.startswith("http") else base + path
               body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
               req = urllib.request.Request(url, data=body, method=method)
@@ -122,6 +122,8 @@ jobs:
                       text = r.read().decode()
                       return json.loads(text) if text else {}
               except urllib.error.HTTPError as e:
+                  if missing_ok and e.code == 404:
+                      return None
                   sys.exit(f"Zenodo {method} {url} failed ({e.code}):\n{e.read().decode()[:3000]}")
 
           # Record details from the repository.
@@ -139,7 +141,12 @@ jobs:
           # The GRIME AI record to add versions to, by its all-versions (concept) ID.
           concept_id = os.environ.get(concept_var, "").strip()
           if concept_id:
-              latest = api("GET", f"/api/records/{concept_id}/versions/latest")
+              # Zenodo may or may not accept the all-versions ID for "latest version";
+              # if not, open the all-versions ID (which leads to a version) and ask from there.
+              latest = api("GET", f"/api/records/{concept_id}/versions/latest", missing_ok=True)
+              if latest is None:
+                  some_version = api("GET", f"/api/records/{concept_id}")
+                  latest = api("GET", f"/api/records/{some_version['id']}/versions/latest")
               versions = api("GET", f"/api/records/{latest['id']}/versions?size={page_size}")["hits"]["hits"]
               for v in versions:
                   if v.get("metadata", {}).get("version") == tag:
