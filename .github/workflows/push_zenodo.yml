@@ -15,13 +15,14 @@ name: Push to Zenodo
 # (sandbox for testing, zenodo for real).
 #
 # Record details (authors, funding, license, ...) come from zenodo_metadata.json
-# in the repository root. If the Zenodo account has no GRIME AI record yet, the
-# first run creates one; otherwise each run adds a new version to the existing
-# record, so the concept DOI never changes.
+# in the repository root. Each run adds a new version to the existing GRIME AI
+# record, so the all-versions DOI never changes.
 #
-# Secrets:
-#   ZENODO_TOKEN          token for zenodo.org          (deposit:write, deposit:actions)
-#   ZENODO_SANDBOX_TOKEN  token for sandbox.zenodo.org  (deposit:write, deposit:actions)
+# Settings in the "zenodo" environment:
+#   Secret   ZENODO_TOKEN               token for zenodo.org          (deposit:write, deposit:actions)
+#   Secret   ZENODO_SANDBOX_TOKEN       token for sandbox.zenodo.org  (deposit:write, deposit:actions)
+#   Variable ZENODO_CONCEPT_ID          all-versions ID of the GRIME AI record on zenodo.org (22087225)
+#   Variable ZENODO_SANDBOX_CONCEPT_ID  all-versions ID of the GRIME AI record on the sandbox
 
 on:
   workflow_run:
@@ -37,6 +38,10 @@ on:
         type: choice
         options: [sandbox, zenodo]
         default: sandbox
+      first_record:
+        description: "Create the first record (only when the target has no GRIME AI record yet)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -78,19 +83,23 @@ jobs:
         env:
           ZENODO_TOKEN_REAL: ${{ secrets.ZENODO_TOKEN }}
           ZENODO_TOKEN_SANDBOX: ${{ secrets.ZENODO_SANDBOX_TOKEN }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          ZENODO_CONCEPT_ID: ${{ vars.ZENODO_CONCEPT_ID }}
+          ZENODO_SANDBOX_CONCEPT_ID: ${{ vars.ZENODO_SANDBOX_CONCEPT_ID }}
+          FIRST_RECORD: ${{ github.event_name == 'workflow_dispatch' && inputs.first_record || false }}
+          DOI_WAIT_TRIES: "12"      # times to re-read the record while Zenodo registers the DOI
+          DOI_WAIT_SECONDS: "10"    # seconds between those reads
         run: |
           python3 - <<'EOF'
-          import datetime, json, os, sys, urllib.error, urllib.request
+          import datetime, json, os, sys, time, urllib.error, urllib.request
 
           SITES = {
-              "zenodo":  ("https://zenodo.org",         "ZENODO_TOKEN_REAL",    "ZENODO_TOKEN"),
-              "sandbox": ("https://sandbox.zenodo.org", "ZENODO_TOKEN_SANDBOX", "ZENODO_SANDBOX_TOKEN"),
+              "zenodo":  ("https://zenodo.org",         "ZENODO_TOKEN_REAL",    "ZENODO_TOKEN",         "ZENODO_CONCEPT_ID"),
+              "sandbox": ("https://sandbox.zenodo.org", "ZENODO_TOKEN_SANDBOX", "ZENODO_SANDBOX_TOKEN", "ZENODO_SANDBOX_CONCEPT_ID"),
           }
           target = os.environ["TARGET"]
           if target not in SITES:
               sys.exit(f"Unknown target '{target}'")
-          base, token_var, secret_name = SITES[target]
+          base, token_var, secret_name, concept_var = SITES[target]
           token = os.environ.get(token_var, "")
           if not token:
               sys.exit(f"The {secret_name} secret is not set in the repository.")
@@ -98,7 +107,6 @@ jobs:
           tag      = os.environ["TAG"]
           version  = os.environ["VERSION"]
           zip_path = os.environ["ZIP"]
-          repo_url = os.environ["REPO_URL"].rstrip("/").lower()
           page_size = 100   # records requested per API page
 
           def api(method, path, data=None, raw=None, content_type="application/json"):
@@ -128,28 +136,28 @@ jobs:
                         "custom_fields": cfg.get("custom_fields", {}),
                         "files": {"enabled": True}}
 
-          # Find this account's existing GRIME AI record (matched by code repository).
-          hits = api("GET", f"/api/user/records?size={page_size}&sort=newest")["hits"]["hits"]
-          ours = [r for r in hits
-                  if r.get("is_published")
-                  and str(r.get("custom_fields", {}).get("code:codeRepository", "")).rstrip("/").lower() == repo_url]
-          latest = next((r for r in ours if r.get("versions", {}).get("is_latest")), ours[0] if ours else None)
-
-          if latest:
+          # The GRIME AI record to add versions to, by its all-versions (concept) ID.
+          concept_id = os.environ.get(concept_var, "").strip()
+          if concept_id:
+              latest = api("GET", f"/api/records/{concept_id}/versions/latest")
               versions = api("GET", f"/api/records/{latest['id']}/versions?size={page_size}")["hits"]["hits"]
               for v in versions:
                   if v.get("metadata", {}).get("version") == tag:
                       doi = v.get("pids", {}).get("doi", {}).get("identifier", "")
                       print(f"{tag} is already on {target} as record {v['id']} (DOI {doi}). Nothing to do.")
                       sys.exit(0)
-              print(f"Adding a new version to record {latest['id']} (concept {latest['parent']['id']}).")
+              print(f"Adding a new version to record {latest['id']} (all-versions ID {concept_id}).")
               draft = api("POST", f"/api/records/{latest['id']}/versions")
               draft_id = draft["id"]
               api("PUT", f"/api/records/{draft_id}/draft", draft_body)
-          else:
-              print(f"No GRIME AI record found on {target}; creating the first one.")
+          elif os.environ.get("FIRST_RECORD", "false") == "true":
+              print(f"Creating the first GRIME AI record on {target}.")
               draft = api("POST", "/api/records", draft_body)
               draft_id = draft["id"]
+          else:
+              sys.exit(f"The {concept_var} variable is not set in the zenodo environment, so the record "
+                       f"to add this version to is unknown. Set it to the record's all-versions ID, or run "
+                       f"manually with 'Create the first record' ticked if no record exists yet.")
 
           # Upload the source zip.
           key = os.path.basename(zip_path)
@@ -161,8 +169,23 @@ jobs:
 
           # Publish and report the DOIs.
           record = api("POST", f"/api/records/{draft_id}/draft/actions/publish")
-          doi = record.get("pids", {}).get("doi", {}).get("identifier", "")
-          concept_doi = record.get("parent", {}).get("pids", {}).get("doi", {}).get("identifier", "")
+
+          # Zenodo registers DOIs after publishing, so the publish reply can come
+          # back without them. Re-read the published record until they appear.
+          def dois(r):
+              return (r.get("pids", {}).get("doi", {}).get("identifier", ""),
+                      r.get("parent", {}).get("pids", {}).get("doi", {}).get("identifier", ""))
+          doi, concept_doi = dois(record)
+          tries = int(os.environ["DOI_WAIT_TRIES"])
+          wait = float(os.environ["DOI_WAIT_SECONDS"])
+          for _ in range(tries):
+              if doi and concept_doi:
+                  break
+              time.sleep(wait)
+              record = api("GET", f"/api/records/{record['id']}")
+              doi, concept_doi = dois(record)
+          if not doi:
+              print(f"::warning::Published record {record['id']}, but Zenodo had not reported the DOI yet. Check the record page.")
           page = record.get("links", {}).get("self_html", "")
 
           print(f"Published {tag} on {target}: DOI {doi} (all versions: {concept_doi})")
