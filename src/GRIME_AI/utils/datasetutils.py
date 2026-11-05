@@ -88,11 +88,31 @@ class DatasetUtils:
 
             disk_set = set(disk_files)
 
+            # Filenames of JSON images that have at least one annotation.
+            # Images listed in the JSON with no annotations are unannotated,
+            # not "no water", so they must not be used for training or validation.
+            annotated_image_ids = {
+                ann.get("image_id")
+                for ann in annotations.get("annotations", [])
+                if isinstance(ann, dict)
+            }
+            annotated_filenames = {
+                os.path.basename(img.get("file_name", ""))
+                for img in annotations.get("images", [])
+                if isinstance(img, dict) and img.get("id") in annotated_image_ids
+            }
+
             # Only train on files present both on disk AND in JSON
             matched_files = [f for f in disk_files if f in json_filenames]
             skipped = len(disk_files) - len(matched_files)
             if skipped > 0:
                 print(f"[DatasetUtils] {folder}: {skipped} on-disk file(s) not in JSON - skipped.")
+
+            # Skip images that are in the JSON but have no annotations
+            unannotated = [f for f in matched_files if f not in annotated_filenames]
+            if unannotated:
+                matched_files = [f for f in matched_files if f in annotated_filenames]
+                print(f"[DatasetUtils] {folder}: {len(unannotated)} image(s) in JSON with no annotations - skipped.")
 
             missing = [f for f in json_filenames if f not in disk_set]
             if missing:
@@ -226,7 +246,21 @@ class DatasetUtils:
             for img in data["images"]:
                 all_images.append(os.path.normpath(str(img)))
 
-        random.shuffle(all_images)
+        # Group copies of the same image (same file name in different folders,
+        # e.g. the same image annotated by two annotators) so that all copies
+        # go to the same split. Otherwise one copy can land in training and the
+        # other in validation, and validation scores become optimistic.
+        groups = {}
+        for img in all_images:
+            groups.setdefault(os.path.basename(img), []).append(img)
+        group_keys = list(groups)
+        random.shuffle(group_keys)
+
+        multi = [k for k in group_keys if len(groups[k]) > 1]
+        if multi:
+            n_copies = sum(len(groups[k]) for k in multi)
+            print(f"[DatasetUtils] {len(multi)} image(s) appear in more than one folder "
+                  f"({n_copies} copies); all copies of each image are kept in the same split.")
 
         n = len(all_images)
         train_size = int(train_split * n)
@@ -237,14 +271,25 @@ class DatasetUtils:
         # takes exactly its share and the remaining images are intentionally
         # held out (unused). Previously val_split was ignored and validation
         # always received 1 - train_split of the data.
-        if train_split + val_split >= 0.999:
+        linked = train_split + val_split >= 0.999
+        if linked:
             val_size = n - train_size
         else:
             val_size = int(val_split * n)
         # Never let validation overlap the training slice.
         val_size = max(0, min(val_size, n - train_size))
-        train_images = all_images[:train_size]
-        val_images = all_images[train_size:train_size + val_size]
+
+        # Assign whole groups. Training takes groups until it reaches
+        # train_size; validation takes groups until it reaches val_size (or,
+        # in the linked case, all remaining groups). Counts can differ from
+        # the targets by less than one group's size.
+        train_images, val_images = [], []
+        for key in group_keys:
+            g = groups[key]
+            if len(train_images) < train_size:
+                train_images.extend(g)
+            elif linked or len(val_images) < val_size:
+                val_images.extend(g)
         held_out = n - len(train_images) - len(val_images)
         msg = f"Train: {len(train_images)} images, Validation: {len(val_images)} images"
         if held_out > 0:
