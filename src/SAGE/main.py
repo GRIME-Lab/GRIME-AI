@@ -7,6 +7,7 @@ print("SAM2 is being imported from:", sam2.__file__)
 
 import os
 import sys
+import importlib.util
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -22,15 +23,19 @@ from SAGE.backends.sam2_backend import SAM2Backend
 
 
 def parse_args():
+    # Locate SAM2 the same way GRIME AI's sam2_trainer.py does: from the
+    # installed sam2 package, so no machine-specific paths are needed.
+    sam2_dir = os.path.dirname(importlib.util.find_spec("sam2").origin)
+
     parser = argparse.ArgumentParser(description="Segmentation & Annotation for Geospatial Ecohydrology (SAGE)")
     parser.add_argument(
         "--checkpoint",
-        default=r"C:\Users\johns\pycharmprojects\GRIME-AI-X\src\GRIME_AI\sam2\checkpoints\sam2.1_hiera_large.pt",
+        default=os.path.normpath(os.path.join(sam2_dir, "checkpoints", "sam2.1_hiera_large.pt")),
         help="Path to SAM2.1 checkpoint",
     )
     parser.add_argument(
         "--config_dir",
-        default=r"C:\Users\johns\pycharmprojects\GRIME-AI-X\src\GRIME_AI\sam2\sam2\configs\sam2.1",
+        default=os.path.normpath(os.path.join(sam2_dir, "configs", "sam2.1")),
         help="Directory containing SAM2.1 configs",
     )
     parser.add_argument(
