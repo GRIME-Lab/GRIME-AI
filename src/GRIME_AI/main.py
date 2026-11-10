@@ -5315,8 +5315,8 @@ class MainWindow(QMainWindow):
     # USGS MULTI-SITE DOWNLOAD
     # ------------------------------------------------------------------------------------------------------------------
     def _usgs_download_checked(self, root_folder):
-        """Download every checked camera. One camera downloads into the folder itself; several
-        cameras each get <folder>/<camera ID>/Images and /data."""
+        """Download every checked camera. Each camera, whether one or several are checked,
+        gets <folder>/<camera ID>/Images and /data."""
         self.usgs_check_timer.stop()
         t = self.table_USGS_Sites
         jobs = []
@@ -5328,14 +5328,13 @@ class MainWindow(QMainWindow):
             App_QMessageBox("USGS Download", "Start must be before End for: " + ", ".join(bad),
                             QMessageBox.Close).displayMsgBox()
             return
-        multi = len(jobs) > 1
         self._usgs_cancel_requested = False
         results = []
         for i, (cam_id, sd, ed, st, et) in enumerate(jobs, start=1):
             if self._usgs_cancel_requested:
                 results.append(f"{cam_id}: not downloaded (cancelled)")
                 continue
-            folder = os.path.join(root_folder, cam_id) if multi else root_folder
+            folder = os.path.join(root_folder, cam_id)
             image_folder = os.path.join(folder, "Images")
             data_folder = os.path.join(folder, "data")
             os.makedirs(image_folder, exist_ok=True)
@@ -6558,7 +6557,8 @@ class MainWindow(QMainWindow):
                                              startTime=startTime, endTime=endTime)
 
             #downloadsFilePath = os.path.join(self.edit_USGSSaveFilePath.text(), 'Images')
-            downloadsFilePath = self.edit_USGSSaveFilePath.text()
+            # Same layout as the checked-camera download: <folder>/<camera ID>/Images and /data
+            downloadsFilePath = os.path.join(self.edit_USGSSaveFilePath.text(), site)
             if not os.path.exists(downloadsFilePath):
                 os.makedirs(downloadsFilePath)
 
