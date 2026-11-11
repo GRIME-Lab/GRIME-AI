@@ -144,10 +144,12 @@ class MLModelTraining:
 
         # -------------------------------
         # CREATE OUTPUT FOLDER
+        # (under the active recipe's Models folder, if set)
         # -------------------------------
         try:
+            from appcore.recipe_manager.recipe_manager import get_models_root
             self.model_output_folder = os.path.join(
-                Save_Utils().get_models_folder(), mode,
+                get_models_root(), mode,
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)
