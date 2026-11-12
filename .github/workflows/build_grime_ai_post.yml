@@ -1,0 +1,52 @@
+name: Build grime-ai-post
+# Builds recipe/grime-ai-post on each platform and uploads it to the grimelab
+# Anaconda channel using the repo's ANACONDA_TOKEN secret.
+# Run manually from the Actions tab whenever recipe/grime-ai-post changes.
+on:
+  workflow_dispatch:
+    inputs:
+      label:
+        description: "Anaconda channel label to upload to"
+        required: true
+        default: "main"
+
+jobs:
+  build:
+    name: grime-ai-post (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-64
+          - os: macos-15-intel
+            platform: osx-64
+          - os: macos-latest
+            platform: osx-arm64
+          - os: windows-latest
+            platform: win-64
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: ""
+          auto-activate-base: true
+
+      - name: Install build tools
+        run: conda install -y -n base conda-build anaconda-client
+
+      - name: Build and upload
+        env:
+          ANACONDA_API_TOKEN: ${{ secrets.ANACONDA_TOKEN }}
+        run: |
+          conda config --set anaconda_upload yes
+          conda build -c conda-forge --label ${{ inputs.label }} \
+            --user grimelab --token $ANACONDA_API_TOKEN recipe/grime-ai-post
