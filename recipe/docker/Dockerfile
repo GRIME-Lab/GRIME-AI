@@ -13,7 +13,9 @@ ARG PYTHON_VERSION="3.12"
 RUN CONDA_OVERRIDE_CUDA=12.9 micromamba create -q -y -p /opt/grimeai -c grimelab -c conda-forge ${GRIME_PACKAGE} python=${PYTHON_VERSION} 'pytorch=*=cuda*' && \
     micromamba clean -q -y -a
 
-RUN /opt/grimeai/bin/download-sam2-checkpoints
+# Use the repo's copy of the checkpoint downloader so fixes apply without republishing grime-ai-post
+COPY grime-ai-post/download-sam2-checkpoints.py /tmp/download-sam2-checkpoints.py
+RUN /opt/grimeai/bin/python /tmp/download-sam2-checkpoints.py && rm /tmp/download-sam2-checkpoints.py
 RUN command -v /opt/grimeai/bin/download-yolo11-models && /opt/grimeai/bin/download-yolo11-models do-something || true
 
 RUN useradd -m grimeai
