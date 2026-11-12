@@ -1,9 +1,75 @@
 #!/opt/anaconda1anaconda2anaconda3/bin/python
 
+import hashlib
+import json
 import os
 import sys
 import urllib.request
 from pathlib import Path
+
+# Download sources, tried in order. Override with environment variables if a host moves.
+# Hugging Face hosts Meta's official SAM2.1 checkpoints (one repo per model size) and
+# publishes each file's SHA256, which is used to verify downloads from either source.
+HF_BASE_URL = os.environ.get("SAM2_HF_BASE_URL", "https://huggingface.co")
+HF_ORG = os.environ.get("SAM2_HF_ORG", "facebook")
+META_BASE_URL = os.environ.get("SAM2_META_BASE_URL", "https://dl.fbaipublicfiles.com/segment_anything_2/092824")
+
+
+def hf_repo_for(filename):
+    """sam2.1_hiera_base_plus.pt -> facebook/sam2.1-hiera-base-plus"""
+    return f"{HF_ORG}/{Path(filename).stem.replace('_', '-')}"
+
+
+def hf_expected_sha256(filename):
+    """Return the SHA256 Hugging Face publishes for this file, or None if unavailable."""
+    api_url = f"{HF_BASE_URL}/api/models/{hf_repo_for(filename)}/tree/main"
+    try:
+        with urllib.request.urlopen(api_url) as response:
+            for entry in json.load(response):
+                if entry.get("path") == filename and entry.get("lfs"):
+                    return entry["lfs"].get("oid")
+    except Exception as e:
+        print(f"Could not get SHA256 for {filename} from Hugging Face: {e}")
+    return None
+
+
+def sha256_of(path):
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").hexdigest()
+
+
+def download_verified(filename, destination):
+    """Try each source in order; keep the first download whose SHA256 matches."""
+    expected_sha = hf_expected_sha256(filename)
+    sources = [
+        ("Hugging Face", f"{HF_BASE_URL}/{hf_repo_for(filename)}/resolve/main/{filename}"),
+        ("Meta", f"{META_BASE_URL}/{filename}"),
+    ]
+    partial = f"{destination}.partial"
+    errors = []
+
+    for source_name, url in sources:
+        print(f"Source: {source_name} ({url})")
+        try:
+            # Replicates 'curl -O' behavior
+            urllib.request.urlretrieve(url, partial, reporthook=download_progress)
+            print()
+            if expected_sha:
+                actual_sha = sha256_of(partial)
+                if actual_sha != expected_sha:
+                    raise ValueError(f"SHA256 mismatch (expected {expected_sha}, got {actual_sha})")
+                print("SHA256 verified.")
+            else:
+                print("Warning: no published SHA256 available; file not verified.")
+            os.replace(partial, destination)
+            return
+        except Exception as e:
+            print(f"\n{source_name} failed: {e}")
+            errors.append(f"{source_name}: {e}")
+            if os.path.exists(partial):
+                os.remove(partial)
+
+    raise RuntimeError("; ".join(errors))
 
 def download_progress(block_num, block_size, total_size):
     """Callback to display download progress."""
@@ -39,8 +105,7 @@ def main():
         print(f"Error: Could not create directory {checkpoint_home}. {e}")
         sys.exit(1)
 
-    # 4. Define URLs
-    base_url = "https://dl.fbaipublicfiles.com/segment_anything_2/092824"
+    # 4. Define files (download sources are set at the top of this script)
     files = [
         "sam2.1_hiera_tiny.pt",
         "sam2.1_hiera_small.pt",
@@ -52,15 +117,13 @@ def main():
 
     # 5. Download the files
     for filename in files:
-        url = f"{base_url}/{filename}"
         destination = os.path.join(checkpoint_home,filename)
 
         print(f"\nProcessing: {filename}")
 
         try:
-            # Replicates 'curl -O' behavior
-            urllib.request.urlretrieve(url, destination, reporthook=download_progress)
-            print(f"\nSuccessfully downloaded to {destination}")
+            download_verified(filename, destination)
+            print(f"Successfully downloaded to {destination}")
         except Exception as e:
             print(f"\nFailed to download {filename}: {e}")
             sys.exit(1)
