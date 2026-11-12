@@ -415,10 +415,11 @@ class YOLOTrainer:
         self.cat_id_to_yolo: Dict[int, int] = {}
         self._resolved_yolo_base: str = self.YOLO_MODEL_BASE  # updated after weights resolve
 
-        # ── Create output folder ─────────────────────────────────────────────
+        # ── Create output folder (under the active recipe's Models folder, if set)
         try:
+            from appcore.recipe_manager.recipe_manager import get_models_root
             self.model_output_folder = os.path.join(
-                Save_Utils().get_models_folder(), "yolo",
+                get_models_root(), "yolo",
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)

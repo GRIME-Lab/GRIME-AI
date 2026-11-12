@@ -318,10 +318,11 @@ class SAM2Trainer:
         self.categories = []
         self.annotation_index = []
 
-        # create output folder
+        # create output folder (under the active recipe's Models folder, if set)
         try:
+            from appcore.recipe_manager.recipe_manager import get_models_root
             self.model_output_folder = os.path.join(
-                Save_Utils().get_models_folder(), 'sam2',
+                get_models_root(), 'sam2',
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)
@@ -2152,6 +2153,7 @@ class SAM2Trainer:
         val_correct, val_total = 0, 0
         n_items = 0
         tp_total, fp_total, fn_total = 0.0, 0.0, 0.0
+        n_overlays_written = 0
         self.last_val_extra = {}
 
         # Clear per-epoch pixel lists to prevent unbounded memory growth across epochs
@@ -2380,12 +2382,26 @@ class SAM2Trainer:
                         overlay_dir,
                         f"{self.formatted_time}_{self.site_name}_val_overlay_{_tag}_{val_idx}.png"
                     )
-                    cv2.imwrite(out_path, blended)  # already BGR
-                    self._overlays_written = True
+                    try:
+                        wrote = bool(cv2.imwrite(out_path, blended))  # already BGR
+                        err = "" if wrote else "cv2.imwrite returned False"
+                    except Exception as e:
+                        wrote, err = False, str(e)
+                    if wrote:
+                        n_overlays_written += 1
+                        self._overlays_written = True
+                    else:
+                        print(f"[SAM2Trainer] Validation overlay NOT written ({err}): {out_path}")
 
                 del logit_tensor, logit_upsampled, prob_upsampled, pred_binary, val_true_mask_tensor, iou_actual
 
                 progressBar.setValue(progressBar.getValue() + 1)
+
+        if save_overlays:
+            print(f"[SAM2Trainer] Validation overlays written this pass: {n_overlays_written} "
+                  f"(mode={getattr(self, 'validation_overlay_mode', 'last')}, "
+                  f"max per pass={self.validation_overlay_samples}, "
+                  f"validation images={len(val_cache)})")
 
         # Compute averages
         avg_val_loss = val_loss / n_items if n_items > 0 else 0.0
@@ -2588,7 +2604,6 @@ class SAM2Trainer:
                 "dice_at_f1_optimal_threshold": getattr(self, "val_dice_best_thr", None),
                 "n_val_images": extra.get("n_images"),
             }
-            self._overlays_written = True
         except Exception as e:
             print(f"[SAM2Trainer] Best-checkpoint evaluation failed: {e}")
         finally:
