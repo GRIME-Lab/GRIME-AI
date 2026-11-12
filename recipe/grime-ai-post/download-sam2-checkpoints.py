@@ -1,6 +1,7 @@
 #!/opt/anaconda1anaconda2anaconda3/bin/python
 
 import hashlib
+import io
 import json
 import os
 import sys
@@ -34,8 +35,12 @@ def hf_expected_sha256(filename):
 
 
 def sha256_of(path):
+    # Chunked read works on all supported Pythons (hashlib.file_digest needs 3.11+)
+    digest = hashlib.sha256()
     with open(path, "rb") as f:
-        return hashlib.file_digest(f, "sha256").hexdigest()
+        for chunk in iter(lambda: f.read(io.DEFAULT_BUFFER_SIZE), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def download_verified(filename, destination):
