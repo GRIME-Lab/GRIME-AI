@@ -22,6 +22,11 @@ Usage:
     label.setStyleSheet(f"color: {c['warn_tx']};")
 """
 
+# Corner radius of filmstrip thumbnails and their item cells, px. Shared by the
+# QSS below and by filmstrip.py so the cell, the image and the annotated border
+# all round the same way.
+THUMB_RADIUS = 6
+
 _LIGHT = {
     "page":        "#e8eae6",
     "card":        "#fbfcfa",
@@ -61,6 +66,9 @@ _LIGHT = {
     "pill_tx":     "#6b7269",
     "swatch_bd":   "#cfd4cb",
     "canvas_bg":   "#20241f",
+    # ---- filmstrip: annotated-image number + border (orange; avoids red
+    #      and green for colour-blind viewers) ----
+    "annotated":   "#c86400",
 }
 
 _DARK = {
@@ -102,6 +110,9 @@ _DARK = {
     "pill_tx":     "#8b928a",
     "swatch_bd":   "#3d443d",
     "canvas_bg":   "#141613",
+    # ---- filmstrip: annotated-image number + border (lighter orange so it
+    #      reads on the dark background) ----
+    "annotated":   "#e69f00",
 }
 
 
@@ -358,6 +369,17 @@ QMainWindow {{ background: {c['page']}; }}
         border-radius: 6px;
     }}
     QLabel#seedCaption {{ color: {c['text_muted']}; font-size: 10px; }}
+
+    /* =======================================================
+       Filmstrip: rounded item cells to match the rounded thumbnails
+       ======================================================= */
+    QListWidget#filmstrip::item {{
+        border-radius: {THUMB_RADIUS}px;
+    }}
+    QListWidget#filmstrip::item:selected {{
+        background: {c['sel_row']};
+        border-radius: {THUMB_RADIUS}px;
+    }}
     """
 
 
