@@ -8,7 +8,7 @@ selection so MainWindow can build the full path and load it.
 """
 import os
 from PyQt5.QtCore import Qt, QTimer, QSize, QRectF, pyqtSignal
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QImageReader
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QImageReader, QPalette, QPen
 from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QListView, QFrame, QStyledItemDelegate,
 )
@@ -19,46 +19,68 @@ ROLE_ANNOTATED = Qt.UserRole + 1     # bool: has >=1 saved annotation
 ROLE_DIMS = Qt.UserRole + 2          # (w, h) or None until known
 
 
-def _accent() -> str:
-    """Annotation-dot colour from the active palette."""
+# Annotated-image colour used when the theme palette defines no "annotated"
+# key. Dark orange: distinct from black text and from the (blue) selection
+# highlight, avoids red and green for colour-blind viewers, and dark enough
+# to read as small bold text on a light background.
+ANNOTATED_ORANGE = "#C86400"
+
+
+def _annotated_color() -> str:
+    """Annotated-image colour from the active palette ("annotated" key),
+    falling back to ANNOTATED_ORANGE."""
     from SAGE.ui.theme import colors, active_mode
-    return colors(active_mode())["accent_bd"]
+    return colors(active_mode()).get("annotated", ANNOTATED_ORANGE)
 
 
-class _DotDelegate(QStyledItemDelegate):
-    """Draws the thumbnail normally, then a small filled dot centered beneath
-    it when the item is flagged annotated. Painting in the delegate (rather than
-    compositing onto the icon pixmap) keeps the dot independent of the thumbnail
-    - it survives selection highlight and needs no icon regeneration when the
-    annotation state flips."""
+class _IndexDelegate(QStyledItemDelegate):
+    """Draws the thumbnail normally, then the image's 1-based index centered
+    beneath it. When the image has at least one saved annotation, the number
+    is drawn in the annotated colour and the thumbnail gets a border in the
+    same colour; otherwise the number uses the normal text colour and there is
+    no border. Painting in the delegate keeps both independent of the
+    thumbnail, so they survive selection highlight and need no icon
+    regeneration when the annotation state flips."""
 
-    DOT_D = 7        # diameter in px
-    DOT_PAD = 3      # gap between thumbnail bottom and dot
+    LABEL_PAD = 2    # gap above and below the number, px
+    BORDER_W = 2     # annotated-thumbnail border width, px
 
     def __init__(self, color=None, parent=None):
         super().__init__(parent)
-        # Was a literal QColor(46, 204, 113) — a teal-green unrelated to the
-        # palette, so the dot drifted from the accent in both modes.
-        self._color = color if color is not None else QColor(_accent())
+        self._color = color if color is not None else QColor(_annotated_color())
 
     def set_color(self, color):
         self._color = color
 
+    def band_height(self, widget):
+        """Height of the strip beneath the thumbnail that holds the number."""
+        return widget.fontMetrics().height() + 2 * self.LABEL_PAD
+
     def paint(self, painter, option, index):
         super().paint(painter, option, index)
-        if not index.data(ROLE_ANNOTATED):
-            return
         r = option.rect
-        cx = r.center().x()
-        cy = r.bottom() - self.DOT_PAD - self.DOT_D / 2.0
+        band_h = option.fontMetrics.height() + 2 * self.LABEL_PAD
+        band = QRectF(r.left(), r.bottom() - band_h + 1, r.width(), band_h)
+        annotated = bool(index.data(ROLE_ANNOTATED))
+        if annotated:
+            color = self._color
+        else:
+            color = option.palette.color(QPalette.Text)
+        font = option.font
+        font.setBold(True)
         painter.save()
-        painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(self._color)
-        painter.drawEllipse(
-            QRectF(cx - self.DOT_D / 2.0, cy - self.DOT_D / 2.0,
-                   self.DOT_D, self.DOT_D)
-        )
+        if annotated:
+            # Border around the thumbnail area (cell above the number band).
+            half = self.BORDER_W / 2.0
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(QPen(self._color, self.BORDER_W))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(QRectF(r.left() + half, r.top() + half,
+                                    r.width() - self.BORDER_W,
+                                    r.height() - band_h - self.BORDER_W))
+        painter.setPen(color)
+        painter.setFont(font)
+        painter.drawText(band, Qt.AlignCenter, str(index.row() + 1))
         painter.restore()
 
 
@@ -89,17 +111,18 @@ class Filmstrip(QListWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
-        # Dot painted beneath each thumbnail for annotated images.
-        self._dot_delegate = _DotDelegate(parent=self)
-        self.setItemDelegate(self._dot_delegate)
-        self._dot_band = _DotDelegate.DOT_PAD + _DotDelegate.DOT_D + 2
+        # Index number painted beneath each thumbnail; annotated images get an
+        # orange number and an orange border.
+        self._index_delegate = _IndexDelegate(parent=self)
+        self.setItemDelegate(self._index_delegate)
+        self._label_band = self._index_delegate.band_height(self)
 
         # Tooltips are built per-item on hover (see event()), so mouse tracking
         # must be on even when no button is held.
         self.setMouseTracking(True)
 
-        # One icon row tall (+ dot band + scrollbar allowance).
-        self.setFixedHeight(thumb_height + 26 + self._dot_band)
+        # One icon row tall (+ number band + scrollbar allowance).
+        self.setFixedHeight(thumb_height + 26 + self._label_band)
 
         self.itemClicked.connect(self._on_item_clicked)
 
@@ -107,8 +130,9 @@ class Filmstrip(QListWidget):
     def populate(self, folder, names, annotated=None):
         """names: list of filenames (not full paths) in `folder`.
         annotated: optional set/container of filenames that have saved
-        annotations; those get a dot. Absent -> no dots (caller can set them
-        later via set_annotated / set_annotated_set)."""
+        annotations; those get an orange number and border. Absent -> all
+        numbers in the normal text colour, no borders (caller can set them later via
+        set_annotated / set_annotated_set)."""
         self._folder = folder
         self._names = list(names)
         annotated = annotated or set()
@@ -118,7 +142,7 @@ class Filmstrip(QListWidget):
         token = self._load_token
         self._pending.clear()
 
-        band = self._dot_band
+        band = self._label_band
         for idx, name in enumerate(names):
             item = QListWidgetItem(QIcon(), "")
             item.setData(ROLE_NAME, name)
@@ -173,10 +197,10 @@ class Filmstrip(QListWidget):
             self.image_clicked.emit(name)
 
     # -------------------------------------------------------------
-    # Annotation-dot API
+    # Annotation-state API
     # -------------------------------------------------------------
     def set_annotated(self, name, flag=True):
-        """Flip the dot for a single image and repaint just its cell."""
+        """Flip the annotated state for a single image and repaint just its cell."""
         for i in range(self.count()):
             it = self.item(i)
             if it.data(ROLE_NAME) == name:
@@ -186,7 +210,7 @@ class Filmstrip(QListWidget):
                 return
 
     def set_annotated_set(self, names):
-        """Bulk-set which images show a dot. `names` is any container of
+        """Bulk-set which images are annotated. `names` is any container of
         filenames; everything not in it is cleared."""
         wanted = set(names or ())
         for i in range(self.count()):
@@ -197,12 +221,14 @@ class Filmstrip(QListWidget):
         self.viewport().update()
 
     def refresh_theme(self):
-        """Re-read the accent after a theme switch."""
-        self._dot_delegate.set_color(QColor(_accent()))
+        """Re-read the annotated colour after a theme switch."""
+        self._index_delegate.set_color(QColor(_annotated_color()))
         self.viewport().update()
 
     def set_dot_color(self, color):
-        self._dot_delegate.set_color(color)
+        """Colour of the number and border for annotated images. Name kept so existing
+        callers continue to work."""
+        self._index_delegate.set_color(color)
         self.viewport().update()
 
     # -------------------------------------------------------------
