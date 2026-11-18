@@ -2957,7 +2957,7 @@ class MainWindow(QMainWindow):
                 self.phenocam_folder_edit.setText(saved)
         except Exception:
             pass
-        self.phenocam_browse_btn = QtWidgets.QPushButton("Browse...")
+        self.phenocam_browse_btn = QtWidgets.QPushButton("Browse")
         self.phenocam_browse_btn.setStyleSheet(self._pc_ghost_btn_style)
         self.phenocam_browse_btn.clicked.connect(self._phenocam_browse_folder)
         self.phenocam_download_btn = QtWidgets.QPushButton("Download Images")
