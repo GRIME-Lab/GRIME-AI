@@ -8,9 +8,10 @@ selection so MainWindow can build the full path and load it.
 """
 import os
 from PyQt5.QtCore import Qt, QTimer, QSize, QRectF, pyqtSignal
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QImageReader, QPalette, QPen
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QImageReader, QPainterPath, QPalette, QPen
 from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QListView, QFrame, QStyledItemDelegate,
+    QStyle, QStyleOptionViewItem, QApplication,
 )
 
 # Per-item data roles beyond Qt.UserRole (which holds the filename).
@@ -19,9 +20,11 @@ ROLE_ANNOTATED = Qt.UserRole + 1     # bool: has >=1 saved annotation
 ROLE_DIMS = Qt.UserRole + 2          # (w, h) or None until known
 
 
+from SAGE.ui.theme import THUMB_RADIUS   # shared with the filmstrip QSS
+
 # Annotated-image colour used when the theme palette defines no "annotated"
-# key. Dark orange: distinct from black text and from the (blue) selection
-# highlight, avoids red and green for colour-blind viewers, and dark enough
+# key. Dark orange: distinct from black text and from the green accent and
+# selection, avoids red and green for colour-blind viewers, and dark enough
 # to read as small bold text on a light background.
 ANNOTATED_ORANGE = "#C86400"
 
@@ -31,6 +34,22 @@ def _annotated_color() -> str:
     falling back to ANNOTATED_ORANGE."""
     from SAGE.ui.theme import colors, active_mode
     return colors(active_mode()).get("annotated", ANNOTATED_ORANGE)
+
+
+def _round_pixmap(pix, radius=THUMB_RADIUS):
+    """Return `pix` with rounded corners."""
+    if pix.isNull():
+        return pix
+    rounded = QPixmap(pix.size())
+    rounded.fill(Qt.transparent)
+    p = QPainter(rounded)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(0, 0, pix.width(), pix.height()), radius, radius)
+    p.setClipPath(path)
+    p.drawPixmap(0, 0, pix)
+    p.end()
+    return rounded
 
 
 class _IndexDelegate(QStyledItemDelegate):
@@ -52,6 +71,23 @@ class _IndexDelegate(QStyledItemDelegate):
     def set_color(self, color):
         self._color = color
 
+    def _image_rect(self, option, index):
+        """Rect of the thumbnail image within the cell, as laid out by the
+        active style (including any stylesheet padding/border/margin). Falls
+        back to the decoration area until the thumbnail has loaded."""
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        widget = opt.widget
+        style = widget.style() if widget is not None else QApplication.style()
+        deco = QRectF(style.subElementRect(QStyle.SE_ItemViewItemDecoration, opt, widget))
+        icon = index.data(Qt.DecorationRole)
+        if isinstance(icon, QIcon) and not icon.isNull():
+            sz = icon.actualSize(opt.decorationSize)
+            return QRectF(deco.center().x() - sz.width() / 2.0,
+                          deco.center().y() - sz.height() / 2.0,
+                          sz.width(), sz.height())
+        return deco
+
     def band_height(self, widget):
         """Height of the strip beneath the thumbnail that holds the number."""
         return widget.fontMetrics().height() + 2 * self.LABEL_PAD
@@ -70,14 +106,16 @@ class _IndexDelegate(QStyledItemDelegate):
         font.setBold(True)
         painter.save()
         if annotated:
-            # Border around the thumbnail area (cell above the number band).
+            # Border drawn just outside the thumbnail image itself, so it hugs
+            # the picture and stays clear of any item frame / selection ring
+            # the theme draws around the whole cell.
             half = self.BORDER_W / 2.0
+            img = self._image_rect(option, index)
             painter.setRenderHint(QPainter.Antialiasing, True)
             painter.setPen(QPen(self._color, self.BORDER_W))
             painter.setBrush(Qt.NoBrush)
-            painter.drawRect(QRectF(r.left() + half, r.top() + half,
-                                    r.width() - self.BORDER_W,
-                                    r.height() - band_h - self.BORDER_W))
+            painter.drawRoundedRect(img.adjusted(-half, -half, half, half),
+                                    THUMB_RADIUS + half, THUMB_RADIUS + half)
         painter.setPen(color)
         painter.setFont(font)
         painter.drawText(band, Qt.AlignCenter, str(index.row() + 1))
@@ -89,6 +127,7 @@ class Filmstrip(QListWidget):
 
     def __init__(self, parent=None, thumb_height=72, batch_size=12, batch_delay=40):
         super().__init__(parent)
+        self.setObjectName("filmstrip")   # targets the QSS filmstrip rules
 
         self._folder = ""
         self._names = []
@@ -184,9 +223,10 @@ class Filmstrip(QListWidget):
             # dimensions for the hover tooltip before scaling it down, so hover
             # never has to reopen the file.
             item.setData(ROLE_DIMS, (pix.width(), pix.height()))
-            item.setIcon(QIcon(pix.scaled(self.iconSize(),
-                                          Qt.KeepAspectRatio,
-                                          Qt.SmoothTransformation)))
+            scaled = pix.scaled(self.iconSize(),
+                                Qt.KeepAspectRatio,
+                                Qt.SmoothTransformation)
+            item.setIcon(QIcon(_round_pixmap(scaled, radius=THUMB_RADIUS)))
         if self._pending:
             QTimer.singleShot(self._batch_delay, lambda: self._load_batch(token))
 
