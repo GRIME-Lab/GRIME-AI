@@ -34,7 +34,7 @@ class GeneralLoRAWrapper:
             "modules_to_save": list(self.modules_to_save),
         }
 
-    def apply(self, model, device="cuda"):
+    def apply(self, model, device=None):
         """
         Wrap an existing base model with LoRA. Returns the wrapped model.
         Does not alter your training loop; only trainable params differ.
@@ -47,6 +47,9 @@ class GeneralLoRAWrapper:
             target_modules=self.target_modules,
             modules_to_save=self.modules_to_save,
         )
+        if device is None:
+            from appcore.ml_core.device_utils import get_device
+            device = get_device()
         self._peft_model = get_peft_model(model, lcfg).to(device)
         return self._peft_model
 
@@ -67,9 +70,12 @@ class GeneralLoRAWrapper:
             raise RuntimeError("No LoRA-wrapped model to save.")
         self._peft_model.save_pretrained(output_dir)
 
-    def load_adapters(self, base_model, adapter_dir: str, device="cuda"):
+    def load_adapters(self, base_model, adapter_dir: str, device=None):
         """
         Load adapters onto a fresh base model. Returns LoRA-wrapped model.
         """
+        if device is None:
+            from appcore.ml_core.device_utils import get_device
+            device = get_device()
         self._peft_model = PeftModel.from_pretrained(base_model, adapter_dir).to(device)
         return self._peft_model

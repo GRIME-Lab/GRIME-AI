@@ -27,6 +27,7 @@ from appcore.ml_core.convergence_analysis import ImprovementTracker
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 import torchvision.transforms.functional as TF
 from appcore.ml_core.segformer_errors import SegFormerError
+from appcore.ml_core import device_utils
 from appcore.ml_core.segformer_inference_engine import ARGMAX_EQUIVALENT_THRESHOLD
 
 # ======================================================================================================================
@@ -116,7 +117,7 @@ class SegFormerConfig:
     num_epochs: int = 10
     val_every: int = 1
     seed: int = 42
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
+    device: str = device_utils.get_device_type()
     output_dir: str = "outputs_segformer"
     amp: bool = True
     grad_clip_norm: float = 1.0
@@ -232,8 +233,7 @@ class SegFormerTrainer:
     def set_seed(self):
         random.seed(self.cfg.seed)
         np.random.seed(self.cfg.seed)
-        torch.manual_seed(self.cfg.seed)
-        torch.cuda.manual_seed_all(self.cfg.seed)
+        device_utils.manual_seed_all(self.cfg.seed)
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
 
@@ -321,8 +321,7 @@ class SegFormerTrainer:
             model.decode_head.classifier.in_channels, num_labels, kernel_size=1
         )
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        return model.to(device).train()
+        return model.to(self.cfg.device).train()
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
@@ -859,9 +858,12 @@ class SegFormerTrainer:
     # ------------------------------------------------------------------------------------------------------------------
     def _preflight(self):
         """Checks that must pass before any data is loaded."""
-        if not torch.cuda.is_available():
-            raise SegFormerError("SegFormer training requires an NVIDIA GPU with CUDA, "
+        if not device_utils.gpu_available():
+            raise SegFormerError("SegFormer training requires a GPU (NVIDIA CUDA or Apple Silicon), "
                                  "and none is available on this computer.")
+        # Mixed precision is CUDA-only; MPS trains in full precision.
+        if not device_utils.amp_supported(self.cfg.device):
+            self.cfg.amp = False
         if not self.cfg.output_dir:
             raise SegFormerError("The model output folder could not be created.")
         try:
@@ -925,13 +927,13 @@ class SegFormerTrainer:
         g = torch.Generator().manual_seed(self.cfg.seed)
         train_loader = DataLoader(
             train_ds, batch_size=self.cfg.batch_size, shuffle=True,
-            num_workers=self.cfg.num_workers, pin_memory=True,
+            num_workers=self.cfg.num_workers, pin_memory=device_utils.pin_memory_supported(self.cfg.device),
             generator=g, worker_init_fn=_worker_init_fn,
             persistent_workers=(self.cfg.num_workers > 0),
         )
         val_loader = DataLoader(
             val_ds, batch_size=self.cfg.batch_size, shuffle=False,
-            num_workers=self.cfg.num_workers, pin_memory=True,
+            num_workers=self.cfg.num_workers, pin_memory=device_utils.pin_memory_supported(self.cfg.device),
             worker_init_fn=_worker_init_fn, persistent_workers=(self.cfg.num_workers > 0),
         )
 
@@ -982,7 +984,7 @@ class SegFormerTrainer:
         tversky = TverskyLoss(alpha=getattr(self.cfg, "tversky_alpha", 0.5),
                               beta=getattr(self.cfg, "tversky_beta", 0.5))
         self._loss_spec = self._build_loss_spec(loss_name, ce_loss, dice_loss, focal, tversky)
-        scaler = torch.amp.GradScaler("cuda", enabled=self.cfg.amp)
+        scaler = torch.amp.GradScaler("cuda", enabled=self.cfg.amp and device_utils.amp_supported(self.cfg.device))
 
         metrics_log_path = os.path.join(
             self.cfg.output_dir,
@@ -1060,7 +1062,8 @@ class SegFormerTrainer:
                             torch.use_deterministic_algorithms(True, warn_only=True)
 
                     with allow_nondeterminism():
-                        with torch.amp.autocast("cuda", enabled=self.cfg.amp):
+                        with torch.amp.autocast(device_utils._type_of(self.cfg.device),
+                                                enabled=self.cfg.amp and device_utils.amp_supported(self.cfg.device)):
                             outputs = model(pixel_values=imgs)
                             logits = outputs.logits
                             logits = torch.nn.functional.interpolate(
@@ -1103,7 +1106,7 @@ class SegFormerTrainer:
                 print(f"Epoch {epoch}/{self.cfg.num_epochs} | Train loss: {avg_loss:.4f} | Acc: {train_accuracy:.4f}")
 
                 # GPU memory cleanup after each epoch
-                torch.cuda.empty_cache()
+                device_utils.empty_cache(self.cfg.device)
 
                 if epoch % self.cfg.val_every == 0:
                     result = self.evaluate(model, val_loader, ce_loss, dice_loss, num_labels)

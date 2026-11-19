@@ -140,13 +140,6 @@
             <property name="text"><string>YOLOv11-seg</string></property>
            </widget>
           </item>
-          <item>
-           <widget class="QRadioButton" name="radioButton_train_model_SAM3">
-            <property name="font"><font><family>Arial</family><pointsize>10</pointsize></font></property>
-            <property name="toolTip"><string>LoRA fine-tune SAM3 concept segmentation on COCO-annotated training data.</string></property>
-            <property name="text"><string>SAM3 w/LoRA</string></property>
-           </widget>
-          </item>
          </layout>
         </widget>
        </item>

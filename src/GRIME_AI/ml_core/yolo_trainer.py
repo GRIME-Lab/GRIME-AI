@@ -44,6 +44,7 @@ from appcore.Save_Utils import Save_Utils
 from appcore.App_QMessageBox import App_QMessageBox
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.ml_core import device_utils
 from ..app_identity import APP_DISPLAY_NAME
 
 
@@ -544,9 +545,8 @@ class YOLOTrainer:
         self._resolved_yolo_base = Path(weights_path).name  # e.g. "yolo11l-seg.pt"
 
         # Free any GPU memory held by previous models in this session
-        torch.cuda.empty_cache()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        device_utils.empty_cache()
+        device_utils.synchronize()
 
         # Reset metric lists
         for attr in ("epoch_list", "loss_values", "train_accuracy_values",
@@ -592,7 +592,7 @@ class YOLOTrainer:
             amp=False,
             workers=0,
             imgsz=640,            # 640 uses ~4x less VRAM than 1280
-            device=0 if torch.cuda.is_available() else "cpu",
+            device=device_utils.ultralytics_device(),
         )
 
         # ── Launch worker thread ──────────────────────────────────────────────
@@ -864,7 +864,7 @@ class YOLOTrainer:
             return
 
         model = YOLO(model_path)
-        model.to(0 if torch.cuda.is_available() else "cpu")
+        model.to(device_utils.get_device())
 
         MAX_PIXEL_SAMPLES = 10_000
         rng = random.Random(42)

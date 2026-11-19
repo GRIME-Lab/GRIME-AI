@@ -24,6 +24,7 @@ import matplotlib.pyplot as plt
 import torch
 from PyQt5.QtWidgets import QMessageBox
 
+from appcore.ml_core import device_utils
 from appcore.ml_core.ml_helpers import (
     init_coco_structure, add_coco_entries, save_coco_json
 )
@@ -350,14 +351,13 @@ class YOLOInferenceEngine:
             images_found  += 1
 
             # Periodic GPU cache clear (mirrors SAM2 pattern)
-            if torch.cuda.is_available() and img_index % 10 == 0:
-                torch.cuda.empty_cache()
+            if img_index % 10 == 0:
+                device_utils.empty_cache(self.device)
 
         if progressBar is not None and progressBar.isVisible():
             progressBar.close()
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_utils.empty_cache(self.device)
 
         save_coco_json(coco_data, self.predictions_output_path)
 

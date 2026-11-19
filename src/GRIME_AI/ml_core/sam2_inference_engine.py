@@ -31,6 +31,7 @@ from hydra import initialize, compose
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
+from appcore.ml_core import device_utils
 from appcore.ml_core.ml_helpers import (get_color_for_category, init_coco_structure,
                                           add_coco_entries, save_coco_json,
                                           build_centroid_point_prompts)
@@ -819,8 +820,7 @@ class SAM2InferenceEngine:
 
         
         # Final GPU cleanup
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_utils.empty_cache(self.device)
 
         save_coco_json(coco_data, self.predictions_output_path)
 
@@ -939,13 +939,12 @@ class SAM2InferenceEngine:
             annotation_id += 1
             
             # Clear GPU cache periodically
-            if torch.cuda.is_available() and img_index % 10 == 0:
-                torch.cuda.empty_cache()
+            if img_index % 10 == 0:
+                device_utils.empty_cache(self.device)
 
         
         # Final GPU cleanup
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_utils.empty_cache(self.device)
 
         save_coco_json(coco_data, self.predictions_output_path)
 

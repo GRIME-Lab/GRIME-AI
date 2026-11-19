@@ -53,11 +53,12 @@ from appcore.App_QMessageBox import App_QMessageBox
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
 from appcore.utils.datasetutils import DatasetUtils
+from appcore.ml_core import device_utils
 from appcore.ml_core.ml_helpers import (build_centroid_point_prompts, sample_pooled_prompts,
                                          DEFAULT_MAX_POSITIVES as _DEFAULT_MAX_POSITIVES,
                                          DEFAULT_NEGATIVE_BALANCE as _DEFAULT_NEGATIVE_BALANCE)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = device_utils.get_device()
 print(f"Using device: {device}")
 print(sam2_base.__file__)
 
@@ -569,7 +570,7 @@ class SAM2Trainer:
 
             checkpoint = torch.load(
                 sam2_checkpoint,
-                map_location=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+                map_location=device
             )
             if "model" in checkpoint:
                 model.load_state_dict(checkpoint["model"], strict=False)
@@ -592,7 +593,7 @@ class SAM2Trainer:
         model = instantiate(new_cfg, _recursive_=True)
 
         ckpt = torch.load(checkpoint,
-                          map_location=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+                          map_location=device)
         model.load_state_dict(ckpt["model"] if "model" in ckpt else ckpt, strict=False)
         # --- END HYDRA PATCH
 
@@ -717,8 +718,7 @@ class SAM2Trainer:
         seed = 42
         random.seed(seed)
         np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        device_utils.manual_seed_all(seed)
 
         torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.deterministic = True
@@ -782,7 +782,8 @@ class SAM2Trainer:
         self.lr_values = []
 
         # Note: loss_fn defined here but not passed to validation anymore
-        use_amp = True
+        # Mixed precision on CUDA (bf16/fp16) and CPU (bf16); MPS trains in full precision.
+        use_amp = device.type != "mps"
         if use_amp and device.type == "cuda":
             # MAKE PORTABLE ACROSS GPU AND CPU MACHINES
             try:
@@ -894,10 +895,10 @@ class SAM2Trainer:
                       f"IoU: {train_iou:.4f}")
 
                 # Clear GPU cache after training to prevent memory accumulation
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    cur_mb = torch.cuda.memory_allocated() / 1024 ** 2
-                    res_mb = torch.cuda.memory_reserved() / 1024 ** 2
+                device_utils.empty_cache(device)
+                _mem = device_utils.memory_mb(device)
+                if _mem is not None:
+                    cur_mb, res_mb = _mem
                     trend = ""
                     if _prev_train_vram_mb is not None:
                         delta = cur_mb - _prev_train_vram_mb
@@ -1282,6 +1283,12 @@ class SAM2Trainer:
         Selects the best available SDPA backend once, to be reused throughout training.
         Returns the selected backend or None if all fail.
         """
+        # SDPBackend selection is a CUDA feature; MPS and CPU use PyTorch's
+        # default attention kernel.
+        if device.type != "cuda":
+            print("\n=== SDPA Backend: default (non-CUDA device) ===")
+            return None
+
         # Enable all SDP backends — allows CuDNN fused attention on RTX 40-series
         torch.backends.cuda.enable_cudnn_sdp(True)
         torch.backends.cuda.enable_flash_sdp(True)
@@ -1975,8 +1982,8 @@ class SAM2Trainer:
 
             # Periodically clear GPU cache to prevent VRAM fragmentation
             _since_cache_clear += batch_valid
-            if _since_cache_clear >= 20 and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if _since_cache_clear >= 20:
+                device_utils.empty_cache(device)
                 _since_cache_clear = 0
 
             # Explicitly free batch tensors to prevent VRAM accumulation
@@ -2442,10 +2449,10 @@ class SAM2Trainer:
               f"iou={self.val_iou_best_thr:.3f}")
 
         # Clear GPU cache after validation to prevent memory accumulation
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            cur_mb = torch.cuda.memory_allocated() / 1024 ** 2
-            res_mb = torch.cuda.memory_reserved() / 1024 ** 2
+        device_utils.empty_cache(device)
+        _mem = device_utils.memory_mb(device)
+        if _mem is not None:
+            cur_mb, res_mb = _mem
             trend = ""
             if self._prev_val_vram_mb is not None:
                 delta = cur_mb - self._prev_val_vram_mb
@@ -2833,7 +2840,12 @@ class SAM2Trainer:
             text_file.write(f"Max Positive Prompts: {self.site_config.get('max_positives', _DEFAULT_MAX_POSITIVES)}\n")
             text_file.write(f"Negative Balance: {self.site_config.get('negative_balance', _DEFAULT_NEGATIVE_BALANCE)}:1\n")
             text_file.write(f"Batch Size: {getattr(self, 'batch_size', 1)}\n")
-            _amp = "bf16" if (torch.cuda.is_available() and torch.cuda.is_bf16_supported(including_emulation=False)) else "fp16"
+            if device.type == "mps":
+                _amp = "off (fp32)"
+            elif device.type == "cpu":
+                _amp = "bf16"
+            else:
+                _amp = "bf16" if torch.cuda.is_bf16_supported(including_emulation=False) else "fp16"
             text_file.write(f"AMP dtype: {_amp}\n")
             if getattr(self, "val_best_thr", None) is not None:
                 text_file.write(f"Val F1-optimal threshold: {self.val_best_thr:.3f} "

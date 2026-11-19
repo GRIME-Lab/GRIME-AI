@@ -34,6 +34,7 @@ from appcore.ml_core.segformer_inference_engine import SegFormerInferenceEngine
 from appcore.ml_core.segformer_errors import SegFormerError
 from appcore.ml_core.yolo_inference_engine import YOLOInferenceEngine
 from appcore.ml_core.ml_helpers import add_coco_entries
+from appcore.ml_core import device_utils
 from ..app_identity import APP_DISPLAY_NAME
 
 
@@ -122,8 +123,7 @@ class MLImageSegmentation:
             msg = (f"SegFormer segmentation stopped because of an unexpected error.\n\n"
                    f"{type(error).__name__}: {error}")
         print(f"[{self.className}] {msg}")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_utils.empty_cache()
         QMessageBox.critical(None, "SegFormer Segmentation Error", msg)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -147,7 +147,7 @@ class MLImageSegmentation:
 
         self.progress_bar_closed = False
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = device_utils.get_device()
 
         self.num_classes = len(selected_label_categories) + 1  # +1 for background
 
@@ -177,7 +177,7 @@ class MLImageSegmentation:
         predictor = None
         if mode.lower() == "sam2":
             engine = SAM2InferenceEngine(
-                device=torch.device("cuda"),
+                device=device,
                 model_cfg="sam2.1_hiera_l.yaml",
                 trained_checkpoint_path=self.SAM2_MODEL,
                 input_dir=self.segmentation_images_path,
@@ -323,13 +323,13 @@ class MLImageSegmentation:
                 final_predictor = result
 
             # Print GPU memory usage after each folder
-            if torch.cuda.is_available():
-                allocated = torch.cuda.memory_allocated() / 1024**2
-                reserved  = torch.cuda.memory_reserved()  / 1024**2
+            _mem = device_utils.memory_mb(device)
+            if _mem is not None:
+                allocated, reserved = _mem
                 print(f"[GPU Memory] After '{os.path.basename(input_dir)}': "
                       f"allocated={allocated:.1f} MB, reserved={reserved:.1f} MB")
             else:
-                print(f"[GPU Memory] CUDA not available — running on CPU")
+                print(f"[GPU Memory] No GPU available — running on CPU")
 
             # Stop if user closed the progress bar
             if self.progress_bar_closed:
@@ -345,9 +345,8 @@ class MLImageSegmentation:
             del engine
         except Exception:
             pass
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
+        device_utils.empty_cache(device)
+        device_utils.synchronize(device)
 
         # Close progress bar
         try:

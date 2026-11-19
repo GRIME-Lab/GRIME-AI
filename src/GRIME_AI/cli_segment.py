@@ -52,6 +52,7 @@ import numpy as np
 import torch
 from PIL import Image
 from appcore.app_identity import APP_DISPLAY_NAME
+from appcore.ml_core import device_utils
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -336,7 +337,7 @@ def main():
 
     image_list = collect_images(args)
     category = {"id": args.category_id, "name": args.category_name}
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = device_utils.get_device()
 
     print(f"[{APP_DISPLAY_NAME}] Using device: {device}")
     print(f"[{APP_DISPLAY_NAME}] Mode:         {args.mode.upper()}")
