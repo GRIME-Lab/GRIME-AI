@@ -256,8 +256,19 @@ def build_model_card(info):
             f"| Early stopping | {'triggered at epoch ' + str(info.get('early_stop_epoch')) if info.get('early_stopped') else 'not triggered'} |",
             f"| LR scheduler | {'ReduceLROnPlateau' if info.get('lr_scheduler_enabled') else 'none'} |",
             f"| Checkpoint selection | {best.get('selection_rule', 'lowest validation loss')} |",
-            f"| Device | {info.get('device', 'N/A')} |",
             ""]
+
+    # ---------------- Platform (where the model was trained) ----------------
+    plat = info.get("platform") or {}
+    plat_labels = [("device", "Device"), ("gpu", "GPU"), ("os", "Operating system"),
+                   ("python", "Python"), ("pytorch", "PyTorch"), ("mixed_precision", "Mixed precision")]
+    out += ["## Training platform", "",
+            "| Field | Value |", "|---|---|"]
+    if plat:
+        out += [f"| {label} | {plat.get(key, 'N/A')} |" for key, label in plat_labels]
+    else:
+        out += [f"| Device | {info.get('device', 'N/A')} |"]
+    out += [""]
 
     # ---------------- Evaluation ----------------
     out += ["## Evaluation", "",

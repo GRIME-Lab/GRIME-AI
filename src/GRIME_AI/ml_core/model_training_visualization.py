@@ -1316,6 +1316,7 @@ class ModelTrainingVisualization:
             best_eval: dict = None,               # metrics of the saved best checkpoint
             foreground_stats: dict = None,        # {"train": {...}, "val": {...}} target pixel fraction
             train_dice: list[float] = None,       # per-epoch train Dice (diagnostics)
+            platform: dict = None,                # device_utils.platform_info(); detected if None
     ) -> dict:
         """
         Runs analyze_training_results() and saves a formatted PDF report
@@ -1555,6 +1556,12 @@ class ModelTrainingVisualization:
                                     f"mean {st['mean']:.4f}, median {st['median']:.4f}, "
                                     f"std {st['std']:.4f}"))
             _meta_table(ds_rows)
+
+        # --- Platform (where the model was trained) ---
+        from appcore.ml_core import device_utils
+        _plat = platform or device_utils.platform_info()
+        _section_header("Platform")
+        _meta_table([(label, str(_plat.get(key, "N/A"))) for key, label in device_utils.PLATFORM_LABELS])
 
         # --- Model Parameters (SAM2-specific) ---
         if blob_radius_pct is not None:

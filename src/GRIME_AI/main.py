@@ -38,6 +38,13 @@
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
+# Apple Silicon (MPS): ops MPS has not implemented run on the CPU instead of
+# raising. Must be set before torch is imported anywhere.
+import os as _os
+_os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 try:
     # TRY TO IMPORT THE VERSION CONSTANT FROM VERSION.PY
     from appcore.version import SW_VERSION
@@ -9993,8 +10000,8 @@ def run_cli(args):
             sys.exit(1)
         os.makedirs(args.output, exist_ok=True)
 
-        import torch
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        from appcore.ml_core import device_utils
+        device = device_utils.get_device()
         category = {"id": args.category_id, "name": args.category_name}
 
         print(f"[{APP_DISPLAY_NAME}] Mode:      {args.mode.upper()}")
@@ -10704,8 +10711,7 @@ def train_main(cfg: DictConfig) -> None:
         # FETCH ANY DATA WE NEED FROM THE MACHINE LEARNING DIALOG
         selected_training_model = hyperparameterDlg.get_selected_training_model()
 
-        # WE ONLY USE HYDRA WITH SEGMENT ANYTHING MODEL (SAM, SAM2, SAM3)
-        # SAM2 uses Hydra; SAM3 (LoRA subprocess) does not. Match SAM2 specifically.
+        # WE ONLY USE HYDRA WITH SEGMENT ANYTHING MODEL (SAM, SAM2)
         if selected_training_model.lower() in ("sam", "sam2"):
             print("Config path:", myconfig_path)
             print("Config name:", myconfig_name)
@@ -10737,7 +10743,7 @@ def train_main(cfg: DictConfig) -> None:
             pass
 
         # Prompt user about suggested blob radius if available
-        # Blob-radius prompt is a SAM2 artifact; SAM3 produces none.
+        # Blob-radius prompt applies to SAM2 only.
         if trainer is not None and selected_training_model.lower() in ("sam", "sam2"):
             try:
                 hyperparameterDlg.training_tab.prompt_blob_radius_update(trainer)

@@ -357,15 +357,15 @@ class TrainingTab(QtWidgets.QWidget):
         # GPU is mandatory for training — detect and gate the Train button.
         # No device widget: there is nothing for the user to choose.
         try:
-            import torch
-            gpu_available = torch.cuda.is_available()
+            from appcore.ml_core import device_utils
+            gpu_available = device_utils.gpu_available()
         except Exception:
             gpu_available = False
 
         if not gpu_available:
             self.pushButton_train.setEnabled(False)
             self.pushButton_train.setToolTip(
-                "No CUDA-capable GPU detected. Training requires a GPU."
+                "No GPU detected (NVIDIA CUDA or Apple Silicon). Training requires a GPU."
             )
 
         # Uniform parameter field widths, computed from font metrics so the
@@ -730,7 +730,6 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
         self.radioButton_train_model_segformer.toggled.connect(lambda checked: self.set_training_model("segformer", checked))
         # [MASKRCNN] self.radioButton_train_model_MaskRCNN.toggled.connect(lambda checked: self.set_training_model("maskrcnn", checked))
         self.radioButton_train_model_YOLO.toggled.connect(lambda checked: self.set_training_model("yolo", checked))
-        self.radioButton_train_model_SAM3.toggled.connect(lambda checked: self.set_training_model("sam3", checked))
 
         # Default selection
         self.selected_training_model = self.get_selected_model()
@@ -933,7 +932,7 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
         Turn LoRA section on only when the LoRA/SegFormer training model
         is selected; keep it greyed out for SAM2 and Mask R-CNN.
         """
-        is_lora = (getattr(self, "selected_training_model", "") in ("segformer", "sam3"))
+        is_lora = (getattr(self, "selected_training_model", "") == "segformer")
         self._set_lora_enabled(is_lora)
 
     # ------------------------------------------------------------------------
@@ -1259,12 +1258,13 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
 
         # Model selection radio buttons
         model = cfg.get("load_model", {}).get("MODEL", "sam2").lower()
+        if model not in ("sam2", "segformer", "yolo"):
+            model = "sam2"  # e.g. old configs saved with "sam3" (inference-only now)
         self.selected_training_model = model
         self.radioButton_train_model_SAM2.setChecked(model == "sam2")
         self.radioButton_train_model_segformer.setChecked(model == "segformer")
         # [MASKRCNN] self.radioButton_train_model_MaskRCNN.setChecked(model == "maskrcnn")
         self.radioButton_train_model_YOLO.setChecked(model == "yolo")
-        self.radioButton_train_model_SAM3.setChecked(model == "sam3")
 
         # Labels/categories
         labels = cfg.get("train_model", {}).get("TRAINING_CATEGORIES", [])
@@ -1362,7 +1362,6 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
             self.radioButton_train_model_segformer: "segformer",
             # [MASKRCNN] self.radioButton_train_model_MaskRCNN: "maskrcnn",
             self.radioButton_train_model_YOLO: "yolo",
-            self.radioButton_train_model_SAM3: "sam3",
         }
         for button, model in button_map.items():
             if button.isChecked():
@@ -2229,7 +2228,6 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
                 or self.radioButton_train_model_segformer.isChecked()
                 # [MASKRCNN] or self.radioButton_train_model_MaskRCNN.isChecked()
                 or self.radioButton_train_model_YOLO.isChecked()
-                or self.radioButton_train_model_SAM3.isChecked()
         ):
             missing.append("Training model selection")
 

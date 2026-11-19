@@ -22,6 +22,7 @@ from appcore.JSON_Editor import JsonEditor
 from appcore.ml_core.segformer_errors import SegFormerError
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from appcore.ml_core.lora_wrapper import GeneralLoRAWrapper
+from appcore.ml_core import device_utils
 
 # ----------------------------------------------------------------------------------------------------------------------
 # WARNING AND ERROR LOGGING
@@ -34,7 +35,7 @@ if True:
 # ----------------------------------------------------------------------------------------------------------------------
 # GET DEVICE TO BE USED
 # ----------------------------------------------------------------------------------------------------------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = device_utils.get_device()
 print(f"Using device: {device}")
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -120,17 +121,6 @@ class MLModelTraining:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def _sam3_checkpoint_path(self):
-        """Local SAM3 base checkpoint (<user root>/sam3.pt). Returns the
-        path if it exists so training loads from disk (no HF download/auth);
-        None otherwise, letting the trainer fall back to HuggingFace."""
-        try:
-            from appcore import PROJECT_ROOT
-            p = os.path.join(str(PROJECT_ROOT), "sam3.pt")
-            return p if os.path.exists(p) else None
-        except Exception:
-            return None
-
     def Model_Training_Dispatcher(self, cfg=None, mode="sam2"):
         """
         Unified training entry point.
@@ -156,9 +146,6 @@ class MLModelTraining:
         except OSError as e:
             print(f"Error creating folders: {e}")
 
-
-        ###JES TEST TEST TEST TEST TEST
-        ###JES mode = "sam3"
 
         # --------------------------------------------------------------------
         #      SAM2   ---   SAM2   ---   SAM2   ---   SAM2   ---   SAM2
@@ -187,62 +174,12 @@ class MLModelTraining:
             return mySAM2_pipeline
 
         # --------------------------------------------------------------------
-        #      SAM3   ---   SAM3   ---   SAM3   ---   SAM3   ---   SAM3
-        # --------------------------------------------------------------------
-        elif mode.lower() == "sam3":
-            # SAM3 LoRA fine-tuning via the Sompote/SAM3_LoRA trainer, driven as a
-            # subprocess (SAM3LoRATrainer). Uses the same COCO training data and
-            # LoRA/hyperparameter fields the tab already collects.
-            from appcore.ml_core.sam3_lora_trainer import SAM3LoRATrainer
-
-            # Resolve the COCO data root. SAM3_LoRA expects
-            # <data_dir>/train/_annotations.coco.json (and optional valid/). The
-            # app provides a list of training folders; use the first as the root.
-            paths = self.site_config.get('Path', [])
-            data_dir = None
-            for path in paths:
-                folders = path.get('directoryPaths', {}).get('folders', [])
-                if folders:
-                    data_dir = folders[0]
-                    break
-            if not data_dir:
-                print("[SAM3] No training folder found; aborting SAM3 training.")
-                return None
-
-            lr = (self.learning_rates[0] if self.learning_rates
-                  else ModelConfigManager.get_default('learningRates')[0])
-
-            mySAM3_pipeline = SAM3LoRATrainer(
-                data_dir=data_dir,
-                output_dir=self.model_output_folder,
-                num_epochs=self.num_epochs,
-                batch_size=self.site_config.get(
-                    'batch_size', ModelConfigManager.get_default('batch_size')),
-                learning_rate=lr,
-                weight_decay=self.weight_decay,
-                rank=self.site_config.get('lora_rank',
-                                          ModelConfigManager.get_default('lora_rank')),
-                alpha=self.site_config.get('lora_alpha',
-                                           ModelConfigManager.get_default('lora_alpha')),
-                dropout=self.site_config.get('lora_dropout',
-                                             ModelConfigManager.get_default('lora_dropout')),
-                num_negatives=self.site_config.get('sam3_num_negatives', 3),
-                checkpoint_path=self._sam3_checkpoint_path(),
-            )
-            print("Begin SAM3 LoRA Training...")
-            rc = mySAM3_pipeline.run(on_output=lambda line: print(line))
-            print(f"Completed SAM3 LoRA Training (exit code {rc}).")
-            if rc == 0:
-                print(f"SAM3 LoRA weights: {mySAM3_pipeline.best_weights_path}")
-            return mySAM3_pipeline
-
-        # --------------------------------------------------------------------
         #     SegFormer  ---  SegFormer  ---  SegFormer  ---  SegFormer
         # --------------------------------------------------------------------
         elif mode.lower() == "segformer":
             try:
                 # Imported here, not at module level, so a SegFormer import problem
-                # cannot stop SAM2, SAM3 or YOLO training.
+                # cannot stop SAM2 or YOLO training.
                 from appcore.ml_core.segformer_trainer import SegFormerConfig
 
                 # Collect folders and annotations
@@ -367,7 +304,7 @@ class MLModelTraining:
 
             # AdamW is the only optimizer used project-wide (matches SAM2/SegFormer paths)
             optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=1e-4)
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = device_utils.get_device()
 
             trainer = MaskRCNNTrainer(model, train_loader, val_loader, optimizer, device)
             trainer.train(cfg.epochs)
@@ -433,8 +370,7 @@ class MLModelTraining:
             msg = (f"SegFormer training stopped because of an unexpected error.\n\n"
                    f"{type(error).__name__}: {error}")
         print(f"[{self.className}] {msg}")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        device_utils.empty_cache()
 
         from PyQt5.QtWidgets import QApplication, QMessageBox
         if QApplication.instance() is None:
