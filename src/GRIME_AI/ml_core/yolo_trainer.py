@@ -1157,6 +1157,7 @@ class YOLOTrainer:
             weight_decay=self.weight_decay,
             batch_size=self.batch_size,
             training_time_seconds=getattr(self, "training_time_seconds", None),
+            platform=device_utils.platform_info(None, "off (fp32)"),  # trained with amp=False
         )
 
     # ─────────────────────────────────────────────────────────────────────────

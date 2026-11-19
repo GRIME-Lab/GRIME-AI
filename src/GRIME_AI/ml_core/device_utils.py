@@ -141,3 +141,51 @@ def manual_seed_all(seed: int) -> None:
             torch.mps.manual_seed(seed)
         except Exception:
             pass
+
+
+# ------------------------------------------------------------------------------------------------------------------
+def _os_label() -> str:
+    import platform
+    system = platform.system()
+    if system == "Darwin":
+        return f"macOS {platform.mac_ver()[0]} ({platform.machine()})"
+    if system == "Windows":
+        return f"Windows {platform.release()} (build {platform.version()})"
+    return f"{system} {platform.release()} ({platform.machine()})"
+
+
+# ------------------------------------------------------------------------------------------------------------------
+def platform_info(device=None, mixed_precision=None) -> dict:
+    """
+    The platform a model was trained on, for the training report and model card.
+    mixed_precision: text from the trainer (e.g. "bf16", "fp16", "off (fp32)").
+    """
+    import platform
+    t = _type_of(device)
+    gpu = None
+    if t == "cuda":
+        try:
+            gpu = torch.cuda.get_device_name(0)
+        except Exception:
+            gpu = "NVIDIA GPU"
+    elif t == "mps":
+        gpu = "Apple Silicon GPU (MPS)"
+    return {
+        "device": {"cuda": "CUDA", "mps": "MPS", "cpu": "CPU"}.get(t, t),
+        "gpu": gpu or "none",
+        "os": _os_label(),
+        "python": platform.python_version(),
+        "pytorch": torch.__version__,
+        "mixed_precision": mixed_precision or "N/A",
+    }
+
+
+# Display labels for platform_info() keys, in display order.
+PLATFORM_LABELS = [
+    ("device", "Device"),
+    ("gpu", "GPU"),
+    ("os", "Operating System"),
+    ("python", "Python"),
+    ("pytorch", "PyTorch"),
+    ("mixed_precision", "Mixed Precision"),
+]

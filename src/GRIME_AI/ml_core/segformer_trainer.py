@@ -723,6 +723,9 @@ class SegFormerTrainer:
                 "val_split": getattr(self.cfg, "val_split", None),
             },
             val_best_threshold=self._f1_optimal_threshold(),
+            platform=device_utils.platform_info(
+                self.cfg.device,
+                "fp16" if (self.cfg.amp and device_utils.amp_supported(self.cfg.device)) else "off (fp32)"),
             # Every validation metric is computed at the F1-optimal threshold.
             val_dice_best_threshold=self.val_dice_values[best_idx] if best_idx is not None else None,
             check_threshold_calibration=False,

@@ -2840,13 +2840,7 @@ class SAM2Trainer:
             text_file.write(f"Max Positive Prompts: {self.site_config.get('max_positives', _DEFAULT_MAX_POSITIVES)}\n")
             text_file.write(f"Negative Balance: {self.site_config.get('negative_balance', _DEFAULT_NEGATIVE_BALANCE)}:1\n")
             text_file.write(f"Batch Size: {getattr(self, 'batch_size', 1)}\n")
-            if device.type == "mps":
-                _amp = "off (fp32)"
-            elif device.type == "cpu":
-                _amp = "bf16"
-            else:
-                _amp = "bf16" if torch.cuda.is_bf16_supported(including_emulation=False) else "fp16"
-            text_file.write(f"AMP dtype: {_amp}\n")
+            text_file.write(f"AMP dtype: {self._amp_label()}\n")
             if getattr(self, "val_best_thr", None) is not None:
                 text_file.write(f"Val F1-optimal threshold: {self.val_best_thr:.3f} "
                                 f"(Dice {self.val_dice_best_thr:.4f}, IoU {self.val_iou_best_thr:.4f})\n")
@@ -3115,6 +3109,7 @@ class SAM2Trainer:
                 "train": getattr(self, "time_train_seconds", None),
                 "validate": getattr(self, "time_val_seconds", None),
             },
+            platform=device_utils.platform_info(device, self._amp_label()),
         )
 
         # ── Model card ─────────────────────────────────────────────────────
@@ -3181,7 +3176,18 @@ class SAM2Trainer:
             "checkpoint_files": [os.path.basename(p) for _, p in self.best_checkpoints if p],
             "training_time_seconds": getattr(self, "training_time_seconds", None),
             "device": str(device),
+            "platform": device_utils.platform_info(device, self._amp_label()),
         }
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def _amp_label(self):
+        """Mixed precision used in training (matches the autocast setup)."""
+        if device.type == "mps":
+            return "off (fp32)"
+        if device.type == "cpu":
+            return "bf16"
+        return "bf16" if torch.cuda.is_bf16_supported(including_emulation=False) else "fp16"
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
