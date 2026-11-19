@@ -801,6 +801,7 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
         self._load_lr_scheduler_ui(self.site_config)
         self.checkBox_earlyStopping.setChecked(self.site_config.get("early_stopping", False))
         self.spinBox_patience.setValue(self.site_config.get("patience", 0))
+        self._load_model_specific_ui(self.site_config)
 
         self.current_path = self.site_config.get("Path", None)
 
@@ -1298,6 +1299,7 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
         self._load_lr_scheduler_ui(cfg)
         self.checkBox_earlyStopping.setChecked(bool(cfg.get("early_stopping", False)))
         self.spinBox_patience.setValue(int(cfg.get("patience", 3) or 3))
+        self._load_model_specific_ui(cfg)
 
         # Blob filter radius — stored as fraction, displayed as pixels
         blob_fraction = float(cfg.get("blob_filter_radius", 0.0))
@@ -1407,6 +1409,14 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
             "lr_scheduler_min_lr": self._lr_min_from_ui(),
             "early_stopping": bool(self.checkBox_earlyStopping.isChecked()),
             "patience": int(self.spinBox_patience.value()),
+            "backbone_size": self.comboBox_backboneSize.currentText(),
+            "loss_function": self.comboBox_lossFunction.currentText(),
+            "use_lora": bool(self.checkBox_useLoRA.isChecked()),
+            "lora_rank": int(self.spinBox_loraRank.value()),
+            "lora_alpha": int(self.spinBox_loraAlpha.value()),
+            "lora_dropout": float(self.doubleSpinBox_loraDropout.value()),
+            "lora_bias": self._lora_bias_from_ui(),
+            "lora_target_modules": self._lora_targets_from_ui(),
             "blob_filter_radius": self._blob_pixels_to_fraction(),
             "val_split":   round(self.spinBox_valSplit.value()   / 100.0, 2),
             "train_split": round(self.spinBox_trainSplit.value() / 100.0, 2),
@@ -2343,6 +2353,54 @@ QToolButton:checked { background: rgba(128,128,128,0.10); }
     # Validation overlay / LR scheduler helpers
     # ------------------------------------------------------------------------
     _OVERLAY_MODES = ("last", "every", "interval")
+
+    # Stored config values for the LoRA Bias combo, in combo order
+    # (None, All, Lora Only).
+    _LORA_BIAS_VALUES = ("none", "all", "lora_only")
+
+    # LoRA target module checkbox for each stored module name.
+    _LORA_TARGET_CHECKBOXES = (("query", "checkBox_loraQuery"),
+                               ("key", "checkBox_loraKey"),
+                               ("value", "checkBox_loraValue"))
+
+    def _load_model_specific_ui(self, cfg) -> None:
+        """Populate Backbone Size, Loss Function and the LoRA hyperparameters,
+        defaulting through the schema. A stored value the combo does not list
+        (e.g. a stale loss name) selects the first entry."""
+        _D = ModelConfigManager.get_default
+
+        def _select(combo, value):
+            idx = combo.findText(str(value))
+            combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        _select(self.comboBox_backboneSize, cfg.get("backbone_size", _D("backbone_size")))
+        _select(self.comboBox_lossFunction, cfg.get("loss_function", _D("loss_function")))
+
+        self.checkBox_useLoRA.setChecked(bool(cfg.get("use_lora", _D("use_lora"))))
+        self.spinBox_loraRank.setValue(int(cfg.get("lora_rank", _D("lora_rank"))))
+        self.spinBox_loraAlpha.setValue(int(cfg.get("lora_alpha", _D("lora_alpha"))))
+        self.doubleSpinBox_loraDropout.setValue(float(cfg.get("lora_dropout", _D("lora_dropout"))))
+
+        bias = str(cfg.get("lora_bias", _D("lora_bias")) or "").strip().lower()
+        self.comboBox_loraBias.setCurrentIndex(
+            self._LORA_BIAS_VALUES.index(bias) if bias in self._LORA_BIAS_VALUES else 0)
+
+        targets = {str(t).strip().lower()
+                   for t in (cfg.get("lora_target_modules", _D("lora_target_modules")) or [])}
+        for name, attr in self._LORA_TARGET_CHECKBOXES:
+            getattr(self, attr).setChecked(name in targets)
+
+    def _lora_bias_from_ui(self) -> str:
+        """Return the stored config value for the LoRA Bias combo."""
+        idx = self.comboBox_loraBias.currentIndex()
+        if 0 <= idx < len(self._LORA_BIAS_VALUES):
+            return self._LORA_BIAS_VALUES[idx]
+        return self._LORA_BIAS_VALUES[0]
+
+    def _lora_targets_from_ui(self) -> list:
+        """Return the checked LoRA target modules."""
+        return [name for name, attr in self._LORA_TARGET_CHECKBOXES
+                if getattr(self, attr).isChecked()]
 
     def _overlay_mode_from_ui(self) -> str:
         """Return the stored config value for the current combo selection."""
