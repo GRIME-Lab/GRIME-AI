@@ -268,8 +268,10 @@ class MLModelTraining:
                     num_epochs=self.num_epochs,
                     batch_size=self.site_config.get(
                         'batch_size', ModelConfigManager.get_default('batch_size')),
-                    backbone_size=self.site_config.get('backbone_size', 'b0'),
-                    loss_function=self.site_config.get('loss_function', 'ce_dice'),
+                    backbone_size=self.site_config.get(
+                        'backbone_size', ModelConfigManager.get_default('backbone_size')),
+                    loss_function=self.site_config.get(
+                        'loss_function', ModelConfigManager.get_default('loss_function')),
                     tversky_alpha=self.site_config.get('tversky_alpha', 0.5),
                     tversky_beta=self.site_config.get('tversky_beta', 0.5),
                     focal_gamma=self.site_config.get('focal_gamma', 2.0),
@@ -313,11 +315,24 @@ class MLModelTraining:
                     site_name=self.site_name,
                 )
 
+                # LoRA settings saved by the Training tab (or set in the Site
+                # Config Editor / CLI), defaulting through the schema.
+                _D = ModelConfigManager.get_default
+                use_lora = bool(self.site_config.get('use_lora', _D('use_lora')))
+                lora_target_modules = list(
+                    self.site_config.get('lora_target_modules', _D('lora_target_modules')) or [])
+                if use_lora and not lora_target_modules:
+                    raise SegFormerError("Use LoRA is on, but no LoRA target modules are selected. "
+                                         "Select at least one of Query, Key or Value.")
+
                 print("Begin SegFormer Training...")
                 self.run_segformer(self.all_folders, self.all_annotations, cfg,
-                              use_lora=self.site_config.get('use_lora', True),
-                              lora_target_modules=["query", "key", "value"],
-                              modules_to_save=["decode_head.classifier"])
+                              use_lora=use_lora,
+                              lora_target_modules=lora_target_modules,
+                              modules_to_save=["decode_head.classifier"],
+                              lora_rank=self.site_config.get('lora_rank', _D('lora_rank')),
+                              lora_alpha=self.site_config.get('lora_alpha', _D('lora_alpha')),
+                              lora_dropout=self.site_config.get('lora_dropout', _D('lora_dropout')))
                 print("Completed SegFormer Training...")
             except Exception as e:
                 return self._segformer_failed(e)
@@ -437,7 +452,10 @@ class MLModelTraining:
                       lora_target_modules=None,
                       modules_to_save=None,
                       site_name_plain=None,
-                      site_name_lora=None):
+                      site_name_lora=None,
+                      lora_rank=None,
+                      lora_alpha=None,
+                      lora_dropout=None):
         """
         Compose SegFormer training with optional LoRA wrapping.
         - Builds base SegFormer via SegFormerTrainer.
@@ -457,10 +475,11 @@ class MLModelTraining:
         base_model = trainer.build_model(num_labels=SegFormerTrainer.BINARY_NUM_LABELS)
 
         if use_lora:
+            _D = ModelConfigManager.get_default
             lora = GeneralLoRAWrapper(
-                r=cfg.__dict__.get("lora_r", 16),
-                alpha=cfg.__dict__.get("lora_alpha", 32),
-                dropout=cfg.__dict__.get("lora_dropout", 0.05),
+                r=int(lora_rank if lora_rank is not None else _D("lora_rank")),
+                alpha=int(lora_alpha if lora_alpha is not None else _D("lora_alpha")),
+                dropout=float(lora_dropout if lora_dropout is not None else _D("lora_dropout")),
                 target_modules=lora_target_modules or ["query", "key", "value"],
                 modules_to_save=modules_to_save or ["decode_head.classifier"],
                 task_type="FEATURE_EXTRACTION"
