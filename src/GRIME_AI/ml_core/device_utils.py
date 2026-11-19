@@ -143,6 +143,10 @@ def manual_seed_all(seed: int) -> None:
             pass
 
 
+# First Windows build number that is Windows 11 (Microsoft's published value).
+WINDOWS_11_FIRST_BUILD = 22000
+
+
 # ------------------------------------------------------------------------------------------------------------------
 def _os_label() -> str:
     import platform
@@ -150,7 +154,21 @@ def _os_label() -> str:
     if system == "Darwin":
         return f"macOS {platform.mac_ver()[0]} ({platform.machine()})"
     if system == "Windows":
-        return f"Windows {platform.release()} (build {platform.version()})"
+        # Windows 11 reports itself as version 10.0, so platform.release()
+        # can say "10". Windows 11 is identified by its build number.
+        version = platform.version()            # e.g. "10.0.22631"
+        try:
+            build = int(version.split(".")[2])
+        except (IndexError, ValueError):
+            build = 0
+        release = "11" if build >= WINDOWS_11_FIRST_BUILD else platform.release()
+        try:
+            edition = platform.win32_edition() or ""   # e.g. "Professional"
+        except Exception:
+            edition = ""
+        edition = {"Professional": "Pro", "Core": "Home"}.get(edition, edition)
+        name = f"Windows {release} {edition}".strip()
+        return f"{name} (build {version})"
     return f"{system} {platform.release()} ({platform.machine()})"
 
 
