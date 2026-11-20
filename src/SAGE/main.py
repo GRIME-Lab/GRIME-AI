@@ -2,6 +2,11 @@
 
 print(">>> RUNNING SAGE.main FROM:", __file__)
 
+import os
+# Apple Silicon (MPS): operations MPS has not implemented run on the CPU
+# instead of raising. Must be set before torch is imported (sam2 imports it).
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 import sam2
 print("SAM2 is being imported from:", sam2.__file__)
 
@@ -45,8 +50,9 @@ def parse_args():
     )
     parser.add_argument(
         "--device",
-        default="cuda",
-        help="Device string (e.g. 'cuda', 'cuda:0', 'cpu')",
+        default=None,
+        help="Device string (e.g. 'cuda', 'cuda:0', 'mps', 'cpu'). "
+             "Default: NVIDIA GPU if present, else Apple Silicon GPU, else CPU.",
     )
     return parser.parse_args()
 
