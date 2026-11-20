@@ -27,6 +27,10 @@ from appcore.App_QMessageBox import App_QMessageBox
 from appcore.JSON_Editor import JsonEditor
 from .app_identity import USER_ROOT, APP_CONFIG_FILENAME
 
+# Open image windows by title, so a second call with the same title updates
+# that window (as cv2.imshow did) and the window is not garbage-collected.
+_image_windows = {}
+
 
 # ======================================================================================================================
 #
@@ -56,6 +60,54 @@ class App_Utils:
         arr = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)
 
         return arr
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # Shows a NumPy image in a Qt window. Replaces cv2.imshow, which needs an
+    # OpenCV build with a GUI; GRIME AI uses the headless OpenCV build so that
+    # OpenCV does not bring Qt6 into the PyQt5 application.
+    # ------------------------------------------------------------------------------------------------------------------
+    def show_image_window(self, title, image, parent=None):
+        """
+        Show `image` in a window titled `title`, at its native size.
+        3-channel images are RGB (what convertQImageToMat returns); 4-channel are
+        RGBA; single-channel images (e.g. masks) are grayscale. Non-8-bit images
+        are scaled the way cv2.imshow scales them: floats x255, 16-bit /256.
+        """
+        from PyQt5.QtCore import Qt
+        from PyQt5.QtGui import QImage, QPixmap
+        from PyQt5.QtWidgets import QLabel
+
+        img = np.asarray(image)
+        if img.dtype != np.uint8:
+            if np.issubdtype(img.dtype, np.floating):
+                img = img * 255.0
+            elif img.dtype in (np.uint16, np.int16):
+                img = img / 256.0
+            img = np.clip(img, 0, 255).astype(np.uint8)
+        img = np.ascontiguousarray(img)
+
+        h, w = img.shape[:2]
+        if img.ndim == 2:
+            qimg = QImage(img.data, w, h, img.strides[0], QImage.Format_Grayscale8)
+        elif img.shape[2] == 4:
+            qimg = QImage(img.data, w, h, img.strides[0], QImage.Format_RGBA8888)
+        else:
+            qimg = QImage(img.data, w, h, img.strides[0], QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(qimg.copy())   # copy: the QImage must not keep pointing at img
+
+        window = _image_windows.get(title)
+        if window is None:
+            window = QLabel(parent)
+            window.setWindowFlags(Qt.Window)
+            window.setAttribute(Qt.WA_DeleteOnClose)
+            window.setWindowTitle(title)
+            window.destroyed.connect(lambda *_, t=title: _image_windows.pop(t, None))
+            _image_windows[title] = window
+        window.setPixmap(pixmap)
+        window.resize(pixmap.size())
+        window.show()
+        window.raise_()
+        return window
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
