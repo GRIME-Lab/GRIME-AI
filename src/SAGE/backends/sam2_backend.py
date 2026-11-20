@@ -13,13 +13,72 @@ from SAGE.core.segmentation_backend import SegmentationBackend
 from SAGE.utils.anchor_classifier import classify_by_anchors
 
 
+def _cpu_connected_components(mask):
+    """
+    CPU replacement for SAM2's CUDA connected-components kernel (sam2._C).
+
+    Same inputs and outputs as sam2.utils.misc.get_connected_components:
+    mask (N, 1, H, W) -> labels and areas, both (N, 1, H, W) int32 on the
+    mask's device. Labels use 8-connectivity; background pixels get label 0
+    and area 0; every foreground pixel gets the area of its component.
+    """
+    import cv2
+    import torch
+
+    m = mask.to(torch.uint8).contiguous().cpu().numpy()
+    labels = np.zeros(m.shape, dtype=np.int32)
+    areas = np.zeros(m.shape, dtype=np.int32)
+    for i in range(m.shape[0]):
+        _, lab, stats, _ = cv2.connectedComponentsWithStats(m[i, 0], connectivity=8)
+        area_of_label = stats[:, cv2.CC_STAT_AREA].astype(np.int32)
+        area_of_label[0] = 0                      # label 0 is background
+        labels[i, 0] = lab
+        areas[i, 0] = area_of_label[lab]
+    return (torch.from_numpy(labels).to(mask.device),
+            torch.from_numpy(areas).to(mask.device))
+
+
+def _install_cpu_connected_components():
+    """
+    SAM2's hole and small-region clean-up (used by the automatic mask generator,
+    i.e. Smart Select) calls a compiled CUDA kernel, sam2._C. The Mac (and any
+    CPU-only) build of SAM2 does not include it, and SAM2's own fallback returns
+    the wrong values, so the clean-up is skipped with a warning. When the kernel
+    is missing, use the CPU version above so the clean-up runs the same way it
+    does with the kernel.
+    """
+    try:
+        from sam2 import _C  # noqa: F401
+        return                                    # compiled kernel present
+    except Exception:
+        pass
+    import sam2.utils.misc as sam2_misc
+    sam2_misc.get_connected_components = _cpu_connected_components
+    print("SAM2 compiled kernel not found; using CPU connected components for mask clean-up.")
+
+
+_install_cpu_connected_components()
+
+
+def default_device() -> str:
+    """Best available device: NVIDIA CUDA, then Apple Silicon (MPS), then CPU."""
+    import torch
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 class SAM2Backend(SegmentationBackend):
-    def __init__(self, checkpoint_path, config_dir, config_name, device="cuda",
+    def __init__(self, checkpoint_path, config_dir, config_name, device=None,
                  use_texture_filter=False, use_mahalanobis=False, use_boundary_refinement=False):
         self.checkpoint_path = checkpoint_path
         self.config_dir = config_dir
         self.config_name = config_name
-        self.device = device
+        self.device = device or default_device()
+        print("Using device:", self.device)
         self.use_texture_filter = use_texture_filter
         self.use_mahalanobis = use_mahalanobis
         self.use_boundary_refinement = use_boundary_refinement
