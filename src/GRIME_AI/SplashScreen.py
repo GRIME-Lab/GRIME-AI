@@ -26,6 +26,13 @@ FADE_SNOW   = 'snow'    # random pixel blocks revealed gradually, then glow star
 # ======================================================================================================================
 ENV_FADE_MODE = 'APP_SPLASH_FADE_MODE'
 ENV_DONE_FILE = 'APP_SPLASH_DONE_FILE'
+ENV_MESSAGE   = 'APP_SPLASH_MESSAGE'
+
+# Optional message (e.g. "Loading ML Image Processing..."), drawn in black on a
+# strip added below the image, so it never covers the logo.
+MESSAGE_FONT       = 'Arial'
+MESSAGE_POINT_SIZE = 11
+MESSAGE_PADDING_PX = 8
 
 # ======================================================================================================================
 # Run as __main__ to display the splash screen.
@@ -43,9 +50,15 @@ if __name__ == '__main__':
 
     fade_mode = os.environ.get(ENV_FADE_MODE, FADE_SMOOTH)
     done_file = os.environ.get(ENV_DONE_FILE, '')
+    message   = os.environ.get(ENV_MESSAGE, '')
+
+    # Already dismissed before this process got going (the caller finished
+    # quickly): exit without flashing the splash on screen.
+    if done_file and os.path.exists(done_file):
+        sys.exit(0)
 
     from PyQt5.QtWidgets import QApplication, QWidget
-    from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QPen
+    from PyQt5.QtGui import QPixmap, QPainter, QFont, QColor, QPen, QFontMetrics
     from PyQt5.QtCore import Qt, QTimer, QRect
 
     app = QApplication([sys.argv[0]])   # only script name — Qt sees no extra args
@@ -58,6 +71,23 @@ if __name__ == '__main__':
         painter.setPen(Qt.black)
         painter.drawText(475, 220, version_str)
         painter.end()
+
+    if message:
+        # Extend the image with a strip in the image's own bottom-edge colour
+        # and draw the message centred in it.
+        font = QFont(MESSAGE_FONT, MESSAGE_POINT_SIZE)
+        strip_h = QFontMetrics(font).height() + MESSAGE_PADDING_PX * 2
+        img_w, img_h = pixmap.width(), pixmap.height()
+        strip_colour = pixmap.toImage().pixelColor(img_w // 2, img_h - 1)
+        extended = QPixmap(img_w, img_h + strip_h)
+        extended.fill(strip_colour)
+        painter = QPainter(extended)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.setFont(font)
+        painter.setPen(Qt.black)
+        painter.drawText(QRect(0, img_h, img_w, strip_h), Qt.AlignCenter, message)
+        painter.end()
+        pixmap = extended
 
     BORDER = 16
 
@@ -201,13 +231,16 @@ class SplashScreen:
     image_path : Absolute path to the splash image file.
     strVersion : Optional version string painted onto the image.
     fade_mode  : FADE_SMOOTH (default), FADE_NONE, or FADE_SNOW.
+    message    : Optional message shown below the image.
     """
 
     def __init__(self, image_path: str = '', strVersion: str = '',
-                 fade_mode: str = FADE_SMOOTH, delay: float = 2, pixmap=None):
+                 fade_mode: str = FADE_SMOOTH, delay: float = 2, pixmap=None,
+                 message: str = ''):
         self._image_path  = image_path
         self._version_str = strVersion
         self._fade_mode   = fade_mode
+        self._message     = message
         self._process     = None
         self._done_file   = None
 
@@ -221,6 +254,7 @@ class SplashScreen:
         env = os.environ.copy()
         env[ENV_FADE_MODE] = self._fade_mode
         env[ENV_DONE_FILE] = done_file
+        env[ENV_MESSAGE]   = self._message
 
         script = os.path.abspath(__file__)
         self._process = subprocess.Popen(

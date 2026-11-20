@@ -20,7 +20,7 @@ matplotlib.use("Qt5Agg")      # <<< FORCE Qt5Agg backend for PyQt5
 
 from appcore.utils.resource_utils import ui_path
 
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget
 from PyQt5.uic import loadUi
 
@@ -50,6 +50,14 @@ class ML_ImageProcessingDlg(QDialog):
         super().__init__(parent)
 
         loadUi(ui_path("ML_image_processing/QDialog_ML_ImageProcessing.ui"), self)
+
+        # The Close button was never connected: a QDialogButtonBox does not
+        # close its dialog on its own.
+        self.buttonBox_close.rejected.connect(self.reject)
+
+        # Request the title-bar close button explicitly. On macOS the red X is
+        # only enabled when this hint is set.
+        self.setWindowFlags(self.windowFlags() | Qt.WindowCloseButtonHint)
 
         # --------------------------------------------------------------------------------------------------------------
         # RESIZE DIALOG: 50% wider
