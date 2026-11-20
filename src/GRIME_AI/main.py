@@ -6639,22 +6639,21 @@ class MainWindow(QMainWindow):
         CONFIG_FILENAME = "site_config.json"
         site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
 
-        # Show a splash screen while the ML dialog loads
-        from PyQt5.QtGui import QPixmap, QColor
-        from PyQt5.QtCore import Qt
-        _splash_pix = QPixmap(480, 120)
-        _splash_pix.fill(QColor("#2b2b2b"))
-        _splash = QSplashScreen(_splash_pix, Qt.WindowStaysOnTopHint)
-        _splash.showMessage("Loading ML Image Processing...",
-                            Qt.AlignCenter | Qt.AlignVCenter,
-                            QColor("#ffffff"))
+        # Show the GRIME AI logo splash (the startup splash, with its glowing
+        # border) while the ML dialog loads. It runs in its own process, so the
+        # glow keeps animating while this process is busy building the dialog.
+        from appcore.SplashScreen import FADE_NONE
+        _splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
+        _splash = SplashScreen(image_path=os.path.join(_splash_dir, APP_LOGO_FILENAME),
+                               fade_mode=FADE_NONE,
+                               message="Loading ML Image Processing...")
         _splash.show()
-        QApplication.processEvents()
 
-        from appcore.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
-        hyperparameterDlg = ML_ImageProcessingDlg(frame)
-
-        _splash.finish(hyperparameterDlg)
+        try:
+            from appcore.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
+            hyperparameterDlg = ML_ImageProcessingDlg(frame)
+        finally:
+            _splash.dismiss()
 
         hyperparameterDlg.ml_train_signal.connect(train_main)
         hyperparameterDlg.ml_segment_signal.connect(segment_main)
