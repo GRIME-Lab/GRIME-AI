@@ -7580,9 +7580,9 @@ class MainWindow(QMainWindow):
                 # so when multiplied with original image removes all non-blue regions
                 result = cv2.bitwise_and(numpyImage, numpyImage, mask=mask)
 
-                cv2.imshow('frame', numpyImage)
-                cv2.imshow('mask', mask)
-                cv2.imshow('result', result)
+                App_Utils().show_image_window('frame', numpyImage)
+                App_Utils().show_image_window('mask', mask)
+                App_Utils().show_image_window('result', result)
 
                 tempCurrentImage = QImage(numpyImage, numpyImage.shape[1], numpyImage.shape[0], QImage.Format_RGB888)
                 currentImage = QPixmap(tempCurrentImage)
@@ -9238,7 +9238,7 @@ def NEON_labelOriginalImageDoubleClickEvent(self):
 # ======================================================================================================================
 def NEON_labelMouseDoubleClickEvent(self, event):
     img = App_Utils().convertQImageToMat(self.NEON_labelLatestImage.toImage())
-    cv2.imshow('Original', img)
+    App_Utils().show_image_window('Original', img)
 
     # ----------
     if 0:
