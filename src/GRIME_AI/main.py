@@ -143,8 +143,6 @@ import csv
 
 import urllib.request
 
-import promptlib
-
 import traceback
 
 from dataclasses import dataclass
@@ -5892,7 +5890,8 @@ class MainWindow(QMainWindow):
 
     def pushButton_NEON_BrowseImageFolder_Clicked(self, item):
         # PROMPT USER FOR FOLDER INTO WHICH TO DOWNLOAD THE IMAGES/FILES
-        folder =  promptlib.Files().dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select NEON image folder", "", options=QFileDialog.ShowDirsOnly)
 
         if os.path.exists(folder):
             self.edit_NEONSaveFilePath.setText(folder)
@@ -5902,7 +5901,8 @@ class MainWindow(QMainWindow):
         JsonEditor().update_json_entry("NEON_Image_Folder", folder)
 
     def pushButton_NEON_Browse_Clicked(self, item=None):
-        folder = promptlib.Files().dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select NEON image folder", "", options=QFileDialog.ShowDirsOnly)
 
         if folder:
             if not os.path.exists(folder):
@@ -5916,7 +5916,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     def pushButton_USGS_BrowseImageFolder_Clicked(self, item):
         # PROMPT USER FOR FOLDER INTO WHICH TO DOWNLOAD THE IMAGES/FILES
-        folder =  promptlib.Files().dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select USGS image folder", "", options=QFileDialog.ShowDirsOnly)
 
         if os.path.exists(folder):
             self.edit_USGSSaveFilePath.setText(folder)
@@ -6796,8 +6797,8 @@ class MainWindow(QMainWindow):
         response = msgBox.displayMsgBox()
 
         if response == QMessageBox.Yes:
-            prompter = promptlib.Files()
-            folder = prompter.dir()
+            folder = QFileDialog.getExistingDirectory(
+                self, "Select image folder to triage", "", options=QFileDialog.ShowDirsOnly)
 
             if len(folder) == 0:
                 strMessage = 'ERROR! Please specify an image folder containing images to triage.'
