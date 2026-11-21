@@ -9,9 +9,11 @@ from appcore.JSON_Editor import JsonEditor
 from pathlib import Path
 
 from PyQt5.uic import loadUi
-from PyQt5.QtCore import pyqtSlot, QTimer, Qt
+from PyQt5.QtCore import pyqtSlot, pyqtSignal, QThread, QTimer, Qt
 from PyQt5.QtGui import QTextOption
 from PyQt5.QtWidgets import QDialog, QFileDialog, QMessageBox
+
+from appcore.QProgressWheel import QProgressWheel
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,67 @@ from appcore.image_organizer import (
     move_files_to_subfolder, revert_operation,
     estimate_minute_collision_count,  # <-- warning estimator
 )
+
+
+# ======================================================================================================================
+# Background workers (keep the scan and the organize/revert off the UI thread)
+# ======================================================================================================================
+class _ScanWorker(QThread):
+    """Walk a folder and read each image's metadata off the UI thread. Emits
+    progress(done, total) and finished(result-dict)."""
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(object)
+
+    def __init__(self, folder, recursive, generation):
+        super().__init__()
+        self.folder = folder
+        self.recursive = recursive
+        self.generation = generation
+
+    def run(self):
+        result = {"generation": self.generation, "error": None, "imgs": [],
+                  "metas": {}, "total": 0, "with_ts": 0, "has_seconds": False}
+        try:
+            imgs = iter_images(Path(self.folder), self.recursive)
+            total = len(imgs)
+            metas = {}
+            with_ts = 0
+            has_seconds = False
+            for i, p in enumerate(imgs, 1):
+                m = read_image_metadata(p)
+                metas[str(p)] = m
+                if m.get("DateTimeFromMetadata"):
+                    with_ts += 1
+                if m.get("HasSeconds", False):
+                    has_seconds = True
+                self.progress.emit(i, total)
+            result.update(imgs=imgs, metas=metas, total=total,
+                          with_ts=with_ts, has_seconds=has_seconds)
+        except Exception as e:
+            result["error"] = str(e)
+        self.finished.emit(result)
+
+
+class _CoreWorker(QThread):
+    """Run a core function that accepts a progress_callback(done, total) off the
+    UI thread. Emits progress(done, total) and finished({'result':..., 'error':...})."""
+    progress = pyqtSignal(int, int)
+    finished = pyqtSignal(object)
+
+    def __init__(self, func, kwargs):
+        super().__init__()
+        self.func = func
+        self.kwargs = kwargs
+
+    def run(self):
+        out = {"result": None, "error": None}
+        try:
+            out["result"] = self.func(
+                progress_callback=lambda d, t: self.progress.emit(d, t),
+                **self.kwargs)
+        except Exception as e:
+            out["error"] = str(e)
+        self.finished.emit(out)
 
 # Button style, filled from the theme so the buttons match light/dark mode.
 # Background and border come from the theme's accent colors; text and hover are
@@ -384,51 +447,39 @@ class ImageOrganizerDlg(QDialog):
         self._scan_folder(d, announce_seconds=True)
 
     def _scan_folder(self, folder, announce_seconds=True):
-        """Walk the folder, refresh the counts, rebuild the image and metadata
-        caches, and update the example and seconds warning. announce_seconds
-        controls the one-time heads-up dialog, shown on a fresh pick but not on a
-        mere recursive toggle."""
-        try:
-            recursive = self.recurse_chk.isChecked()
-            self._meta_cache = {}
-            self._imgs_cache = iter_images(Path(folder), recursive)
-            total = len(self._imgs_cache)
-            with_ts = 0
-            has_seconds_any = False
+        """Walk the folder and read metadata off the UI thread, showing a
+        progress wheel. announce_seconds controls the one-time heads-up dialog,
+        shown on a fresh pick but not on a mere recursive toggle. Results are
+        applied in _on_scan_finished; a generation token ignores a stale scan
+        when the folder or recursive setting changes mid-scan."""
+        self._scan_gen = getattr(self, "_scan_gen", 0) + 1
+        self._scan_announce = announce_seconds
+        self._scan_wheel = QProgressWheel(title="Scanning images", total=1)
+        worker = self._scan_worker = _ScanWorker(
+            folder, self.recurse_chk.isChecked(), self._scan_gen)
+        worker.progress.connect(self._on_scan_progress)
+        worker.finished.connect(self._on_scan_finished)
+        worker.start()
 
-            for p in self._imgs_cache:
-                m = self._get_meta(p)
-                if m.get("DateTimeFromMetadata"):
-                    with_ts += 1
-                if m.get("HasSeconds", False):
-                    has_seconds_any = True
+    def _on_scan_progress(self, done, total):
+        w = getattr(self, "_scan_wheel", None)
+        if w is not None:
+            if w.maximum() != max(total, 1):
+                w.setRange(0, max(total, 1))
+            w.setValue(done)
 
-            self.total_count_lbl.setText(f"Total images: {total}")
-            self.ts_count_lbl.setText(f"With timestamp: {with_ts}")
-            self.update_example()
+    def _on_scan_finished(self, result):
+        w = getattr(self, "_scan_wheel", None)
+        if w is not None:
+            w.close()
+            self._scan_wheel = None
+        # Ignore a scan superseded by a newer one.
+        if result.get("generation") != getattr(self, "_scan_gen", None):
+            return
 
-            # Seconds warning next to checkbox (user in control)
-            self._update_seconds_warning()
-
-            # Blue dots on the batch metadata fields now that files are known.
-            self._update_change_indicators()
-
-            # (Optional) early heads-up dialog about seconds presence
-            if announce_seconds and has_seconds_any and not self.sec_chk.isChecked():
-                warn = self._themed_msgbox(
-                    "Seconds Present in Metadata",
-                    ("Some images contain seconds in 'Date Taken'.\n\n"
-                     "You currently have 'Include Seconds in Timestamp' unchecked, "
-                     "which may create duplicate names for photos shot in the same minute. "
-                     "If duplicates occur, the organizer will disambiguate using "
-                     "resolution and/or numeric suffixes."),
-                    QMessageBox.Warning
-                )
-                warn.exec_()
-
-        except Exception as e:
-            logger.error("Folder scan failed: %s", e)
-            err_box = self._themed_msgbox("Folder Scan Error", str(e), QMessageBox.Critical)
+        if result.get("error"):
+            logger.error("Folder scan failed: %s", result["error"])
+            err_box = self._themed_msgbox("Folder Scan Error", result["error"], QMessageBox.Critical)
             err_box.exec_()
             self._imgs_cache = []
             self._meta_cache = {}
@@ -436,6 +487,27 @@ class ImageOrganizerDlg(QDialog):
             self.ts_count_lbl.setText("With timestamp: 0")
             self._update_seconds_warning()
             self._update_change_indicators()
+            return
+
+        self._imgs_cache = result["imgs"]
+        self._meta_cache = result["metas"]
+        self.total_count_lbl.setText(f"Total images: {result['total']}")
+        self.ts_count_lbl.setText(f"With timestamp: {result['with_ts']}")
+        self.update_example()
+        self._update_seconds_warning()
+        self._update_change_indicators()
+
+        if self._scan_announce and result["has_seconds"] and not self.sec_chk.isChecked():
+            warn = self._themed_msgbox(
+                "Seconds Present in Metadata",
+                ("Some images contain seconds in 'Date Taken'.\n\n"
+                 "You currently have 'Include Seconds in Timestamp' unchecked, "
+                 "which may create duplicate names for photos shot in the same minute. "
+                 "If duplicates occur, the organizer will disambiguate using "
+                 "resolution and/or numeric suffixes."),
+                QMessageBox.Warning
+            )
+            warn.exec_()
 
     # ---------- main action ----------
     @pyqtSlot()
@@ -449,7 +521,9 @@ class ImageOrganizerDlg(QDialog):
         folder_path = Path(folder)
         recursive = self.recurse_chk.isChecked()
 
-        # Optional: Move files missing Date Taken first (per checkbox)
+        # Optional: Move files missing Date Taken first (per checkbox). The moved
+        # files are passed to organize_images so the CSV log records them.
+        moved_missing = None
         try:
             if self.move_missing_chk.isChecked():
                 if not self._imgs_cache:
@@ -462,6 +536,7 @@ class ImageOrganizerDlg(QDialog):
 
                 if missing_dt:
                     sub = move_files_to_subfolder(missing_dt, base_dir=folder_path)
+                    moved_missing = [(p.name, str(Path(sub) / p.name)) for p in missing_dt]
                     info = self._themed_msgbox(
                         "Moved Files Without Date",
                         f"Moved {len(missing_dt)} image(s) without 'Date Taken' to:\n{sub}\n\n"
@@ -473,54 +548,113 @@ class ImageOrganizerDlg(QDialog):
         except Exception as e:
             logger.warning("Could not move files missing date: %s", e)
 
-        # Run the organizer
-        try:
-            log_csv, rows, tags, errors = organize_images(
-                src_folder=folder_path,
-                recursive=recursive,
-                site=self.site_edit.text().strip(),
-                include_seconds=self.sec_chk.isChecked(),
-                copyright_holder=self.copyright_edit.text().strip(),
-                site_info=self.site_info_edit.toPlainText().strip(),
-                title=self.title_edit.text().strip(),
-                comments=self.comments_edit.toPlainText().strip()
-            )
+        # Run the organizer off the UI thread, with a progress wheel.
+        self._run_folder = folder_path
+        self._run_wheel = QProgressWheel(title="Organizing images")
+        kwargs = dict(
+            src_folder=folder_path,
+            recursive=recursive,
+            site=self.site_edit.text().strip(),
+            include_seconds=self.sec_chk.isChecked(),
+            copyright_holder=self.copyright_edit.text().strip(),
+            site_info=self.site_info_edit.toPlainText().strip(),
+            title=self.title_edit.text().strip(),
+            comments=self.comments_edit.toPlainText().strip(),
+            moved_missing=moved_missing,
+        )
+        self._run_worker = _CoreWorker(organize_images, kwargs)
+        self._run_worker.progress.connect(self._on_run_progress)
+        self._run_worker.finished.connect(self._on_run_finished)
+        self._run_worker.start()
 
-            msg = f"Image Organizer completed.\nLog file:\n{log_csv}"
-            if errors:
-                msg += f"\n\nCompleted with {len(errors)} warning(s)/error(s) (see terminal)."
-            else:
-                msg += "\n\nAll images processed successfully."
+    def _on_run_progress(self, done, total):
+        w = getattr(self, "_run_wheel", None)
+        if w is not None:
+            if w.maximum() != max(total, 1):
+                w.setRange(0, max(total, 1))
+            w.setValue(done)
 
-            # Completion dialog with Revert
-            done = QMessageBox(self)
-            done.setWindowTitle("Done")
-            done.setIcon(QMessageBox.Information)
-            done.setText(msg)
-            revert_btn = done.addButton("Revert", QMessageBox.ActionRole)
-            close_btn  = done.addButton("Close", QMessageBox.AcceptRole)
-            done.setStyleSheet(self._button_css())
-            done.exec_()
+    def _on_run_finished(self, out):
+        w = getattr(self, "_run_wheel", None)
+        if w is not None:
+            w.close()
+            self._run_wheel = None
 
-            if done.clickedButton() is revert_btn:
-                reverted, rev_errors = revert_operation(folder_path, Path(log_csv))
-                if rev_errors:
-                    er = self._themed_msgbox(
-                        "Revert Finished with Issues",
-                        f"Reverted {reverted} file(s).\n\n" +
-                        "\n".join(rev_errors[:10]) + ("\n…" if len(rev_errors) > 10 else ""),
-                        QMessageBox.Warning
-                    )
-                    er.exec_()
-                else:
-                    ok = self._themed_msgbox("Reverted", f"Reverted {reverted} file(s).")
-                    ok.exec_()
-
-            logger.info("Completed. Log: %s", log_csv)
-            # Persist the fields after a successful run so they survive a later crash.
-            self._save_settings()
-
-        except Exception as e:
-            logger.error("Image Organizer failed: %s", e)
-            err = self._themed_msgbox("Error", str(e), QMessageBox.Critical)
+        if out.get("error"):
+            logger.error("Image Organizer failed: %s", out["error"])
+            err = self._themed_msgbox("Error", out["error"], QMessageBox.Critical)
             err.exec_()
+            return
+
+        log_csv, rows, tags, errors = out["result"]
+        msg = f"Image Organizer completed.\nLog file:\n{log_csv}"
+        if errors:
+            msg += f"\n\nCompleted with {len(errors)} warning(s)/error(s) (see terminal)."
+        else:
+            msg += "\n\nAll images processed successfully."
+
+        # Completion dialog with Revert
+        done = QMessageBox(self)
+        done.setWindowTitle("Done")
+        done.setIcon(QMessageBox.Information)
+        done.setText(msg)
+        revert_btn = done.addButton("Revert", QMessageBox.ActionRole)
+        done.addButton("Close", QMessageBox.AcceptRole)
+        done.setStyleSheet(self._button_css())
+        done.exec_()
+
+        logger.info("Completed. Log: %s", log_csv)
+        # Persist the fields after a successful run so they survive a later crash.
+        self._save_settings()
+
+        if done.clickedButton() is revert_btn:
+            self._start_revert(self._run_folder, Path(log_csv))
+        else:
+            # Re-scan so counts and dots reflect the new names and metadata.
+            folder = self.src_edit.text().strip()
+            if folder and Path(folder).is_dir():
+                self._scan_folder(folder, announce_seconds=False)
+
+    def _start_revert(self, folder_path, log_csv):
+        self._revert_wheel = QProgressWheel(title="Reverting")
+        self._revert_worker = _CoreWorker(
+            revert_operation, dict(src_folder=folder_path, log_csv=log_csv))
+        self._revert_worker.progress.connect(self._on_revert_progress)
+        self._revert_worker.finished.connect(self._on_revert_finished)
+        self._revert_worker.start()
+
+    def _on_revert_progress(self, done, total):
+        w = getattr(self, "_revert_wheel", None)
+        if w is not None:
+            if w.maximum() != max(total, 1):
+                w.setRange(0, max(total, 1))
+            w.setValue(done)
+
+    def _on_revert_finished(self, out):
+        w = getattr(self, "_revert_wheel", None)
+        if w is not None:
+            w.close()
+            self._revert_wheel = None
+
+        if out.get("error"):
+            er = self._themed_msgbox("Revert Error", out["error"], QMessageBox.Critical)
+            er.exec_()
+            return
+
+        reverted, rev_errors = out["result"]
+        if rev_errors:
+            er = self._themed_msgbox(
+                "Revert Finished with Issues",
+                f"Reverted {reverted} file(s).\n\n" +
+                "\n".join(rev_errors[:10]) + ("\n…" if len(rev_errors) > 10 else ""),
+                QMessageBox.Warning
+            )
+            er.exec_()
+        else:
+            ok = self._themed_msgbox("Reverted", f"Reverted {reverted} file(s).")
+            ok.exec_()
+
+        # Re-scan so counts and dots reflect the reverted names.
+        folder = self.src_edit.text().strip()
+        if folder and Path(folder).is_dir():
+            self._scan_folder(folder, announce_seconds=False)
