@@ -9378,6 +9378,12 @@ def run_gui():
 
     app = QApplication(sys.argv)
 
+    # One global application font so every widget starts from the same size in
+    # both themes. Keeps the native font family; forces a uniform point size.
+    _app_font = app.font()
+    _app_font.setPointSize(10)
+    app.setFont(_app_font)
+
     # Light mode is the default — dark mode toggled via View menu
     app.setStyleSheet("")
 
