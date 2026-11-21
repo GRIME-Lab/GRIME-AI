@@ -157,7 +157,8 @@ def read_image_metadata(path: Path) -> Dict[str, object]:
         "Comments": "",
         "Tags": [],
         "Exif": {},
-        "CopyrightExisting": ""
+        "CopyrightExisting": "",
+        "SiteInfoExisting": ""
     }
     exif_dt = None
     try:
@@ -183,9 +184,18 @@ def read_image_metadata(path: Path) -> Dict[str, object]:
                             except Exception:
                                 pass
 
-                meta["Title"]    = _decode_xp(meta["Exif"].get("XPTitle", "")) or meta["Exif"].get("ImageDescription", "")
+                # Title, Comments, Subject and Site Information are kept in
+                # separate tags. ImageDescription holds Site Information (no
+                # longer folded into Title).
+                meta["Title"]    = _decode_xp(meta["Exif"].get("XPTitle", ""))
                 meta["Comments"] = _decode_xp(meta["Exif"].get("XPComment", ""))
                 meta["Subject"]  = _decode_xp(meta["Exif"].get("XPSubject", ""))
+
+                img_desc = meta["Exif"].get("ImageDescription", "")
+                if isinstance(img_desc, bytes):
+                    img_desc = img_desc.decode("utf-8", errors="ignore")
+                if isinstance(img_desc, str):
+                    meta["SiteInfoExisting"] = img_desc.strip()
 
                 tags = _decode_xp(meta["Exif"].get("XPKeywords", ""))
                 if tags:
@@ -337,6 +347,10 @@ def append_counter_suffix(filename: str, ctr: int) -> str:
 
 def safe_rename(path: Path, new_name: str) -> Path:
     target = path.with_name(new_name)
+    # The file is already at its target name: nothing to rename, and it must not
+    # be treated as a collision with itself (that would append _001 on re-runs).
+    if target == path:
+        return path
     if not target.exists():
         path.rename(target); return target
     stem, ext = target.stem, target.suffix
@@ -347,21 +361,44 @@ def safe_rename(path: Path, new_name: str) -> Path:
             path.rename(cand); return cand
         i += 1
 
-def write_copyright_exif(path: Path, holder: str, skip_if_exists: bool = True) -> None:
+def write_copyright_exif(path: Path, holder: str) -> None:
+    """Write the Copyright tag. The caller decides whether to call this (only
+    when the value is set and differs from what is embedded)."""
     if not holder or path.suffix.lower() not in {'.jpg', '.jpeg', '.tif', '.tiff'} or piexif is None:
         return
     try:
         exif = piexif.load(str(path))
-        if skip_if_exists:
-            existing = exif['0th'].get(piexif.ImageIFD.Copyright, b"")
-            if isinstance(existing, (bytes, bytearray)) and existing.strip():
-                _debug(f"Existing copyright present; skipping write for {path}")
-                return
         exif['0th'][piexif.ImageIFD.Copyright] = holder.encode("utf-8", errors="ignore")
         piexif.insert(piexif.dump(exif), str(path))
         _debug(f"Wrote Copyright to {path}")
     except Exception as e:
         _warn(f"Failed to write Copyright EXIF for {path}: {e}")
+
+def write_metadata_fields(path: Path, title=None, comments=None, site_info=None) -> None:
+    """Write Title, Comments and Site Information, each to its own tag, without
+    merging them. Only the fields passed as non-None are written:
+      Title           -> XPTitle
+      Comments         -> XPComment
+      Site Information -> ImageDescription
+    The caller passes a field only when it is set and differs from what is
+    already embedded."""
+    if path.suffix.lower() not in {'.jpg', '.jpeg', '.tif', '.tiff'} or piexif is None:
+        return
+    if title is None and comments is None and site_info is None:
+        return
+    try:
+        ex = piexif.load(str(path))
+        if title is not None:
+            ex['0th'][XPTitle] = _encode_xp(title)
+        if comments is not None:
+            ex['0th'][XPComment] = _encode_xp(comments)
+        if site_info is not None:
+            ex['0th'][piexif.ImageIFD.ImageDescription] = site_info.encode("utf-8", errors="ignore")
+        piexif.insert(piexif.dump(ex), str(path))
+        _debug(f"Wrote metadata fields to {path.name}")
+    except Exception as e:
+        _warn(f"Failed to write metadata fields for {path}: {e}")
+
 
 def compose_final_comments(original_comments: str, title: str, site_info: str) -> str:
     """
@@ -506,7 +543,11 @@ def organize_images(
     site: str,
     include_seconds: bool,
     copyright_holder: str,
-    site_info: str = ""
+    site_info: str = "",
+    title: str = "",
+    comments: str = "",
+    progress_callback=None,
+    moved_missing=None
 ):
     """
     Headless core. Returns (log_csv_path, rows_written, unique_tags_in_run, errors).
@@ -544,6 +585,8 @@ def organize_images(
     base_fields = [
         # identity
         "original_file_name", "new_file_name",
+        # what happened to this file
+        "status",
         # absolute paths to enable robust revert
         "original_full_path", "new_full_path",
         # clickable Excel links
@@ -551,7 +594,7 @@ def organize_images(
         # time context
         "datetime_from_metadata", "converted_at",
         # metadata snapshot
-        "Comments", "Title", "Subject", "Tags",
+        "Comments", "Title", "SiteInfo", "Subject", "Tags",
         "Copyright",
         "CopyrightExisting",
     ]
@@ -561,9 +604,26 @@ def organize_images(
     rows_out: List[Dict[str, str]] = []
     errors: List[str] = []
 
+    total_items = len(item_infos)
+    done_items = 0
+
     with open(log_csv, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=header)
         writer.writeheader()
+
+        # Files moved aside because they had no Date Taken (moved by the caller
+        # before this run). Logged here so the CSV accounts for every file.
+        for rec in (moved_missing or []):
+            orig_name, new_fp = rec
+            moved_row = {
+                "original_file_name": orig_name,
+                "new_file_name": Path(new_fp).name,
+                "status": "moved-no-date",
+                "new_full_path": new_fp,
+                "new_link": _excel_hyperlink(new_fp, Path(new_fp).name),
+            }
+            writer.writerow(moved_row)
+            rows_out.append(moved_row)
 
         for info in item_infos:
             p = info["path"]; meta = info["meta"]; dt = info["dt_for_name"]
@@ -571,6 +631,7 @@ def organize_images(
 
             # STRICT user choice: do not auto-include seconds
             new_name = make_filename(dt, site, include_seconds, ext)
+            base_name = new_name  # pre-collision name, to detect suffixing below
 
             # Duplicate handling:
             # 1) resolution suffix, 2) numeric counter
@@ -595,20 +656,54 @@ def organize_images(
             try:
                 new_path = safe_rename(p, new_name)
 
-                # Comments <- existing + Title + Site Info; Title cleared
-                final_comments = write_comments_and_clear_title(new_path, meta, site_info)
-
-                # Copyright write (skip if exists)
+                # Title, Comments and Site Information each to their own tag,
+                # written only when set and different from what is embedded.
+                t_in = (title or "").strip()
+                c_in = (comments or "").strip()
+                s_in = (site_info or "").strip()
+                write_title    = t_in if (t_in and t_in != str(meta.get("Title", "")).strip()) else None
+                write_comments = c_in if (c_in and c_in != str(meta.get("Comments", "")).strip()) else None
+                write_siteinfo = s_in if (s_in and s_in != str(meta.get("SiteInfoExisting", "")).strip()) else None
                 try:
-                    write_copyright_exif(new_path, copyright_holder, skip_if_exists=True)
+                    write_metadata_fields(new_path, title=write_title,
+                                          comments=write_comments, site_info=write_siteinfo)
                 except Exception as e:
-                    _warn(f"EXIF Copyright write issue for {new_path}: {e}")
+                    _warn(f"EXIF text-field write issue for {new_path}: {e}")
+
+                # Effective values now in the file (written value, else existing).
+                eff_title    = write_title    if write_title    is not None else str(meta.get("Title", ""))
+                eff_comments = write_comments if write_comments is not None else str(meta.get("Comments", ""))
+                eff_siteinfo = write_siteinfo if write_siteinfo is not None else str(meta.get("SiteInfoExisting", ""))
+
+                # Copyright written only when set and different.
+                copyright_written = False
+                cp_in = (copyright_holder or "").strip()
+                if cp_in and cp_in != str(meta.get("CopyrightExisting", "")).strip():
+                    try:
+                        write_copyright_exif(new_path, cp_in)
+                        copyright_written = True
+                    except Exception as e:
+                        _warn(f"EXIF Copyright write issue for {new_path}: {e}")
 
                 # Write merged tags back to XPKeywords
                 try:
                     write_keywords_exif(new_path, meta.get("Tags", []))
                 except Exception as e:
                     _warn(f"Keyword write issue for {new_path}: {e}")
+
+                # Build a human-readable status of what happened to this file.
+                # A name status is reported only when an actual rename happened,
+                # so an already-correctly-named file is not called renamed.
+                status_parts = []
+                if new_path.name != p.name:
+                    status_parts.append("collision-suffixed" if new_name != base_name else "renamed")
+                if copyright_written:
+                    status_parts.append("copyright-updated")
+                if write_title is not None or write_comments is not None or write_siteinfo is not None:
+                    status_parts.append("metadata-updated")
+                if not status_parts:
+                    status_parts.append("unchanged")
+                status = "; ".join(status_parts)
 
                 converted_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 original_full_path = str(p.resolve())
@@ -617,14 +712,16 @@ def organize_images(
                 row = {
                     "original_file_name": p.name,
                     "new_file_name": new_path.name,
+                    "status": status,
                     "original_full_path": original_full_path,
                     "new_full_path": new_full_path,
                     "original_link": _excel_hyperlink(original_full_path, p.name),
                     "new_link": _excel_hyperlink(new_full_path, new_path.name),
                     "datetime_from_metadata": meta.get("DateTimeFromMetadata", ""),
                     "converted_at": converted_at,
-                    "Comments": final_comments,
-                    "Title": "",  # cleared
+                    "Comments": eff_comments,
+                    "Title": eff_title,
+                    "SiteInfo": eff_siteinfo,
                     "Subject": str(meta.get("Subject","")),
                     "Tags": "; ".join(meta.get("Tags", [])),
                     "Copyright": copyright_holder or "",
@@ -640,6 +737,22 @@ def organize_images(
             except Exception as e:
                 msg = f"Rename failed for {p}: {e}"
                 _err(msg); errors.append(msg)
+                # Record the failure in the CSV so it accounts for every file.
+                err_row = {
+                    "original_file_name": p.name,
+                    "new_file_name": "",
+                    "status": f"error: {e}",
+                    "original_full_path": str(p.resolve()),
+                }
+                writer.writerow(err_row)
+                rows_out.append(err_row)
+
+            done_items += 1
+            if progress_callback is not None:
+                try:
+                    progress_callback(done_items, total_items)
+                except Exception:
+                    pass
 
     _info(f"Wrote CSV log: {log_csv}")
     return log_csv, rows_out, unique_tags, errors
@@ -656,7 +769,7 @@ def example_filename(site: str, include_seconds: bool, example_dt: Optional[date
 # =========================
 # Revert
 # =========================
-def revert_operation(src_folder: Path, log_csv: Path) -> Tuple[int, List[str]]:
+def revert_operation(src_folder: Path, log_csv: Path, progress_callback=None) -> Tuple[int, List[str]]:
     """
     Revert renames using the CSV log: new_full_path -> original_full_path.
     Falls back to src_folder/new_file_name -> src_folder/original_file_name if abs paths absent.
@@ -669,7 +782,17 @@ def revert_operation(src_folder: Path, log_csv: Path) -> Tuple[int, List[str]]:
         with log_csv.open(newline='', encoding='utf-8') as f:
             reader = csv.DictReader(f)
             has_abs_cols = {"original_full_path", "new_full_path"}.issubset(reader.fieldnames or [])
-            for row in reader:
+            rows = list(reader)
+            total_rows = len(rows)
+            done_rows = 0
+            for row in rows:
+                done_rows += 1
+                if progress_callback is not None:
+                    try:
+                        progress_callback(done_rows, total_rows)
+                    except Exception:
+                        pass
+
                 orig_name = row.get("original_file_name") or ""
                 new_name  = row.get("new_file_name") or ""
                 if not orig_name or not new_name:
