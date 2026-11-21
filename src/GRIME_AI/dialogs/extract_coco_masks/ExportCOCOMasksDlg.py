@@ -13,9 +13,8 @@ from appcore.utils.resource_utils import ui_path
 
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal, pyqtSlot
-from PyQt5.QtWidgets import QDialog
+from PyQt5.QtWidgets import QDialog, QFileDialog
 from PyQt5.uic import loadUi
-import promptlib
 
 from appcore.App_QMessageBox import App_QMessageBox
 
@@ -75,9 +74,8 @@ class ExportCOCOMasksDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def pushButton_BrowseAnnotationImagesClicked(self):
-        prompter = promptlib.Files()
-
-        folder = prompter.dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select annotation images folder", "", options=QFileDialog.ShowDirsOnly)
 
         if os.path.exists(folder):
             if os.listdir(folder):
@@ -136,11 +134,11 @@ class ExportCOCOMasksDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def pushButtonBrowseSaveImagesOutputFolderClicked(self):
-        prompter = promptlib.Files()
-        folder = prompter.dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select output folder", "", options=QFileDialog.ShowDirsOnly)
 
         if os.path.exists(folder):
-            self.EditSaveImagesOutputFolder(prompter.dir())
+            self.EditSaveImagesOutputFolder(folder)
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------

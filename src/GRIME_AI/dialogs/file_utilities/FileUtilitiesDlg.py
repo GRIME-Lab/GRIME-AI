@@ -8,14 +8,13 @@
 # License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
 import os
-import promptlib
 import datetime
 
 from appcore.utils.resource_utils import ui_path
 
 from PyQt5 import QtCore
 from PyQt5.QtCore import pyqtSignal, pyqtSlot
-from PyQt5.QtWidgets import QDialog
+from PyQt5.QtWidgets import QDialog, QFileDialog
 from PyQt5.uic import loadUi
 
 from appcore.App_Utils import App_Utils
@@ -169,8 +168,8 @@ class FileUtilitiesDlg(QDialog):
     # IMAGE INPUT FOLDER
     # --------------------------------------------------
     def pushButtonBrowseImageFolderClicked(self):
-        prompter = promptlib.Files()
-        folder = prompter.dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select image folder", "", options=QFileDialog.ShowDirsOnly)
 
         if os.path.exists(folder):
             self.lineEdit_images_folder.setText(folder)
