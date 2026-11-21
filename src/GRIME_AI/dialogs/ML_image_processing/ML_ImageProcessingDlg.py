@@ -11,7 +11,6 @@ import os
 import cv2
 import json
 from json import JSONDecodeError
-from promptlib import Files
 from typing import List, Tuple, Dict
 from pathlib import Path
 
@@ -21,7 +20,7 @@ matplotlib.use("Qt5Agg")      # <<< FORCE Qt5Agg backend for PyQt5
 from appcore.utils.resource_utils import ui_path
 
 from PyQt5.QtCore import pyqtSignal, Qt
-from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget
+from PyQt5.QtWidgets import QDialog, QSizePolicy, QListWidget, QFileDialog
 from PyQt5.uic import loadUi
 
 from appcore.Save_Utils import Save_Utils
@@ -437,7 +436,8 @@ class ML_ImageProcessingDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def selectCocoFolder(self):
         """Open a folder chooser for the COCO generation folder."""
-        folder = Files().dir()  # You can replace this with QFileDialog.getExistingDirectory if needed.
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select COCO generation folder", "", options=QFileDialog.ShowDirsOnly)
         if folder:
             self.lineEdit_cocoFolder.setText(folder)
 
@@ -445,7 +445,7 @@ class ML_ImageProcessingDlg(QDialog):
     # ------------------------------------------------------------------------------------------------------------------
     def selectMaskFile(self):
         """Open a file chooser to select a mask file."""
-        mask_file = Files().file()  # Replace with QFileDialog.getOpenFileName if preferred.
+        mask_file, _ = QFileDialog.getOpenFileName(self, "Select mask file")
         if mask_file:
             self.lineEdit_maskFile.setText(mask_file)
 
