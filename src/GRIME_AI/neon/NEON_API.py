@@ -13,23 +13,20 @@ import multiprocessing
 # OS / system
 import os
 import shutil
-import ssl
 import tempfile
 import time
 # Error management
 import traceback
 from io import StringIO
-# Communications / networking
-from urllib.request import urlopen
 
 # Third-party
 import requests
 from PyQt5.QtGui import QPixmap
 from bs4 import BeautifulSoup
 from neonutilities import zips_by_product, stack_by_table
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
+# Timeouts and bounded retries for every request come from the app-wide HTTP policy
+from appcore.http_client import get as http_get, TimeoutSession, IMAGE_TIMEOUT
 from appcore.JSON_Editor import JsonEditor
 # GRIME AI MODULES
 from appcore.QProgressWheel import QProgressWheel
@@ -62,8 +59,8 @@ def parse_NEON_field_site_metadata(filename_with_path):
             http://www.apache.org/licenses/LICENSE-2.0
 
     Description:
-        Utilities for parsing phenocam site CSV files. The core function, parse_NEON_field_site_metadata,
-        reads a CSV listing sites and extracts the following fields:
+        Parses the NEON field site metadata CSV (downloaded by NEON_API.Download_Field_Site_Metadata)
+        and extracts the following fields for each site:
           - site_id
           - site_name
           - phenocams
@@ -77,18 +74,17 @@ def parse_NEON_field_site_metadata(filename_with_path):
         - find_field_index (helper to locate columns with or without 'field_' prefix)
         - siteData (data class for site attributes)
 
-    Functions:
-        parse_NEON_field_site_metadata(self, filename_with_path) -> List[siteData]
+    Function:
+        parse_NEON_field_site_metadata(filename_with_path) -> List[siteData]
             Parse the CSV at the given path and return a list of siteData objects.
             Raises ValueError if the CSV fails validation. Returns an empty list
             on any parsing error.
 
     Usage Example:
-        from phenocam_csv_parser import PhenoCamParser, siteData
+        from appcore.neon.NEON_API import parse_NEON_field_site_metadata
 
-        parser = PhenoCamParser()
         try:
-            sites = parser.parse_NEON_field_site_metadata("/data/site_list.csv")
+            sites = parse_NEON_field_site_metadata("/data/NEON_Field_Site_Metadata.csv")
         except ValueError as e:
             print(f"Validation error: {e}")
     """
@@ -244,6 +240,10 @@ class  NEON_API:
             self._server = _mgr.get_neon_endpoint() or SERVER
         except Exception as _e:
             print(f"[NEON_API] Could not load API settings: {_e}")
+        # Same normalization as set_server, so URLs never come out as ".../v0sites/..."
+        self._server = self._server.rstrip("/") + "/"
+        # Reason for the most recent failed request, for callers to show the user
+        self.last_error: str = ""
 
     # ------------------------------------------------------------------------
     def set_token(self, token) -> None:
@@ -262,65 +262,81 @@ class  NEON_API:
             return {"X-API-Token": self._token}
         return {}
 
+    # ------------------------------------------------------------------------
+    def _get_json(self, url) -> dict:
+        """
+        GET a NEON API URL and return its JSON, or {} on failure with the reason in
+        self.last_error. Timeouts and retries come from appcore.http_client.
+        """
+        self.last_error = ""
+        try:
+            r = http_get(url, headers=self._auth_headers())
+        except requests.exceptions.RequestException as e:
+            self.last_error = f"Could not reach NEON ({e})"
+            print(f"[NEON_API] {self.last_error}: {url}")
+            return {}
+
+        if r.status_code in (401, 403):
+            self.last_error = (f"NEON rejected the request (HTTP {r.status_code}). "
+                               "Check the NEON API token in the API Key Manager.")
+        elif r.status_code != 200:
+            self.last_error = f"NEON returned HTTP {r.status_code} {r.reason}"
+        else:
+            try:
+                return r.json()
+            except ValueError:
+                self.last_error = "NEON returned a response that is not JSON"
+
+        print(f"[NEON_API] {self.last_error}: {url}")
+        return {}
+
 
     # ======================================================================================================================
     # The purpose of this function is to query information above a specific product. The information
     # contains the product description, sites for which the product is available among other information.
     # ======================================================================================================================
     def QueryProductInfo(self, productCode):
-        product_request = requests.get(self._server + 'products/' + productCode, headers=self._auth_headers())
-        product_json = product_request.json()
-
-        return product_json
+        """Product JSON, or {} on failure with the reason in self.last_error."""
+        return self._get_json(self._server + 'products/' + productCode)
 
 
     # ======================================================================================================================
-    #
+    # Site JSON from the NEON endpoint stored in settings, or {} on failure with the reason in self.last_error.
     # ======================================================================================================================
-    def FetchSiteInfoFromNEON(self, server, siteCode):
+    def FetchSiteInfoFromNEON(self, siteCode):
+        return self._get_json(self._server + 'sites/' + siteCode)
 
-        try:
-            # Make request, using the sites endpoint
-            site_request = requests.get(server + 'sites/' + siteCode, headers=self._auth_headers())
-
-            # Convert to Python JSON object
-            site_json = site_request.json()
-        except Exception:
-            site_json = {}
-
-        return (site_json)
+    # ======================================================================================================================
+    # Every site's JSON in one request (GET <endpoint>sites), or {} on failure with the reason in self.last_error.
+    # ======================================================================================================================
+    def FetchAllSitesFromNEON(self):
+        return self._get_json(self._server + 'sites')
 
 
     # ======================================================================================================================
     # THIS FUNCTION FETCHES THE FIELD SITE TABLE FROM THE NEON SITE AND PARSES ITS INFORMATION.
     # ======================================================================================================================
     def FetchFieldSiteTableURL(self, my_url):
-        csv_links = []
+        """
+        Return the href of the field site metadata link on the NEON page, or None if the
+        page has no such link. Certificate checking stays on (no unverified SSL context).
+        """
+        r = http_get(my_url)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, 'html5lib')
 
-        # r = requests.get(my_url)
-        #ssl._create_default_https_context = ssl._create_unverified_context
-        ssl._create_default_https_context = ssl._create_unverified_context
-        r = urlopen(my_url)
-        # context = ssl._create_unverified_context()
-        # r = urlopen(my_url, context=context)
+        # FIND ALL CSV LINKS ON THE WEB-PAGE. CURRENTLY THERE IS ONLY ONE. HOWEVER, THERE COULD BE MULTIPLES IN THE FUTURE
+        links = [link['href'] for link in soup.find_all("a", href=lambda href: href and "Metadata" in href)]
 
-        if 1:
-            # if r.status_code == 200:
-            # create beautiful-soup object
-            # soup = BeautifulSoup(r.content, 'html5lib')
-            soup = BeautifulSoup(r, 'html5lib')
+        if not links:
+            print(f"[NEON_API] No field site metadata link found on {my_url}")
+            return None
 
-            # FIND ALL CSV LINKS ON THE WEB-PAGE. CURRENTLY THERE IS ONLY ONE. HOWEVER, THERE COULD BE MULTIPLES IN THE FUTURE
-            links = soup.findAll("a", href=lambda href: href and "Metadata" in href)
+        if len(links) > 1:
+            # Same choice as before (the last link); flag it so a page change is noticed
+            print(f"[NEON_API] {len(links)} metadata links found on {my_url}; using the last: {links}")
 
-            # CREATE COMPLETE URL FOR LINK TO CSV FILE. ASSUME THERE IS ONLY ONE FOR NOW BUT LOOP FOR FUTURE USE-CASES
-            for link in links:
-                #csvLink = root_url + link['href']
-                csvLink = link['href']
-
-            csv_links = csvLink
-
-        return csv_links
+        return links[-1]
 
 
     # ======================================================================================================================
@@ -330,47 +346,33 @@ class  NEON_API:
         link = 'https://www.neonscience.org' + csv_links + '.csv'
         file_name = link.split('/')[-1]
 
-        # Configure session with retries + backoff
-        session = requests.Session()
-        retries = Retry(
-            total=5,
-            backoff_factor=1,  # 1s, 2s, 4s, 8s...
-            status_forcelist=[500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS", "GET"],
-            raise_on_status=False
-        )
-        adapter = HTTPAdapter(max_retries=retries)
-        session.mount("https://", adapter)
-
         # Build target directory
         configFilePath = os.path.join(str(DOWNLOADS_DIR), 'NEON', 'Metadata')
         os.makedirs(configFilePath, exist_ok=True)
         filename_with_path = os.path.join(configFilePath, file_name)
 
-        last_error = None
-        for attempt in range(5):
-            try:
-                with session.get(link, stream=True, timeout=(10, 60)) as r:
-                    r.raise_for_status()
-                    # write atomically to avoid partial files
-                    with tempfile.NamedTemporaryFile('wb', delete=False, dir=configFilePath) as tmp:
-                        for chunk in r.iter_content(chunk_size=1024 * 1024):
-                            if chunk:
-                                tmp.write(chunk)
-                        temp_name = tmp.name
-                os.replace(temp_name, filename_with_path)
-                return filename_with_path  # success
-            except (requests.exceptions.SSLError,
-                    requests.exceptions.ConnectionError,
-                    requests.exceptions.ChunkedEncodingError,
-                    requests.exceptions.Timeout,
-                    requests.exceptions.RequestException) as e:
-                last_error = e
-                print(f"Attempt {attempt + 1} failed: {e}")
-                time.sleep(2 ** attempt)  # exponential backoff
-
-        # If we get here, all attempts failed
-        raise RuntimeError(f"Failed to download {link} after retries. Last error: {last_error}")
+        # One retry layer: the app-wide policy in appcore.http_client (bounded retries,
+        # backoff, timeouts). IMAGE_TIMEOUT allows a larger file to stream.
+        session = TimeoutSession(timeout=IMAGE_TIMEOUT)
+        temp_name = None
+        try:
+            with session.get(link, stream=True) as r:
+                r.raise_for_status()
+                # write atomically to avoid partial files
+                with tempfile.NamedTemporaryFile('wb', delete=False, dir=configFilePath) as tmp:
+                    temp_name = tmp.name
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            tmp.write(chunk)
+            os.replace(temp_name, filename_with_path)
+            return filename_with_path  # success
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Failed to download {link}: {e}")
+        finally:
+            # A failed attempt must not leave its temp file in the Metadata folder
+            if temp_name and os.path.exists(temp_name):
+                os.remove(temp_name)
+            session.close()
 
     # ======================================================================================================================
     #
@@ -493,82 +495,52 @@ class  NEON_API:
     # END-USER CAN CAN SEE WHAT THE PARTICULAR SITE LOOKS LIKE.
     # ======================================================================================================================
     def DownloadLatestImage(self, siteCode, domainCode, strProductID=20002):
-        nErrorCode = -1
-        nRetryCount = 3
+        nStatus = -1
         nWebImageCount = 0
         latestImage = []
 
-        # Build URL
-        latestImageURL = f'https://phenocam.nau.edu/data/latest/NEON.D10.ARIK.DP1.{strProductID}.jpg'
-        tmp = latestImageURL.replace('ARIK', siteCode)
-        latestImageURL = tmp.replace('D10', domainCode)
-
-        # Session with retries
-        session = requests.Session()
-        retries = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[502, 503, 504],
-            allowed_methods=["GET"]
-        )
-        adapter = HTTPAdapter(max_retries=retries)
-        session.mount("http://", adapter)
-        session.mount("https://", adapter)
+        latestImageURL = f'https://phenocam.nau.edu/data/latest/NEON.{domainCode}.{siteCode}.DP1.{strProductID}.jpg'
 
         start_time = time.time()
 
-        while nErrorCode == -1 and nRetryCount > 0:
-            try:
-                r = session.get(latestImageURL, stream=True, timeout=(5, 30))
-                if r.status_code == 200:
-                    nWebImageCount = 1
-                    data = r.content
-                    latestImage = QPixmap()
-                    latestImage.loadFromData(data)
-                    nErrorCode = 0
-                elif r.status_code == 404:
-                    nWebImageCount = 0
-                    latestImage = []
-                    nErrorCode = -1
-                    nRetryCount -= 1
-                    if nRetryCount == 0:
-                        print("404: PhenoCam - Download Latest Image Fail")
-                else:
-                    print(f"Unexpected status {r.status_code}")
-                    nRetryCount -= 1
-            except requests.exceptions.RequestException as e:
-                print(f"Connection error: {e}")
-                nRetryCount -= 1
+        # Retries on server errors and timeouts come from appcore.http_client.
+        # A 404 means the site has no latest image, so it is not retried.
+        try:
+            r = http_get(latestImageURL, timeout=IMAGE_TIMEOUT)
+            nStatus = r.status_code
+            if r.status_code == 200:
+                nWebImageCount = 1
+                latestImage = QPixmap()
+                latestImage.loadFromData(r.content)
+            elif r.status_code == 404:
+                print(f"404: PhenoCam - no latest image at {latestImageURL}")
+            else:
+                print(f"PhenoCam latest image: unexpected status {r.status_code} for {latestImageURL}")
+        except requests.exceptions.RequestException as e:
+            print(f"PhenoCam latest image: connection error: {e}")
 
         end_time = time.time()
         print("Download Latest Image Elapsed Time:", end_time - start_time)
 
-        return (r.status_code if 'r' in locals() else -1), latestImage, nWebImageCount
+        return nStatus, latestImage, nWebImageCount
 
     # ======================================================================================================================
     #
     # ======================================================================================================================
     def getAvailableMonths(self, SITE, PRODUCTCODE):
+        """
+        Available months ("YYYY-MM") for a product at a site, or [] when none or on failure.
+        On failure the reason is in self.last_error. Retries come from appcore.http_client.
+        """
         availableMonths = []
 
-        url = self._server + 'sites/' + SITE
+        site_json = self.FetchSiteInfoFromNEON(SITE)
 
-        nRetry = 3
-        bSuccess = False
-        while (nRetry > 0) and (bSuccess == False):
-            try:
-                site_json = requests.get(url, headers=self._auth_headers()).json()
-
-                # Get available months of Ecosystem structure data products for TEAK site
-                # Loop through the 'dataProducts' list items (each one is a dictionary) at the site
-                for product in site_json['data']['dataProducts']:
-                    # if a list item's 'dataProductCode' dict element equals the product code string
-                    if (product['dataProductCode'] == PRODUCTCODE):
-                        availableMonths = product['availableMonths']
-                bSuccess = True
-            except Exception:
-                print("Retry NEON Site Access...")
-                nRetry = nRetry - 1
+        # Loop through the 'dataProducts' list items (each one is a dictionary) at the site
+        for product in site_json.get('data', {}).get('dataProducts', []):
+            # if a list item's 'dataProductCode' dict element equals the product code string
+            if (product.get('dataProductCode') == PRODUCTCODE):
+                availableMonths = product.get('availableMonths', [])
 
         return availableMonths
 
@@ -579,9 +551,7 @@ class  NEON_API:
     def getProductAbstract(self, SITE, PRODUCTCODE):
         productAbstract = []
 
-        url = self._server + 'products/' + PRODUCTCODE
-
-        product_json = requests.get(url, headers=self._auth_headers()).json()
+        product_json = self.QueryProductInfo(PRODUCTCODE)
 
         try:
             productAbstract = product_json['data']['productAbstract']
@@ -605,8 +575,12 @@ class  NEON_API:
         if nErrorCode == 0:
             csv_links = self.FetchFieldSiteTableURL(url)
 
+            if csv_links is None:
+                # The page loaded but has no field site metadata link
+                return -1, []
+
             # download all CSV files
-            filename_with_path = NEON_API().Download_Field_Site_Metadata(csv_links)
+            filename_with_path = self.Download_Field_Site_Metadata(csv_links)
 
             try:
                 siteList = parse_NEON_field_site_metadata(filename_with_path)
@@ -624,7 +598,7 @@ class  NEON_API:
     # ======================================================================================================================
     def parseNitrateCSV(self):
         # FULLY QUALIFIED PATH OF THE CSV DOWNLOADED ONTO THE LOCAL COMPUTER
-        filename = self.dest + '\\NSW_15_minute.csv'
+        filename = os.path.join(self.dest, 'NSW_15_minute.csv')
 
         nitrateList = []
         fields = []
@@ -651,7 +625,8 @@ class  NEON_API:
         for row in rows:
             # VALIDATE DATA: SOME OF THE FIELDS IN EACH DATA RECORD ARE NULL SO WE HAVE TO HANDLE THESE CASES. 'NOT SURE
             # WHY RECORDS WITH MISSING DATA ARE NOT EXCLUDED FROM THE DATA FILES PROVIDED BY NEON
-            for i in range(6, 13):
+            # Columns 6-13 are converted with float() below, so all of them need a default
+            for i in range(6, 14):
                 if len(row[i]) == 0:
                     row[i] = '0.0'
 
@@ -679,7 +654,7 @@ class  NEON_API:
         Scrape the PhenoCam site table and return a dictionary keyed by camera name.
         Each entry contains latitude, longitude, elevation, site description, and hyperlink.
         """
-        response = requests.get(url)
+        response = http_get(url)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html5lib")

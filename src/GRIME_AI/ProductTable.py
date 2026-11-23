@@ -53,12 +53,8 @@ class ProductTable():
         return self.start_date, self.startTime, self.end_date, self.endTime
 
     def getStartDate(self):
-        return self.strStartDate
-    def getStartDate(self):
         return self.start_date
 
-    def getEndDate(self):
-        return self.strEndDate
     def getEndDate(self):
         return self.end_date
 

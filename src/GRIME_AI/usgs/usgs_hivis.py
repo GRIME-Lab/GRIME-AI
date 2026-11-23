@@ -164,7 +164,7 @@ class USGS_HIVIS:
         """
         from urllib.request import Request, urlopen
         from urllib.error import HTTPError, URLError
-        from urllib.parse import urlencode
+        from urllib.parse import urlencode, urlparse
         from datetime import datetime
         import json
         import time
@@ -204,7 +204,8 @@ class USGS_HIVIS:
                 # BUILD SINGLE API REQUEST FOR ENTIRE DATE RANGE
                 # THIS IS MUCH FASTER THAN MULTIPLE PER-DAY REQUESTS
                 # ============================================================================
-                base_url = "https://jj5utwupk5.execute-api.us-east-1.amazonaws.com/prod/listFiles"
+                # Endpoint comes from settings (APIKeyManager) via USGSService
+                base_url = self._client._svc.list_files_url()
 
                 # Convert the user's local start/end datetimes to UTC so the API
                 # window correctly spans the full local date+time range, including
@@ -227,7 +228,9 @@ class USGS_HIVIS:
                 print(f"Attempt {attempt + 1}/{max_retries}")
 
                 # Make API request
-                req = Request(url, headers={"User-Agent": "python-urllib/3"})
+                headers = {"User-Agent": "python-urllib/3"}
+                headers.update(self._client._svc.api_headers())   # X-Api-Key when a key is stored
+                req = Request(url, headers=headers)
 
                 with urlopen(req, timeout=30) as resp:
                     filenames = json.load(resp)
@@ -249,9 +252,9 @@ class USGS_HIVIS:
                         'Network Error',
                         'Cannot connect to USGS HIVIS API. Please check:\n\n'
                         '1. Internet connection is active\n'
-                        '2. Firewall/VPN is not blocking AWS domains\n'
+                        '2. Firewall/VPN is not blocking USGS or AWS domains\n'
                         '3. DNS server is working\n\n'
-                        'Try: ping jj5utwupk5.execute-api.us-east-1.amazonaws.com',
+                        f'Try: ping {urlparse(base_url).netloc}',
                         QMessageBox.Close
                     )
                     msg.displayMsgBox()
