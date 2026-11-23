@@ -8718,7 +8718,14 @@ def NEON_updateProductTable(self, item):
         self.NEON_selected_products.setItem(i, m, QTableWidgetItem(strText))
 
         # CONFIGURE DATES - columns: 0=Site, 1=Image Count, 2=Start Date, 3=End Date, 4=Start Time, 5=End Time
-        nYear, nMonth, nDay = PhenoCam().getEndDate()
+        # Default both dates to the last day of the product's last available month at this
+        # site (from NEON availableMonths), capped at today for the current month.
+        import calendar
+        nYear, nMonth = lastYear, lastMonth
+        nDay = calendar.monthrange(nYear, nMonth)[1]
+        _today = date.today()
+        if (nYear, nMonth) == (_today.year, _today.month):
+            nDay = _today.day
 
         m += 2
         date_widget = QtWidgets.QDateEdit(calendarPopup=True)
