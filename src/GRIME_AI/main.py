@@ -277,7 +277,6 @@ gray_level = 16
 # url = "http://maps.googleapis.com/maps/api/geocode/json?address=googleplex&sensor=false"
 url = 'https://www.neonscience.org/field-sites/explore-field-sites'
 root_url = 'https://www.neonscience.org'
-SERVER = 'http://data.neonscience.org/api/v0/'
 
 class displayOptions():
     displayROIs = True
@@ -1330,24 +1329,27 @@ def _strip_neon_suffix(name):
 
 class NEONSitesProductsFetcher(QtCore.QThread):
     """
-    Fetches every NEON site's data products in one request (GET {server}sites), in the
+    Fetches every NEON site's data products in one request (GET <endpoint>sites), in the
     background. Emits {site code: {"domain", "state", "domainName", "products": [
     {"code", "title", "months"}]}} or None on failure. Fields are the same ones the
-    per-site request (FetchSiteInfoFromNEON) already reads.
+    per-site request (FetchSiteInfoFromNEON) already reads. The endpoint and NEON API
+    token come from settings (APIKeyManager) through NEON_API.
     """
     result = QtCore.pyqtSignal(object)
 
-    def __init__(self, server, parent=None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.server = server
 
     def run(self):
         try:
-            from appcore.http_client import TimeoutSession
-            resp = TimeoutSession().get(f"{self.server}sites")
-            resp.raise_for_status()
+            api = NEON_API()
+            sites_json = api.FetchAllSitesFromNEON()
+            if not sites_json:
+                print(f"[NEONSitesProductsFetcher] {api.last_error}")
+                self.result.emit(None)
+                return
             out = {}
-            for site in resp.json().get("data", []):
+            for site in sites_json.get("data", []):
                 code = site.get("siteCode")
                 if not code:
                     continue
@@ -4211,7 +4213,7 @@ class MainWindow(QMainWindow):
         self._neon_layout_built = True
 
         # Products for every site in one request, in the background
-        self._neon_products_fetcher = NEONSitesProductsFetcher(SERVER, parent=self)
+        self._neon_products_fetcher = NEONSitesProductsFetcher(parent=self)
         self._neon_products_fetcher.result.connect(self._neon_products_received)
         self._neon_products_fetcher.start()
         self._neon_apply_filter()
@@ -7893,9 +7895,12 @@ class MainWindow(QMainWindow):
     #
     # ======================================================================================================================
     def NEON_updateSiteProducts(self, item):
-        site_json = NEON_API().FetchSiteInfoFromNEON(SERVER, SITECODE)
+        site_json = NEON_fetchSiteInfoOrWarn(SITECODE, 'NEON Site Products')
 
         self.NEON_listboxSiteProducts.clear()
+
+        if site_json is None:
+            return
 
         for product in site_json['data']['dataProducts']:
             strText = product['dataProductCode'] + ": " + product['dataProductTitle']
@@ -8639,7 +8644,9 @@ def NEON_updateSiteInfo(self):
     global SITECODE
     SITECODE = top.data(0, QtCore.Qt.UserRole) or top.text(0).split(' - ')[0]
     print (f'Fetching site info from NEON server for {SITECODE}...')
-    siteInfo = NEON_API().FetchSiteInfoFromNEON(SERVER, SITECODE)
+    siteInfo = NEON_fetchSiteInfoOrWarn(SITECODE, 'NEON Site Information')
+    if siteInfo is None:
+        return None
 
     global DOMAINCODE
     DOMAINCODE = siteInfo['data']['domainCode']
@@ -8695,16 +8702,26 @@ def NEON_updateProductTable(self, item):
     for i in range(self.NEON_selected_products.rowCount()):
         self.NEON_selected_products.removeRow(0)
 
+    # Products NEON could not supply months for; reported once after the loop
+    skipped = []
+
     for i in range(len(products)):
         strText = self.NEON_listboxSiteProducts.selectedItems()[i].text()
-        self.NEON_selected_products.insertRow(i)
 
         productID = strText.split(':')[0]
         availableMonthList = findAvailableMonths(productID)
 
-        length = len(availableMonthList['availableMonths'])
-        strFirstMonth = availableMonthList['availableMonths'][0]
-        strLastMonth = availableMonthList['availableMonths'][length - 1]
+        # NO ROW FOR A PRODUCT WITHOUT AVAILABLE MONTHS (REQUEST FAILED OR NO DATA AT THIS SITE)
+        months = availableMonthList.get('availableMonths') or []
+        if not months:
+            skipped.append(f"{productID}: {availableMonthList.get('error') or 'no available months at this site'}")
+            continue
+
+        row = self.NEON_selected_products.rowCount()
+        self.NEON_selected_products.insertRow(row)
+
+        strFirstMonth = months[0]
+        strLastMonth = months[-1]
 
         monthFields = strFirstMonth.split('-')
         firstMonth = int(monthFields[1])
@@ -8715,7 +8732,7 @@ def NEON_updateProductTable(self, item):
         lastYear = int(monthFields[0])
 
         m = 0
-        self.NEON_selected_products.setItem(i, m, QTableWidgetItem(strText))
+        self.NEON_selected_products.setItem(row, m, QTableWidgetItem(strText))
 
         # CONFIGURE DATES - columns: 0=Site, 1=Image Count, 2=Start Date, 3=End Date, 4=Start Time, 5=End Time
         # Default both dates to the last day of the product's last available month at this
@@ -8732,30 +8749,35 @@ def NEON_updateProductTable(self, item):
         date_widget.setDate(QtCore.QDate(nYear, nMonth, nDay))
         date_widget.dateTimeChanged.connect(lambda: NEON_dateChangeMethod(date_widget, self.NEON_selected_products, not self.pushButton_SyncDates.isChecked()))
         date_widget.setKeyboardTracking(False)
-        self.NEON_selected_products.setCellWidget(i, m, date_widget)
+        self.NEON_selected_products.setCellWidget(row, m, date_widget)
 
         m += 1
         date_widget = QtWidgets.QDateEdit(calendarPopup=True)
         date_widget.setDate(QtCore.QDate(nYear, nMonth, nDay))
         date_widget.dateTimeChanged.connect(lambda: NEON_dateChangeMethod(date_widget, self.NEON_selected_products, not self.pushButton_SyncDates.isChecked()))
         date_widget.setKeyboardTracking(False)
-        self.NEON_selected_products.setCellWidget(i, m, date_widget)
+        self.NEON_selected_products.setCellWidget(row, m, date_widget)
 
         m += 1
         dateTime = QDateTimeEdit()
         dateTime.setDisplayFormat("hh:mm")
         dateTime.setFrame(False)
         dateTime.dateTimeChanged.connect(lambda: NEON_dateChangeMethod(date_widget, self.NEON_selected_products, not self.pushButton_SyncDates.isChecked()))
-        self.NEON_selected_products.setCellWidget(i, m, dateTime)
+        self.NEON_selected_products.setCellWidget(row, m, dateTime)
 
         m += 1
         dateTime = QDateTimeEdit()
         dateTime.setDisplayFormat("hh:mm")
         dateTime.setFrame(False)
         dateTime.dateTimeChanged.connect(lambda: NEON_dateChangeMethod(date_widget, self.NEON_selected_products, not self.pushButton_SyncDates.isChecked()))
-        self.NEON_selected_products.setCellWidget(i, m, dateTime)
+        self.NEON_selected_products.setCellWidget(row, m, dateTime)
 
         self.NEON_selected_products.resizeColumnsToContents()
+
+    if skipped:
+        App_QMessageBox('NEON Data Products',
+                        f'No dates could be set for these products at NEON site {SITECODE}:\n\n' + '\n'.join(skipped),
+                        buttons=QMessageBox.Close).displayMsgBox()
 
 # ======================================================================================================================
 #
@@ -9095,7 +9117,8 @@ def downloadProductDataFiles(self, item):
                 strStartYearMonth = str(start_date.year) + '-' + str(start_date.month).zfill(2)
                 strEndYearMonth = str(end_date.year) + '-' + str(end_date.month).zfill(2)
                 dateRange = App_Utils().getRangeOfDates(strStartYearMonth, strEndYearMonth)
-                availableMonths = NEON_API().getAvailableMonths(SITECODE, PRODUCTCODE)
+                _neon = NEON_API()
+                availableMonths = _neon.getAvailableMonths(SITECODE, PRODUCTCODE)
                 monthCount = 0
                 missingMonths = []
                 for month in dateRange:
@@ -9103,7 +9126,9 @@ def downloadProductDataFiles(self, item):
                         monthCount += 1
                     else:
                         missingMonths.append(month)
-                if monthCount == 0:
+                if monthCount == 0 and _neon.last_error:
+                    missing_data_message = missing_data_message + 'NEON Error!  ' + site + ' ' + strProductIDCell + ' ' + _neon.last_error + '\n'
+                elif monthCount == 0:
                     missing_data_message = missing_data_message + 'NEON Error!  ' + site + ' ' + strProductIDCell + 'Data is not available for some or all of the dates selected!\n'
                 elif monthCount < len(dateRange):
                     strMsg = '%d of %d months unavailable: %s' % (len(missingMonths), len(dateRange), missingMonths)
@@ -9158,7 +9183,8 @@ def downloadProductDataFiles(self, item):
                 dateRange = App_Utils().getRangeOfDates(strStartYearMonth, strEndYearMonth)
 
                 # GET THE AVAILABLE MONTHS FOR THE SELECTED DATA SET
-                availableMonths = NEON_API().getAvailableMonths(SITECODE, PRODUCTCODE)
+                _neon = NEON_API()
+                availableMonths = _neon.getAvailableMonths(SITECODE, PRODUCTCODE)
 
                 monthCount = 0
                 missingMonths = []
@@ -9168,7 +9194,9 @@ def downloadProductDataFiles(self, item):
                     else:
                         missingMonths.append(month)
 
-                if monthCount == 0:
+                if monthCount == 0 and _neon.last_error:
+                    missing_data_message = missing_data_message + 'NEON Error!  ' + strProductIDCell + ' ' + _neon.last_error + '\n'
+                elif monthCount == 0:
                     missing_data_message = missing_data_message + 'NEON Error!  ' + strProductIDCell + 'Data is not available for some or all of the dates selected!\n'
                 elif (monthCount < len(dateRange)):
                     strMsg = '%d of %d months unavailable: %s' % (len(missingMonths), len(dateRange), missingMonths)
@@ -9314,14 +9342,22 @@ def retranslateUi(self, MainWindow):
 # FIND THE MONTHS THAT DATA IS AVAILABLE FOR A PARTICULAR PRODUCT FOR A PARTICULAR SITE
 # ======================================================================================================================
 def findAvailableMonths(item):
-    global SERVER
+    """
+    {'availableMonths': [...], 'availableDataUrls': [...]} for the product at SITECODE.
+    Returns {'error': reason} when NEON could not be reached or rejected the request,
+    and {} when the request worked but the site does not offer the product.
+    """
     global SITECODE
 
     PRODUCTCODE = item
     monthList = {}
 
     # RETRIEVE INFORMATION FROM THE NEON WEBSITE FOR THE PARTICULAR SITE
-    site_json = NEON_API().FetchSiteInfoFromNEON(SERVER, SITECODE)
+    api = NEON_API()
+    site_json = api.FetchSiteInfoFromNEON(SITECODE)
+
+    if not site_json:
+        return {'error': api.last_error}
 
     if site_json:
         # EXTRACT THE AVAILABLE MONTH AND THE URL FOR THE DATA FOR EACH AVAILABLE MONTH
@@ -9333,6 +9369,21 @@ def findAvailableMonths(item):
                 break
 
     return (monthList)
+
+
+# ======================================================================================================================
+# SITE JSON FOR A NEON SITE, OR None AFTER TELLING THE USER WHY IT COULD NOT BE RETRIEVED
+# ======================================================================================================================
+def NEON_fetchSiteInfoOrWarn(siteCode, title):
+    api = NEON_API()
+    site_json = api.FetchSiteInfoFromNEON(siteCode)
+    if not site_json.get('data'):
+        reason = api.last_error or 'NEON returned no information for this site.'
+        App_QMessageBox(title,
+                        f'Could not retrieve information for NEON site {siteCode}.\n\n{reason}',
+                        buttons=QMessageBox.Close).displayMsgBox()
+        return None
+    return site_json
 
 
 # ======================================================================================================================
