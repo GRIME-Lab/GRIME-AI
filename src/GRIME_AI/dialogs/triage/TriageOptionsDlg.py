@@ -16,16 +16,18 @@ from PyQt5.QtGui import QFont, QIntValidator, QDoubleValidator
 from PyQt5.uic import loadUi
 
 from appcore.dialogs.triage.TriageCalibrateDlg import TriageCalibrateDlg
+from appcore.dialogs.triage.PointerSlider import LIMIT_STYLES
 from ...app_identity import APP_CONFIG_FILENAME
+
+PERCENT = 100.0     # limits are shown as percentages and passed to triage as fractions
 
 BUTTON_CSS_STEEL_BLUE = 'QPushButton {background-color: steelblue; color: white;}'
 
 SLIDER_RANGES = {
-    "lap":  (0,   500, 150),
+    "lap":  (0,  5000, 150),
     "bmin": (0,   255,  40),
     "bmax": (0,   255, 215),
 }
-
 
 class TriageOptionsDlg(QDialog):
 
@@ -45,6 +47,7 @@ class TriageOptionsDlg(QDialog):
         self.adjustSize()
         self.referenceImageFilename = ''
         self._triage_folder = folder
+        self._loading_config = False    # True while restoring settings, so restoring does not save
 
         self._setup_validators()
         self._setup_connections()
@@ -54,9 +57,14 @@ class TriageOptionsDlg(QDialog):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _setup_validators(self):
-        self.lineEdit_lap_value.setValidator(QIntValidator(0, 500))
-        self.lineEdit_bmin_value.setValidator(QIntValidator(0, 255))
-        self.lineEdit_bmax_value.setValidator(QIntValidator(0, 255))
+        for key, line_edit, slider in (("lap",  self.lineEdit_lap_value,  self.sliderLaplacian),
+                                       ("bmin", self.lineEdit_bmin_value, self.sliderBrightnessMin),
+                                       ("bmax", self.lineEdit_bmax_value, self.sliderBrightnessMax)):
+            lo, hi, _ = SLIDER_RANGES[key]
+            line_edit.setValidator(QIntValidator(lo, hi))
+            slider.setRange(lo, hi)
+        lo, hi, _ = SLIDER_RANGES["lap"]
+        self.doubleSpinBoxLaplacianThreshold.setRange(float(lo), float(hi))
 
     # ------------------------------------------------------------------------------------------------------------------
     def _setup_connections(self):
@@ -77,11 +85,19 @@ class TriageOptionsDlg(QDialog):
         self.checkBox_UseFocusROI.toggled.connect(self._on_focus_roi_toggled)
         self.checkBox_UseColorImbalance.toggled.connect(self._on_color_imbalance_toggled)
         self.doubleSpinBox_ColorImbalanceThreshold.valueChanged.connect(self._on_color_imbalance_value_changed)
+        self.checkBox_UseOverexposure.toggled.connect(self._on_overexposure_toggled)
+        self.doubleSpinBox_OverexposureLimit.valueChanged.connect(self._on_overexposure_value_changed)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _apply_styles(self):
         self.pushButton_SelectReferenceImage.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
         self.pushButton_Calibrate.setStyleSheet(BUTTON_CSS_STEEL_BLUE)
+
+        # Color swatch before each brightness label, matching its slider's pointer
+        for label, kind, text in ((self.labelTooBright, "too_bright", "Too bright"),
+                                  (self.labelTooDark,   "too_dark",   "Too dark")):
+            color = LIMIT_STYLES[kind]["pointer"]
+            label.setText(f'<span style="color:{color};">&#9632;</span> <b>{text}</b>')
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sync_all_displays(self):
@@ -103,10 +119,20 @@ class TriageOptionsDlg(QDialog):
         self.doubleSpinBoxLaplacianThreshold.setValue(float(val))
 
     def _on_bmin_slider_changed(self, val):
+        # Too dark must stay below Too bright (not enforced while settings are restored)
+        if not self._loading_config and val >= self.sliderBrightnessMax.value():
+            self.sliderBrightnessMin.setValue(self.sliderBrightnessMax.value() - 1)
+            self.lineEdit_bmin_value.setText(str(self.sliderBrightnessMin.value()))
+            return
         self.lineEdit_bmin_value.setText(str(val))
         self.doubleSpinBoxBrightnessMin.setValue(float(val))
 
     def _on_bmax_slider_changed(self, val):
+        # Too bright must stay above Too dark (not enforced while settings are restored)
+        if not self._loading_config and val <= self.sliderBrightnessMin.value():
+            self.sliderBrightnessMax.setValue(self.sliderBrightnessMin.value() + 1)
+            self.lineEdit_bmax_value.setText(str(self.sliderBrightnessMax.value()))
+            return
         self.lineEdit_bmax_value.setText(str(val))
         self.doubleSpinBoxBrightnessMax.setValue(float(val))
 
@@ -116,21 +142,21 @@ class TriageOptionsDlg(QDialog):
 
     def _on_lap_edit_finished(self):
         try:
-            val = self._clamp(int(self.lineEdit_lap_value.text()), 0, 500)
+            val = self._clamp(int(self.lineEdit_lap_value.text()), *SLIDER_RANGES["lap"][:2])
             self.sliderLaplacian.setValue(val)
         except ValueError:
             self._on_lap_slider_changed(self.sliderLaplacian.value())
 
     def _on_bmin_edit_finished(self):
         try:
-            val = self._clamp(int(self.lineEdit_bmin_value.text()), 0, 255)
+            val = self._clamp(int(self.lineEdit_bmin_value.text()), *SLIDER_RANGES["bmin"][:2])
             self.sliderBrightnessMin.setValue(val)
         except ValueError:
             self._on_bmin_slider_changed(self.sliderBrightnessMin.value())
 
     def _on_bmax_edit_finished(self):
         try:
-            val = self._clamp(int(self.lineEdit_bmax_value.text()), 0, 255)
+            val = self._clamp(int(self.lineEdit_bmax_value.text()), *SLIDER_RANGES["bmax"][:2])
             self.sliderBrightnessMax.setValue(val)
         except ValueError:
             self._on_bmax_slider_changed(self.sliderBrightnessMax.value())
@@ -155,9 +181,13 @@ class TriageOptionsDlg(QDialog):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _apply_calibration(self, result):
-        self.sliderLaplacian.setValue(int(round(result.laplacian_threshold)))
-        self.sliderBrightnessMin.setValue(int(round(result.brightness_min)))
-        self.sliderBrightnessMax.setValue(int(round(result.brightness_max)))
+        self._loading_config = True
+        try:
+            self.sliderLaplacian.setValue(int(round(result.laplacian_threshold)))
+            self.sliderBrightnessMin.setValue(int(round(result.brightness_min)))
+            self.sliderBrightnessMax.setValue(int(round(result.brightness_max)))
+        finally:
+            self._loading_config = False
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_focus_roi_toggled(self, checked):
@@ -204,11 +234,37 @@ class TriageOptionsDlg(QDialog):
                     config = json.load(f)
             config.setdefault("triage", {})
             config["triage"]["use_color_imbalance"]       = self.checkBox_UseColorImbalance.isChecked()
-            config["triage"]["color_imbalance_threshold"] = self.doubleSpinBox_ColorImbalanceThreshold.value()
+            config["triage"]["color_imbalance_threshold"] = self.getColorImbalanceThreshold()
             with open(config_path, "w") as f:
                 json.dump(config, f, indent=4)
         except Exception as e:
             print(f"[TriageOptionsDlg] Could not save color imbalance settings: {e}")
+
+    def _on_overexposure_toggled(self, checked):
+        self.doubleSpinBox_OverexposureLimit.setEnabled(checked)
+        self._save_triage_settings_to_config()
+
+    def _on_overexposure_value_changed(self, value):
+        self._save_triage_settings_to_config()
+
+    def _save_triage_settings_to_config(self):
+        """Save the Check exposure settings so they are restored next time."""
+        if self._loading_config:
+            return
+        try:
+            config_path = os.path.join(
+                self._get_settings_folder(), APP_CONFIG_FILENAME)
+            config = {}
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+            config.setdefault("triage", {})
+            config["triage"]["use_overexposure"]   = self.checkBox_UseOverexposure.isChecked()
+            config["triage"]["overexposure_limit"] = self.getOverexposureLimit()
+            with open(config_path, "w") as f:
+                json.dump(config, f, indent=4)
+        except Exception as e:
+            print(f"[TriageOptionsDlg] Could not save triage settings: {e}")
 
     def _get_settings_folder(self):
         from appcore.Save_Utils import Save_Utils
@@ -250,6 +306,7 @@ class TriageOptionsDlg(QDialog):
             triage = config.get("triage", {})
             if not triage:
                 return
+            self._loading_config = True
             if "laplacian_threshold" in triage:
                 self.sliderLaplacian.setValue(int(round(triage["laplacian_threshold"])))
             if "brightness_min"      in triage:
@@ -265,11 +322,19 @@ class TriageOptionsDlg(QDialog):
                 self.checkBox_UseColorImbalance.setChecked(triage["use_color_imbalance"])
             if "color_imbalance_threshold" in triage:
                 self.doubleSpinBox_ColorImbalanceThreshold.setValue(
-                    float(triage["color_imbalance_threshold"]))
+                    float(triage["color_imbalance_threshold"]) * PERCENT)
+            # Restore Check exposure settings
+            if "use_overexposure" in triage:
+                self.checkBox_UseOverexposure.setChecked(triage["use_overexposure"])
+            if "overexposure_limit" in triage:
+                self.doubleSpinBox_OverexposureLimit.setValue(float(triage["overexposure_limit"]) * PERCENT)
+            self._loading_config = False
+
             if triage.get("use_focus_roi") and self.checkBox_UseFocusROI.isEnabled():
                 self.checkBox_UseFocusROI.setChecked(True)
 
         except Exception as e:
+            self._loading_config = False
             print(f"[TriageOptionsDlg] Could not load calibration: {e}")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -312,7 +377,15 @@ class TriageOptionsDlg(QDialog):
         return self.checkBox_UseColorImbalance.isChecked()
 
     def getColorImbalanceThreshold(self):
-        return self.doubleSpinBox_ColorImbalanceThreshold.value()
+        """Dominant color limit as a fraction (the dialog shows a percentage)."""
+        return self.doubleSpinBox_ColorImbalanceThreshold.value() / PERCENT
+
+    def getUseOverexposure(self):
+        return self.checkBox_UseOverexposure.isChecked()
+
+    def getOverexposureLimit(self):
+        """Overexposed area limit as a fraction (the dialog shows a percentage)."""
+        return self.doubleSpinBox_OverexposureLimit.value() / PERCENT
 
     def getFftCalibration(self):
         """Return the saved FFT blur calibration dict, or None. ImageQualityAnalyzer

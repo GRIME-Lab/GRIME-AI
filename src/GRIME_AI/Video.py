@@ -176,50 +176,76 @@ class Video:
             msgBox.displayMsgBox()
             return
 
-        out = None
-
-        myGRIMe_Color = Color()
-
-        filePath = self.myApp_save_utils.create_video_folder(rootFolder)
-
         # ONLY LOOK FOR FILES WITH THE FOLLOWING EXTENSIONS
         extensions = ('.jpg', '.jpeg', '.png')
 
-        myApp_utils = App_Utils()
-        imageCount = myApp_utils.get_image_count(rootFolder, extensions)
-
-        # CANVAS = LARGEST WIDTH x LARGEST HEIGHT ACROSS ALL IMAGES. SMALLER IMAGES ARE CENTERED ON IT SO THAT
-        # cv2.VideoWriter DOES NOT SILENTLY DROP FRAMES WHOSE SIZE DIFFERS FROM THE SIZE IT WAS OPENED WITH.
         imageFiles = [os.path.join(rootFolder, f) for f in sorted(os.listdir(rootFolder))
                       if os.path.splitext(f)[-1].lower() in extensions]
-        canvas_w, canvas_h = get_canvas_size(imageFiles)
+        if not imageFiles:
+            App_QMessageBox('Video Error',
+                            f'No .jpg, .jpeg or .png images were found in:\n{rootFolder}',
+                            buttons=QMessageBox.Close).displayMsgBox()
+            return
 
-        # IMAGES ARE CONVERTED TO BGR BEFORE WRITING, SO THE BORDER COLOR IS TOO
-        border_color_bgr = tuple(reversed(border_color))
+        out = None
+        progressBar = None
+        videoPath = None
 
-        progressBar = QProgressWheel(0, imageCount)
-        progressBar.show()
+        # ANY FAILURE IS REPORTED TO THE USER; NOTHING IS LEFT TO FAIL SILENTLY IN THE CONSOLE
+        try:
+            filePath = self.myApp_save_utils.create_video_folder(rootFolder)
 
-        for imageIndex, file in enumerate(sorted(os.listdir(rootFolder))):
-            ext = os.path.splitext(file)[-1].lower()
+            myGRIMe_Color = Color()
 
-            if ext in extensions:
+            # CANVAS = LARGEST WIDTH x LARGEST HEIGHT ACROSS ALL IMAGES. SMALLER IMAGES ARE CENTERED ON IT SO THAT
+            # cv2.VideoWriter DOES NOT SILENTLY DROP FRAMES WHOSE SIZE DIFFERS FROM THE SIZE IT WAS OPENED WITH.
+            canvas_w, canvas_h = get_canvas_size(imageFiles)
+
+            # IMAGES ARE CONVERTED TO BGR BEFORE WRITING, SO THE BORDER COLOR IS TOO
+            border_color_bgr = tuple(reversed(border_color))
+
+            videoFile = 'Original_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + '.avi'
+            videoPath = os.path.join(filePath, videoFile)
+            out = cv2.VideoWriter(videoPath, cv2.VideoWriter_fourcc(*'mp4v'), 15, (canvas_w, canvas_h))
+            if not out.isOpened():
+                raise RuntimeError(f"The video file could not be opened for writing:\n{videoPath}")
+
+            progressBar = QProgressWheel(0, len(imageFiles))
+            progressBar.show()
+
+            for imageIndex, imageFile in enumerate(imageFiles):
                 progressBar.setValue(imageIndex)
 
-                img = myGRIMe_Color.loadColorImage(os.path.join(rootFolder, file))
+                img = myGRIMe_Color.loadColorImage(imageFile)
+                if img is None:
+                    raise RuntimeError(f"This image could not be read:\n{imageFile}")
                 img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 img = center_on_canvas(img, canvas_w, canvas_h, border_color_bgr)
 
-                if out == None:
-                    videoFile = 'Original_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + '.avi'
-                    out = cv2.VideoWriter(filePath + '/' + videoFile, cv2.VideoWriter_fourcc(*'mp4v'), 15, (canvas_w, canvas_h))
-
                 out.write(img)
 
-        out.release()
+            out.release()
+            out = None
 
-        progressBar.close()
-        del progressBar
+            if not os.path.isfile(videoPath) or os.path.getsize(videoPath) == 0:
+                raise RuntimeError(f"No video was written to:\n{videoPath}")
+
+        except Exception as e:
+            if progressBar is not None:
+                progressBar.close()
+                progressBar = None
+            App_QMessageBox('Video Error', f'The video was not created.\n\n{e}',
+                            buttons=QMessageBox.Close).displayMsgBox()
+            return
+
+        finally:
+            if out is not None:
+                out.release()
+            if progressBar is not None:
+                progressBar.close()
+
+        App_QMessageBox('Video Complete', f'Video created from {len(imageFiles)} images:\n{videoPath}',
+                        buttons=QMessageBox.Close).displayMsgBox()
 
 
     # ======================================================================================================================
@@ -234,31 +260,41 @@ class Video:
           • Phase-1 (0 → 100 - final_steps)% by actual frames written
           • Phase-2 (100 - final_steps → 100)% by an estimated finalization timer
         """
-        if len(rootFolder) == 0:
-            msgBox = App_QMessageBox('Image Folder Error', 'Please specify an image folder!', buttons=QMessageBox.Close)
+        # Guard: a source image folder is required (same check as createVideo).
+        if not rootFolder or not os.path.isdir(rootFolder):
+            msgBox = App_QMessageBox('Image Folder Error', 'Please specify a valid image folder!', buttons=QMessageBox.Close)
             response = msgBox.displayMsgBox()
             return
 
-        # 1) Gather source files
-        utils = App_Utils()
-        _, files = utils.getFileList(rootFolder, ('.jpg', '.jpeg', '.png'))
-        filenames = [
-            os.path.join(rootFolder, f)
-            for f in files
-            if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png'}
-        ]
-        if not filenames:
-            QMessageBox.information(self, "No Images", "No JPG/PNG found in folder.")
+        # ANY FAILURE BEFORE THE WRITER THREAD STARTS IS REPORTED TO THE USER
+        try:
+            # 1) Gather source files
+            utils = App_Utils()
+            _, files = utils.getFileList(rootFolder, ('.jpg', '.jpeg', '.png'))
+            filenames = [
+                os.path.join(rootFolder, f)
+                for f in files
+                if os.path.splitext(f)[1].lower() in {'.jpg', '.jpeg', '.png'}
+            ]
+            if not filenames:
+                App_QMessageBox('GIF Error', f'No .jpg, .jpeg or .png images were found in:\n{rootFolder}',
+                                buttons=QMessageBox.Close).displayMsgBox()
+                return
+
+            # 2) Prepare output path
+            out_dir = self.myApp_save_utils.create_gif_folder(rootFolder)
+            gif_name = 'Original_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + '.gif'
+            gif_file = os.path.join(out_dir, gif_name)
+
+            # 3) Compute phases
+            total_frames = len(filenames)
+            total_estimate_sec = estimate_gif_write_time(filenames)  # float
+            canvas_size = get_canvas_size(filenames)
+        except Exception as e:
+            App_QMessageBox('GIF Error', f'The GIF was not created.\n\n{e}',
+                            buttons=QMessageBox.Close).displayMsgBox()
             return
 
-        # 2) Prepare output path
-        out_dir = self.myApp_save_utils.create_gif_folder(rootFolder)
-        gif_name = 'Original_' + datetime.datetime.now().strftime("%Y%m%d_%H%M%S") + '.gif'
-        gif_file = os.path.join(out_dir, gif_name)
-
-        # 3) Compute phases
-        total_frames = len(filenames)
-        total_estimate_sec = estimate_gif_write_time(filenames)  # float
         final_steps = 10
         frame_pct_max = 100 - final_steps
 
@@ -268,25 +304,32 @@ class Video:
         progressBar.show()
 
         # 5) Track completion of both phases
-        done = {"writer": False, "estimate": False}
+        done = {"writer": False, "estimate": False, "error": False}
 
         def try_close():
             if done["writer"] and done["estimate"]:
                 progressBar.setValue(100)
                 progressBar.close()
+                if not done["error"]:
+                    App_QMessageBox('GIF Complete', f'GIF created from {total_frames} images:\n{gif_file}',
+                                    buttons=QMessageBox.Close).displayMsgBox()
                 # drop references so GC can clean up
                 self._gif_worker = None
                 self._final_est = None
 
+        def on_writer_error(tb):
+            done["error"] = True
+            App_QMessageBox("GIF Write Error", f'The GIF was not created.\n\n{tb}',
+                            buttons=QMessageBox.Close).displayMsgBox()
+
         # 6) Phase-1: GIFWriterWorker (writes frames + actual finalize())
-        canvas_size = get_canvas_size(filenames)
         self._gif_worker = gw = GIFWriterWorker(filenames, gif_file, duration=0.25,
                                                 canvas_size=canvas_size, border_color=border_color)
         # Map frame progress → 0…frame_pct_max
         gw.progress.connect(lambda i: progressBar.setValue(
             int(i / total_frames * frame_pct_max)
         ))
-        gw.error.connect(lambda tb: QMessageBox.critical(self, "GIF Write Error", tb))
+        gw.error.connect(on_writer_error)
 
         def on_writer_finished():
             done["writer"] = True

@@ -30,6 +30,27 @@ from sklearn.metrics import (
     auc
 )
 from ..app_identity import APP_DISPLAY_NAME
+from ..dialogs.ML_image_processing.model_config_manager import ModelConfigManager
+from .convergence_analysis import analyze_convergence, MIN_EPOCHS_LINE
+
+# Validation-set sizes below which validation-derived quantities cannot be
+# resolved, and the window a trustworthy F1-optimal threshold should fall in.
+# MIN_VAL_IMAGES_FOR_THRESHOLD: the F1-optimal threshold is decided by the pixels
+#   of intermediate probability along the target boundary. Validation subsamples
+#   pixels, so below this many images only a few dozen boundary pixels reach the
+#   F1 curve and the threshold moves between passes on an unchanged model.
+# MIN_VAL_IMAGES_FOR_METRICS: below this, small epoch-to-epoch metric differences
+#   are sampling noise rather than model change.
+# Both are overridable per run via analyze_training_results().
+MIN_VAL_IMAGES_FOR_THRESHOLD = 20
+MIN_VAL_IMAGES_FOR_METRICS = 50
+# Dice change required before the F1-optimal threshold is worth reporting.
+# Where the threshold sits is not a test of anything: the F1 curve is flat near
+# the top for a well-fitted model, so the argmax can land far from 0.50 with no
+# gain, and can sit close to 0.50 while a real offset costs several points of
+# Dice. Only the change in Dice distinguishes the two.
+MIN_THRESHOLD_DICE_GAIN = 0.02
+VAL_METRIC_NOISE_FLOOR = 0.02
 
 
 # ======================================================================================================================
@@ -773,6 +794,10 @@ class ModelTrainingVisualization:
             underfit_threshold: float = 0.75,
             instability_std_threshold: float = 0.015,
             good_val_acc_threshold: float = 0.90,
+            min_val_images_for_threshold: int = MIN_VAL_IMAGES_FOR_THRESHOLD,
+            min_val_images_for_metrics: int = MIN_VAL_IMAGES_FOR_METRICS,
+            val_threshold_dice_gain: float = None,
+            min_threshold_dice_gain: float = MIN_THRESHOLD_DICE_GAIN,
             lr_scheduler_enabled: bool = None,
             lr_reductions: int = None,
             config: dict = None,
@@ -783,6 +808,7 @@ class ModelTrainingVisualization:
             val_best_threshold: float = None,
             train_dice: list[float] = None,
             val_dice: list[float] = None,
+            seconds_per_epoch: float = None,
     ) -> dict:
         """
         Analyzes training curves and returns a structured diagnostic report.
@@ -809,6 +835,15 @@ class ModelTrainingVisualization:
             underfit_threshold:       Val accuracy below which underfitting is flagged.
             instability_std_threshold: Std dev of val accuracy flagging instability.
             good_val_acc_threshold:   Val accuracy above which convergence is good.
+            min_val_images_for_threshold: Validation images needed before the
+                                      F1-optimal threshold is treated as a real
+                                      measurement rather than sampling noise.
+            min_val_images_for_metrics: Validation images needed before small
+                                      epoch-to-epoch metric differences mean anything.
+            val_threshold_dice_gain:  Absolute Dice change from moving the decision
+                                      threshold off 0.50 to the F1-optimal value.
+            min_threshold_dice_gain:  Dice change below which that move is treated
+                                      as immaterial and not reported.
             lr_scheduler_enabled:     Whether an LR scheduler was active (suppresses
                                       the "add a scheduler" suggestion).
             lr_reductions:            Number of LR reductions the scheduler performed.
@@ -819,6 +854,8 @@ class ModelTrainingVisualization:
             best_epoch:               1-based epoch of the best checkpoint.
             val_best_threshold:       F1-optimal probability threshold on the final
                                       validation pass (0.5 == well calibrated).
+            seconds_per_epoch:        Average wall-clock time per epoch, used to state
+                                      the time cost of a projected improvement.
 
         Returns:
             dict with keys:
@@ -956,6 +993,23 @@ class ModelTrainingVisualization:
         if not findings:
             findings.append(("good", f"Good convergence: validation {metric_name} reached {final_val_q:.3f} with a train/val gap of {mean_gap:.3f}."))
 
+        # 9. Convergence of validation loss: trend (decaying curve or straight line,
+        # chosen by AICc), noise around the trend, and the epochs needed for the
+        # next meaningful decrease. Same test early stopping uses.
+        k_sigmas = float((config or {}).get("improvement_threshold_sigmas")
+                         or ModelConfigManager.get_default("improvement_threshold_sigmas"))
+        convergence = analyze_convergence(np.arange(1, len(vl_loss) + 1), vl_loss, k_sigmas)
+        if not convergence.enough_epochs:
+            findings.append(("good", f"Convergence not assessed: {len(vl_loss)} validation epoch(s); "
+                                     f"at least {MIN_EPOCHS_LINE} are needed to separate the trend from noise."))
+        elif convergence.levelled_off:
+            findings.append(("good", f"Validation loss has levelled off: the remaining possible decrease "
+                                     f"({convergence.remaining_gain:.3g}) is below {k_sigmas:g}x the noise "
+                                     f"({convergence.noise:.3g}); more epochs will not give a meaningful gain."))
+        elif convergence.not_decreasing:
+            findings.append(("good", "Validation loss is no longer decreasing (straight-line trend is flat or rising); "
+                                     "more epochs will not give a meaningful gain."))
+
         # ------------------------------------------------------------------
         # Concrete, config-aware recommendations for the next run.
         # Each is {key, current, suggested, reason}; key is the site_config
@@ -972,7 +1026,13 @@ class ModelTrainingVisualization:
             early_stopped=early_stopped, best_epoch=best_epoch,
             val_best_threshold=val_best_threshold,
             underfit_threshold=underfit_threshold,
+            min_val_images_for_threshold=min_val_images_for_threshold,
+            min_val_images_for_metrics=min_val_images_for_metrics,
+            val_threshold_dice_gain=val_threshold_dice_gain,
+            min_threshold_dice_gain=min_threshold_dice_gain,
             metric_name=metric_name,
+            convergence=convergence,
+            seconds_per_epoch=seconds_per_epoch,
         )
         for r in recommendations:
             if r.get("severity") == "warning":
@@ -1053,7 +1113,12 @@ class ModelTrainingVisualization:
     def _build_recommendations(config, n_epochs, vl_acc, vl_loss, mean_gap, max_val_acc,
                                overfit, underfit, lr, lr_scheduler_enabled, lr_reductions,
                                num_train_images, num_val_images, early_stopped, best_epoch,
-                               val_best_threshold, underfit_threshold, metric_name="accuracy"):
+                               val_best_threshold, underfit_threshold, metric_name="accuracy",
+                               convergence=None, seconds_per_epoch=None,
+                               min_val_images_for_threshold=MIN_VAL_IMAGES_FOR_THRESHOLD,
+                               min_val_images_for_metrics=MIN_VAL_IMAGES_FOR_METRICS,
+                               val_threshold_dice_gain=None,
+                               min_threshold_dice_gain=MIN_THRESHOLD_DICE_GAIN):
         """
         Rule-based translation of diagnostics into concrete config changes.
         Deterministic and explainable: every entry names the site_config key,
@@ -1078,19 +1143,59 @@ class ModelTrainingVisualization:
         sched_on = bool(_get("lr_scheduler_enabled", True)) if lr_scheduler_enabled is None else bool(lr_scheduler_enabled)
         lr_val = float(lr) if lr is not None else float((_get("learningRates", [1e-4]) or [1e-4])[0])
         best = int(best_epoch) if best_epoch else int(np.argmax(vl_acc)) + 1
-        val_still_improving = (n_epochs >= 3 and float(vl_loss[-1]) < float(np.min(vl_loss[:-2])))
+        # Meaningful-improvement test (see convergence_analysis): a projected decrease
+        # larger than improvement_threshold_sigmas x the noise around the fitted trend.
+        val_still_improving = bool(convergence is not None
+                                   and convergence.epochs_to_meaningful_gain is not None)
+        val_converged = bool(convergence is not None and convergence.enough_epochs
+                             and (convergence.levelled_off or convergence.not_decreasing))
 
-        # --- Calibration / protocol mismatch (highest priority) --------------
-        if val_best_threshold is not None and (val_best_threshold < 0.35 or val_best_threshold > 0.65):
+        # --- Validation set size, then threshold calibration (highest priority)
+        # The F1-optimal threshold is decided by the pixels of intermediate
+        # probability, which lie along the target boundary. Validation subsamples
+        # pixels (max_pixel_samples, class-stratified), so with few validation
+        # images only a few dozen boundary pixels reach the F1 curve, each
+        # carrying a large stratification weight. The curve is then flat across
+        # the middle of its range and the argmax lands anywhere in it: the
+        # threshold moves between passes on unchanged weights while the Dice at
+        # that threshold barely changes. A threshold away from 0.50 is evidence
+        # of a train/validation mismatch only once the validation set is large
+        # enough to hold it steady.
+        thr_gain = (abs(float(val_threshold_dice_gain))
+                    if val_threshold_dice_gain is not None else None)
+        thr_matters = (val_best_threshold is not None and thr_gain is not None
+                       and thr_gain >= min_threshold_dice_gain)
+        val_too_small_for_thr = (num_val_images is not None
+                                 and num_val_images < min_val_images_for_threshold)
+
+        if val_too_small_for_thr:
+            # Dataset sizes and what they cannot resolve. Whether the model
+            # trained acceptably is a separate question from whether the
+            # validation set can measure it, so both are stated.
+            n_tr = num_train_images if num_train_images is not None else "unknown"
+            resolvable = ("the F1-optimal threshold, checkpoint ranking and early stopping"
+                          if val_best_threshold is not None
+                          else "checkpoint ranking and early stopping")
+            trained_ok = (" Model training itself is adequate."
+                          if not underfit and not overfit else "")
+            recs.append({
+                "key": "validation images",
+                "current": num_val_images,
+                "suggested": f">= {min_val_images_for_threshold}",
+                "reason": (f"Not enough training and validation images ({n_tr} training, "
+                           f"{num_val_images} validation) to resolve small validation "
+                           f"differences, including {resolvable}.{trained_ok}"),
+                "severity": None})
+        elif thr_matters:
             recs.append({
                 "key": "train_prompt_mode / val_prompt_mode",
                 "current": f"{_get('train_prompt_mode', 'pooled')} / {_get('val_prompt_mode', 'pooled')}",
                 "suggested": "pooled / pooled",
-                "reason": (f"Validation is miscalibrated (F1-optimal threshold {val_best_threshold:.2f}, "
-                           f"expected ~0.50). Validation prompts/preprocessing differ from training; "
-                           f"fix the pipeline before changing any hyperparameter."),
+                "reason": (f"Moving the decision threshold from 0.50 to {val_best_threshold:.2f} "
+                           f"changes Dice by {thr_gain:.3f} on {num_val_images} validation images. "
+                           f"Inference applies 0.50, so that difference is lost at deployment. "
+                           f"Check that validation prompts and preprocessing match training."),
                 "severity": "warning"})
-            return recs  # everything else would be tuning a broken metric
         if overfit and underfit:
             return recs  # pipeline-mismatch finding already emitted upstream
 
@@ -1105,17 +1210,34 @@ class ModelTrainingVisualization:
                  "Long runs without early stopping waste time past convergence and risk overfitting.")
 
         # --- Not converged -------------------------------------------------------
-        if not early_stopped and best >= n_epochs - 1 and val_still_improving:
-            _add("number_of_epochs", epochs_cfg, epochs_cfg + 20,
-                 f"Best checkpoint is epoch {best} of {n_epochs} and validation loss is still falling; "
-                 f"the run ended before converging.")
+        if not early_stopped and val_still_improving:
+            def _cost(epochs):
+                if not seconds_per_epoch:
+                    return ""
+                secs = epochs * seconds_per_epoch
+                return f" (about {secs / 60.0:.0f} min)" if secs >= 60 else f" (about {secs:.0f} s)"
+
+            steps = convergence.epochs_to_meaningful_gain
+            reason = (f"Validation loss is still decreasing ({convergence.trend.kind} fitted to {n_epochs} epochs). "
+                      f"A decrease of {convergence.projected_gain:.3g}, more than {convergence.k_sigmas:g}x the noise "
+                      f"({convergence.noise:.3g}), is projected after {steps} more epoch(s){_cost(steps)}.")
+            if convergence.epochs_to_level_off is not None:
+                # Decaying curve: run until the remaining possible decrease is within the noise.
+                more = convergence.epochs_to_level_off
+                reason += (f" The curve is projected to level off after {more} more epoch(s){_cost(more)}, "
+                           f"when the remaining possible decrease falls below {convergence.k_sigmas:g}x the noise.")
+            else:
+                # Straight line: no level-off point can be projected yet.
+                more = steps
+                reason += " The trend is a straight line, so the point where it levels off cannot be projected yet."
+            _add("number_of_epochs", epochs_cfg, max(epochs_cfg, n_epochs) + more, reason)
 
         # --- Scheduler / ES interplay ------------------------------------------------
         if sched_on and es_on and sched_pat >= patience:
             _add("lr_scheduler_patience", sched_pat, max(1, patience // 2),
                  f"lr_scheduler_patience ({sched_pat}) >= patience ({patience}): training stops before "
                  f"the learning rate is ever reduced.")
-        if sched_on and lr_reductions and lr_reductions >= 2 and not val_still_improving and not early_stopped:
+        if sched_on and lr_reductions and lr_reductions >= 2 and val_converged and not early_stopped:
             _add("number_of_epochs", epochs_cfg, max(5, best + 3),
                  f"LR was reduced {lr_reductions} times with no further validation gain after epoch {best}; "
                  f"the model has converged.")
@@ -1138,12 +1260,15 @@ class ModelTrainingVisualization:
                 _add("number_of_epochs", epochs_cfg, max(epochs_cfg, 30),
                      "Too few epochs to judge underfitting; allow the run to converge.")
 
-        # --- Validation set size -------------------------------------------------------
-        if num_val_images is not None and num_val_images < 50:
+        # --- Validation set size ------------------------------------------------------
+        # Sizes below min_val_images_for_threshold already got the warning above.
+        if num_val_images is not None and not val_too_small_for_thr \
+                and num_val_images < min_val_images_for_metrics:
             recs.append({
                 "key": "val_split", "current": _get("val_split", 0.2), "suggested": _get("val_split", 0.2),
-                "reason": (f"Only {num_val_images} validation images: epoch-to-epoch changes below ~0.02 "
-                           f"are noise. Increase the dataset or the split before trusting small differences."),
+                "reason": (f"Only {num_val_images} validation images: epoch-to-epoch changes below "
+                           f"~{VAL_METRIC_NOISE_FLOOR:g} are noise. Increase the dataset or the split "
+                           f"before trusting small differences."),
                 "severity": None})
 
         return recs
@@ -1184,10 +1309,14 @@ class ModelTrainingVisualization:
             config: dict = None,                  # site_config used for the run
             val_best_threshold: float = None,     # F1-optimal threshold from validator
             val_dice_best_threshold: float = None,  # Dice at that threshold
+            check_threshold_calibration: bool = True,  # False when the threshold is the model's
+                                                       # decision rule (SegFormer), not a SAM2
+                                                       # train/validation consistency check
             time_breakdown: dict = None,          # {"encode","train","validate"} seconds
             best_eval: dict = None,               # metrics of the saved best checkpoint
             foreground_stats: dict = None,        # {"train": {...}, "val": {...}} target pixel fraction
             train_dice: list[float] = None,       # per-epoch train Dice (diagnostics)
+            platform: dict = None,                # device_utils.platform_info(); detected if None
     ) -> dict:
         """
         Runs analyze_training_results() and saves a formatted PDF report
@@ -1223,6 +1352,24 @@ class ModelTrainingVisualization:
                     "summary": "Training cancelled before first epoch completed.",
                     "report_text": ""}
 
+        # Does the F1-optimal threshold matter? Compare Dice at 0.50 with Dice at
+        # that threshold. Both sides must be POOLED over pixels: the Dice at the
+        # optimal threshold is pooled, while best_eval["dice"] and dice_values
+        # are means of per-image Dice. Those two aggregations diverge whenever the
+        # target fraction varies across images, and the difference has nothing to
+        # do with the threshold. Pooled Dice at 0.50 is recovered from the pooled
+        # precision and recall of the same pass: 2PR / (P + R).
+        _p_half = (best_eval or {}).get("precision")
+        _r_half = (best_eval or {}).get("recall")
+        _d_half = None
+        if _p_half is not None and _r_half is not None and (_p_half + _r_half) > 0:
+            _d_half = 2.0 * float(_p_half) * float(_r_half) / (float(_p_half) + float(_r_half))
+        _d_opt = (best_eval or {}).get("dice_at_f1_optimal_threshold")
+        if _d_opt is None:
+            _d_opt = val_dice_best_threshold
+        _thr_gain = (abs(float(_d_opt) - float(_d_half))
+                     if _d_opt is not None and _d_half is not None else None)
+
         result = self.analyze_training_results(
             train_acc=train_acc,
             val_acc=val_acc,
@@ -1239,9 +1386,12 @@ class ModelTrainingVisualization:
             num_val_images=num_val_images,
             early_stopped=early_stopped,
             best_epoch=best_epoch,
-            val_best_threshold=val_best_threshold,
+            val_best_threshold=val_best_threshold if check_threshold_calibration else None,
+            val_threshold_dice_gain=_thr_gain,
             train_dice=train_dice,
             val_dice=dice_values,
+            seconds_per_epoch=(training_time_seconds / len(train_loss)
+                               if training_time_seconds and train_loss else None),
         )
 
         severity = result["severity"]
@@ -1308,6 +1458,18 @@ class ModelTrainingVisualization:
         def _f(v, fmt="{:.4f}"):
             return fmt.format(v) if v is not None else "N/A"
 
+        # State what moving off 0.50 is worth, rather than a bare reference the
+        # reader has to evaluate against a row further up. Below
+        # MIN_VAL_IMAGES_FOR_THRESHOLD the threshold is set by the few dozen
+        # boundary pixels that survive validation pixel subsampling, so the
+        # report says so instead of quoting a number that will not reproduce.
+        if num_val_images is not None and num_val_images < MIN_VAL_IMAGES_FOR_THRESHOLD:
+            _thr_note = f"not resolvable, {num_val_images} val images"
+        elif _thr_gain is not None:
+            _thr_note = f"{float(_d_opt) - float(_d_half):+.3f} Dice vs 0.50"
+        else:
+            _thr_note = "0.50 = calibrated"
+
         # --- Saved model (best checkpoint) ---
         if best_eval:
             _section_header(f"Saved Model: Best Checkpoint (epoch {best_eval.get('epoch')}, "
@@ -1322,7 +1484,7 @@ class ModelTrainingVisualization:
                 ("Val Loss",                 _f(best_eval.get("val_loss"))),
                 ("Dice @ F1-opt thr",        f"{_f(best_eval.get('dice_at_f1_optimal_threshold'))} "
                                              f"(thr {_f(best_eval.get('f1_optimal_threshold'), '{:.2f}')}; "
-                                             f"0.50 = calibrated)"),
+                                             f"{_thr_note})"),
                 ("Pixel Accuracy (incl. background)", _f(best_eval.get("pixel_accuracy"))),
             ])
 
@@ -1345,7 +1507,10 @@ class ModelTrainingVisualization:
         if val_best_threshold is not None and not best_eval:
             _thr = f"{val_best_threshold:.2f}"
             _d = f"{val_dice_best_threshold:.4f}" if val_dice_best_threshold is not None else "N/A"
-            meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr}; 0.50 = calibrated)"))
+            if check_threshold_calibration:
+                meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr}; {_thr_note})"))
+            else:
+                meta_rows.append(("Dice @ F1-opt thr", f"{_d} (thr {_thr})"))
         if time_breakdown and any(v is not None for v in time_breakdown.values()):
             def _fmt(v):
                 if v is None: return "N/A"
@@ -1391,6 +1556,12 @@ class ModelTrainingVisualization:
                                     f"mean {st['mean']:.4f}, median {st['median']:.4f}, "
                                     f"std {st['std']:.4f}"))
             _meta_table(ds_rows)
+
+        # --- Platform (where the model was trained) ---
+        from appcore.ml_core import device_utils
+        _plat = platform or device_utils.platform_info()
+        _section_header("Platform")
+        _meta_table([(label, str(_plat.get(key, "N/A"))) for key, label in device_utils.PLATFORM_LABELS])
 
         # --- Model Parameters (SAM2-specific) ---
         if blob_radius_pct is not None:

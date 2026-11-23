@@ -31,8 +31,10 @@ from appcore.Save_Utils import Save_Utils
 # Engines
 from appcore.ml_core.sam2_inference_engine import SAM2InferenceEngine
 from appcore.ml_core.segformer_inference_engine import SegFormerInferenceEngine
+from appcore.ml_core.segformer_errors import SegFormerError
 from appcore.ml_core.yolo_inference_engine import YOLOInferenceEngine
 from appcore.ml_core.ml_helpers import add_coco_entries
+from appcore.ml_core import device_utils
 from ..app_identity import APP_DISPLAY_NAME
 
 
@@ -82,25 +84,47 @@ class MLImageSegmentation:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def _check_for_required_files(self):
+    def _check_for_required_files(self, mode=None):
+        """
+        Checks the input directory and, when a mode is given, the model file for
+        that mode. Called without a mode at construction (the mode is not known
+        yet) and with the mode by ML_Segmentation_Dispatcher.
+        """
         nError = 0
-        # Always check the input directory
-        # Check the model file that is actually configured — not always SAM2_MODEL
-        model_path = ""
-        for key in ("SAM2_MODEL", "SEGFORMER_MODEL", "YOLO_MODEL"):
-            val = getattr(self, key, "")
-            if val and val != os.path.normpath(""):
-                model_path = val
-                break
-        paths_to_check = [
-            ("Input directory",   self.segmentation_images_path),
-            ("Trained model file", model_path),
-        ]
-        self.missing_items = [(name, path) for name, path in paths_to_check if not os.path.exists(path)]
+        paths_to_check = [("Input directory", self.segmentation_images_path)]
+        model_attr = {"sam2": "SAM2_MODEL", "segformer": "SEGFORMER_MODEL",
+                      "yolo": "YOLO_MODEL"}.get(str(mode).lower()) if mode else None
+        if model_attr:
+            paths_to_check.append(("Trained model file", getattr(self, model_attr, "")))
+
+        # os.path.normpath("") is ".", which exists, so an unset path is reported as missing.
+        unset = os.path.normpath("")
+        self.missing_items = [(name, path) for name, path in paths_to_check
+                              if not path or path == unset or not os.path.exists(path)]
         if self.missing_items:
             nError = -1
             self.show_missing_files_dialog(self.missing_items)
         return nError
+
+    # ------------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
+    def _abort_segformer(self, progressBar, error):
+        """Close the progress wheel, report why SegFormer segmentation stopped, and release GPU memory."""
+        try:
+            if progressBar is not None and progressBar.isVisible():
+                progressBar.close()
+        except Exception:
+            pass
+        if isinstance(error, SegFormerError):
+            msg = f"SegFormer segmentation stopped.\n\n{error}"
+        else:
+            import traceback
+            traceback.print_exception(type(error), error, error.__traceback__)
+            msg = (f"SegFormer segmentation stopped because of an unexpected error.\n\n"
+                   f"{type(error).__name__}: {error}")
+        print(f"[{self.className}] {msg}")
+        device_utils.empty_cache()
+        QMessageBox.critical(None, "SegFormer Segmentation Error", msg)
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
@@ -118,10 +142,12 @@ class MLImageSegmentation:
                                     use_tta=False):
         if self.missing_items:
             return
+        if self._check_for_required_files(mode) != 0:
+            return
 
         self.progress_bar_closed = False
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = device_utils.get_device()
 
         self.num_classes = len(selected_label_categories) + 1  # +1 for background
 
@@ -151,7 +177,7 @@ class MLImageSegmentation:
         predictor = None
         if mode.lower() == "sam2":
             engine = SAM2InferenceEngine(
-                device=torch.device("cuda"),
+                device=device,
                 model_cfg="sam2.1_hiera_l.yaml",
                 trained_checkpoint_path=self.SAM2_MODEL,
                 input_dir=self.segmentation_images_path,
@@ -160,6 +186,21 @@ class MLImageSegmentation:
             # Validate categories before starting
             predictor = engine.load_sam2_model()
             if not self._validate_sam2_categories(engine, selected_label_categories, progressBar):
+                return None
+
+        elif mode.lower() == "segformer":
+            # Load the model once for all folders.
+            try:
+                engine = SegFormerInferenceEngine(
+                    device,
+                    self.SEGFORMER_MODEL,
+                    self.segmentation_images_path,
+                    self.predictions_output_path,
+                    class_index=1,   # target = class 1 in the binary (background + target) model
+                    use_tta=use_tta,
+                )
+            except Exception as e:
+                self._abort_segformer(progressBar, e)
                 return None
 
         # ── Season filter ─────────────────────────────────────────────────────
@@ -219,19 +260,22 @@ class MLImageSegmentation:
                 )
 
             elif mode.lower() == "segformer":
-                engine = SegFormerInferenceEngine(
-                    device,
-                    self.SEGFORMER_MODEL,
-                    input_dir,
-                    output_dir,
-                    class_index=1,   # sandbar = class 1 in the binary (bg + target) model
-                    use_tta=use_tta,
-                )
-                result = engine.run_segformer_inference(
-                    copy_original_image, save_masks, selected_label_categories, progressBar,
-                    save_probability_maps=save_probability_maps,
-                    save_diagnostic_panels=save_diagnostic_panels,
-                )
+                try:
+                    result = engine.run_segformer_inference(
+                        copy_original_image, save_masks, selected_label_categories, progressBar,
+                        save_probability_maps=save_probability_maps,
+                        save_diagnostic_panels=save_diagnostic_panels,
+                        image_filter=image_filter,
+                        input_dir=input_dir,
+                        output_dir=output_dir,
+                        cancel_check=lambda: self.progress_bar_closed,
+                    )
+                except Exception as e:
+                    del engine
+                    self._abort_segformer(progressBar, e)
+                    return None
+                # The engine writes to its own folder; record it for the ROI feature pass.
+                segmented_folders[-1] = (input_dir, result["output_dir"], image_filter)
 
             elif mode.lower() == "yolo":
                 if importlib.util.find_spec("ultralytics") is None:
@@ -279,13 +323,13 @@ class MLImageSegmentation:
                 final_predictor = result
 
             # Print GPU memory usage after each folder
-            if torch.cuda.is_available():
-                allocated = torch.cuda.memory_allocated() / 1024**2
-                reserved  = torch.cuda.memory_reserved()  / 1024**2
+            _mem = device_utils.memory_mb(device)
+            if _mem is not None:
+                allocated, reserved = _mem
                 print(f"[GPU Memory] After '{os.path.basename(input_dir)}': "
                       f"allocated={allocated:.1f} MB, reserved={reserved:.1f} MB")
             else:
-                print(f"[GPU Memory] CUDA not available — running on CPU")
+                print(f"[GPU Memory] No GPU available — running on CPU")
 
             # Stop if user closed the progress bar
             if self.progress_bar_closed:
@@ -301,9 +345,8 @@ class MLImageSegmentation:
             del engine
         except Exception:
             pass
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
+        device_utils.empty_cache(device)
+        device_utils.synchronize(device)
 
         # Close progress bar
         try:
@@ -360,11 +403,12 @@ class MLImageSegmentation:
     def _export_roi_features(self, segmented_folders, save_masks, user_cancelled):
         """
         Second pass after segmentation: extract ROI features for every segmented image
-        and its saved mask into <run date/time>_roi_metrics.csv (and .xlsx) in the
-        predictions output folder. Returns a message for the user.
+        and its saved mask into <run date/time>_roi_features.csv (and .xlsx) in the
+        roi_features subfolder of the predictions folder, beside the panels and
+        probability map subfolders. Returns a message for the user.
         """
         from appcore.dialogs.ML_image_processing.roi_feature_extraction import (
-            export_datasets, segmentation_pairs, load_settings, run_prefix)
+            export_datasets, segmentation_pairs, load_settings, run_prefix, ROI_FEATURES_FOLDER_NAME)
 
         if not save_masks:
             return "ROI features were not exported because predicted masks were not saved."
@@ -387,8 +431,14 @@ class MLImageSegmentation:
         if not datasets:
             return "ROI features were not exported: no segmented images were found."
 
-        # One file for the whole run, in the root of the first dataset (the folder
-        # holding its images and data folders).
+        # One file for the whole run, in the roi_features subfolder of the predictions
+        # folder. With several input folders, each has its own predictions subfolder,
+        # so the file goes in the folder they share.
+        prediction_dirs = [os.path.normpath(d) for _, d, _ in segmented_folders]
+        features_folder = os.path.join(os.path.commonpath(prediction_dirs), ROI_FEATURES_FOLDER_NAME)
+
+        # The sensor analysis report stays in the root of the first dataset (the
+        # folder holding its images and data folders).
         output_folder = os.path.dirname(os.path.normpath(segmented_folders[0][0]))
         total_pairs = sum(len(pairs) for pairs, _ in datasets)
 
@@ -400,7 +450,7 @@ class MLImageSegmentation:
         )
         try:
             result = export_datasets(
-                datasets, output_folder, settings, prefix=run_prefix(),
+                datasets, features_folder, settings, prefix=run_prefix(),
                 progress_callback=lambda done, total: progressBar.setValue(done),
                 cancel_callback=lambda: self.progress_bar_closed)
         except Exception as e:

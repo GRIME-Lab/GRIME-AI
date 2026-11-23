@@ -61,6 +61,9 @@ class ImageQualityAnalyzer:
         clip_percent=0.25,
         dark_clip=10,
         bright_clip=245,
+        # ── overexposure (bright pixels only) ─────────────────────────────────
+        use_overexposure=False,
+        overexposure_limit=0.40,      # poor quality if more than this fraction of pixels >= bright_clip
         # ── preprocessing ─────────────────────────────────────────────────────
         resize_percent=50.0,
         focus_roi=None,             # normalised [x, y, w, h] or None
@@ -86,6 +89,9 @@ class ImageQualityAnalyzer:
         self.clip_percent          = clip_percent
         self.dark_clip             = dark_clip
         self.bright_clip           = bright_clip
+
+        self.use_overexposure        = use_overexposure
+        self.overexposure_limit      = overexposure_limit
 
         self.resize_percent             = resize_percent
         self.focus_roi                  = focus_roi
@@ -150,6 +156,14 @@ class ImageQualityAnalyzer:
             result["clip_fraction"] = clip_fraction
             clipped                 = clip_fraction > self.clip_percent
             result["is_clipped"]    = clipped
+
+        # ── overexposure (always full frame) ──────────────────────────────
+        # Fraction of bright pixels only. Snow keeps texture and stays below the
+        # limit; an overexposed image has large areas at the top of the range.
+        if self.use_overexposure:
+            overexposed_fraction            = self._compute_overexposed_fraction(gray_full)
+            result["overexposed_fraction"]  = overexposed_fraction
+            result["is_overexposed"]     = overexposed_fraction > self.overexposure_limit
 
         # ── color imbalance (full frame, RGB) ────────────────────────────
         if self.use_color_imbalance:
@@ -245,8 +259,9 @@ class ImageQualityAnalyzer:
 
         reasons = []
         for key, label in (("is_blurry", "Blurry"), ("is_too_dark", "Too Dark"),
-                           ("is_too_light", "Too Light"), ("is_low_contrast", "Low Contrast"),
-                           ("is_clipped", "Exposure Clipped"), ("is_color_imbalanced", "Color Imbalance")):
+                           ("is_too_light", "Too Bright"), ("is_low_contrast", "Low Contrast"),
+                           ("is_clipped", "Exposure Clipped"), ("is_overexposed", "Overexposed"),
+                           ("is_color_imbalanced", "Color Imbalance")):
             if result.get(key):
                 reasons.append(label)
         result["is_bad"] = bool(reasons)
@@ -329,6 +344,10 @@ class ImageQualityAnalyzer:
         if total < 1e-6:
             return 0.333
         return max(r / total, g / total, b / total)
+
+    def _compute_overexposed_fraction(self, gray: np.ndarray) -> float:
+        """Fraction of pixels at or above bright_clip (dark pixels are not counted)."""
+        return float(np.count_nonzero(gray >= self.bright_clip)) / gray.size
 
     def _compute_clip_fraction(self, gray: np.ndarray) -> float:
         clipped = np.sum((gray <= self.dark_clip) | (gray >= self.bright_clip))

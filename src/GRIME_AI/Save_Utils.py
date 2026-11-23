@@ -84,6 +84,18 @@ class Save_Utils:
         return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+    @staticmethod
+    def _make_output_folder(target: str, from_recipe: bool, label: str):
+        """Create an output folder. On failure, raise OSError with a message for the user that
+        names the folder and says whether it came from the active recipe or the default location."""
+        try:
+            os.makedirs(target, exist_ok=True)
+        except OSError as e:
+            source = f"the active recipe's {label} folder" if from_recipe else f"the default {label} folder"
+            reason = e.strerror or str(e)
+            raise OSError(f"Cannot create {source}:\n{target}\n\nReason: {reason}") from e
+
+
     def create_composite_slices_folder(self, image_file_folder: str) -> str:
         """
         Given any image_file_folder path, builds and creates:
@@ -140,12 +152,12 @@ class Save_Utils:
         #JES target = Path(artifacts_base) / last_folder / "Videos"
         # Prefer the active recipe's Videos folder; otherwise fall back to the
         # default under Documents/<application> (not the images folder).
-        target = self._recipe_override("Videos_Folder") \
-            or os.path.join(self.get_user_root_folder(), "videos")
+        recipe_folder = self._recipe_override("Videos_Folder")
+        target = recipe_folder or os.path.join(self.get_user_root_folder(), "videos")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         #JES target.mkdir(parents=True, exist_ok=True)
-        os.makedirs(target, exist_ok=True)
+        self._make_output_folder(target, recipe_folder is not None, "Videos")
 
         return str(target)
 
@@ -174,12 +186,12 @@ class Save_Utils:
         #JES target = Path(artifacts_base) / last_folder / "gif"
         # Prefer the active recipe's GIFs folder; otherwise fall back to the
         # default under Documents/<application> (not the images folder).
-        target = self._recipe_override("GIFs_Folder") \
-            or os.path.join(self.get_user_root_folder(), "gifs")
+        recipe_folder = self._recipe_override("GIFs_Folder")
+        target = recipe_folder or os.path.join(self.get_user_root_folder(), "gifs")
 
         # 4. Create directories if missing (equivalent to mkdir -p)
         #JES target.mkdir(parents=True, exist_ok=True)
-        os.makedirs(target, exist_ok=True)
+        self._make_output_folder(target, recipe_folder is not None, "GIFs")
 
         return str(target)
 

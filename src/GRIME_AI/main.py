@@ -38,11 +38,13 @@
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-import os
-# Configure Qt High DPI behavior for consistent UI scaling across displays.
-os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
-os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
+# Apple Silicon (MPS): ops MPS has not implemented run on the CPU instead of
+# raising. Must be set before torch is imported anywhere.
+import os as _os
+_os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
 try:
     # TRY TO IMPORT THE VERSION CONSTANT FROM VERSION.PY
     from appcore.version import SW_VERSION
@@ -109,6 +111,9 @@ os.environ["HYDRA_FULL_ERROR"] = "1"
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
 os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+# Required by torch.use_deterministic_algorithms(True) in the trainers. Set here so it is in
+# place before any CUDA work in the process (e.g. segmentation run before training).
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import sys
 import argparse
@@ -137,8 +142,6 @@ import time
 import csv
 
 import urllib.request
-
-import promptlib
 
 import traceback
 
@@ -311,6 +314,7 @@ PHENOCAM_TAB_DEFAULTS = {
     "PhenoCam_Preview_Height_px":    None,   # saved splitter position; None = use the default fraction
     "PhenoCam_Preview_Fraction":     2 / 3,  # preview share of the panel height when none is saved
     "PhenoCam_Preview_Search_Days":  30,     # days searched back from a site's last image date
+    "PhenoCam_Midday_Window_Hours":  1.0,    # site preview: images within this many hours of noon count as midday
     "PhenoCam_Count_Max_Days":       366,    # most browse pages fetched per site for a narrow time window
     "PhenoCam_Count_Parallel_Pages": 4,      # browse pages fetched at once for narrow-window counts
     "PhenoCam_Count_Debounce_ms":    800,    # pause after a date/time edit before counting starts
@@ -342,6 +346,15 @@ USGS_TAB_DEFAULTS = {
 }
 
 
+# Title over the site image on the NEON, USGS and PhenoCam tabs
+SITE_PREVIEW_TITLE          = "Site Preview"
+SITE_PREVIEW_FALLBACK_TITLE = "Site Preview (last available image)"   # no midday image was found
+
+# Text in place of the site image on the NEON, USGS and PhenoCam tabs when there is no image to show
+NO_IMAGE_MESSAGE    = "No image available."      # internet is up, but the site has no image
+NO_INTERNET_MESSAGE = "No internet available."   # the internet can't be reached
+
+
 def _phenocam_setting(key):
     """JsonEditor value for key if one is stored, else the PhenoCam or USGS tab default."""
     default = PHENOCAM_TAB_DEFAULTS.get(key, USGS_TAB_DEFAULTS.get(key, NEON_TAB_DEFAULTS.get(
@@ -365,6 +378,26 @@ def _phenocam_setting(key):
         except (TypeError, ValueError):
             return default
     return value
+
+
+def _internet_check_settings():
+    """(host, port, timeout) for _image_unavailable_message. Read before a worker starts,
+    as the other fetcher settings are."""
+    return (str(_phenocam_setting("Internet_Check_Host")),
+            int(_phenocam_setting("Internet_Check_Port")),
+            float(_phenocam_setting("Internet_Check_Timeout_s")))
+
+
+def _image_unavailable_message(check):
+    """NO_INTERNET_MESSAGE if the internet can't be reached, else NO_IMAGE_MESSAGE.
+    It opens a network connection, so it is called from worker threads, not the UI thread."""
+    import socket
+    host, port, timeout = check
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return NO_IMAGE_MESSAGE
+    except OSError:
+        return NO_INTERNET_MESSAGE
 
 
 def _data_table_header_style():
@@ -662,6 +695,9 @@ IMAGE_VIEW_DEFAULTS = {
     "Image_Zoom_Min_Percent":    5.0,    # smallest zoom allowed
     "Image_Zoom_Max_Percent":    800.0,  # largest zoom allowed
     "Image_Zoom_Button_Size_px": 30,     # width and height of the zoom buttons
+    "Internet_Check_Host":       "1.1.1.1",  # host contacted to tell "no internet" from "no image"
+    "Internet_Check_Port":       443,
+    "Internet_Check_Timeout_s":  3.0,
 }
 
 
@@ -832,7 +868,13 @@ class ZoomImagePanel(QtWidgets.QWidget):
 # PHENOCAM BACKGROUND WORKERS
 # ======================================================================================================================
 class PhenoCamPreviewFetcher(QtCore.QThread):
-    result = QtCore.pyqtSignal(object, str)
+    """Finds the site preview image for a PhenoCam camera (used by the PhenoCam and NEON tabs).
+
+    The preview is the image closest to noon within PhenoCam_Midday_Window_Hours, on the
+    newest day that has one. If no day in the search has a midday image, the newest image
+    is shown instead and is_midday is False.
+    """
+    result = QtCore.pyqtSignal(object, str, bool)  # (QPixmap or None, error text, is_midday)
     def __init__(self, site_name, parent=None, roi_name=None, last_date=None, search_days=30):
         super().__init__(parent)
         self.site_name = site_name
@@ -842,16 +884,33 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
         # walking back from today through days that never will.
         self.last_date   = last_date
         self.search_days = search_days
+        # Settings are read here, on the UI thread, before the fetch starts
+        self.midday_window_hours = float(_phenocam_setting("PhenoCam_Midday_Window_Hours"))
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when no image is found
         self._cancelled  = False
     def cancel(self):
         self._cancelled = True
-    def run(self):
-        import urllib.request, datetime as dt_mod
+
+    @staticmethod
+    def _image_time(filename):
+        """Time of day from a PhenoCam filename (..._YYYY_MM_DD_HHMMSS.jpg), or None."""
+        import re, datetime as dt_mod
+        m = re.search(r"_(\d{4})_(\d{2})_(\d{2})_(\d{2})(\d{2})(\d{2})\.\w+$", filename)
+        if not m:
+            return None
+        try:
+            return dt_mod.time(int(m.group(4)), int(m.group(5)), int(m.group(6)))
+        except ValueError:
+            return None
+
+    def _find_image(self, start_day, t0, t1, closest_to=None):
+        """URL of an image between t0 and t1 on the newest day searched that has one.
+
+        closest_to: pick the image nearest this time of day; None picks the newest image.
+        """
+        import datetime as dt_mod
         from appcore.phenocam.PhenoCam import PhenoCam
-        today = dt_mod.date.today()
-        if self.last_date is not None and self.last_date < today:
-            today = self.last_date
-        t0, t1 = dt_mod.time(11, 0), dt_mod.time(13, 0)
         # Extract ROI type prefix for filename filtering (e.g. "DB" from "..._DB_1000")
         roi_filter = None
         if self.roi_name:
@@ -859,11 +918,10 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
             # roi_name format: sitename_TYPE_NNNN — TYPE is second-to-last segment
             if len(parts) >= 2:
                 roi_filter = parts[-2]  # e.g. "DB", "EN", "SH", etc.
-        img_url = None
         for offset in range(self.search_days):
             if self._cancelled:
-                return
-            check = today - dt_mod.timedelta(days=offset)
+                return None
+            check = start_day - dt_mod.timedelta(days=offset)
             url = (f"https://phenocam.nau.edu/webcam/browse/{self.site_name}/"
                    f"{check.year}/{str(check.month).zfill(2)}/{str(check.day).zfill(2)}")
             try:
@@ -875,23 +933,50 @@ class PhenoCamPreviewFetcher(QtCore.QThread):
                                     if f"_{roi_filter}_" in i.fullPathAndFilename
                                     or f"_{roi_filter}." in i.fullPathAndFilename]
                         imgs = filtered if filtered else imgs
-                    img_url = imgs[-1].fullPathAndFilename
-                    break
+                    if closest_to is None:
+                        return imgs[-1].fullPathAndFilename
+                    target_s = closest_to.hour * 3600 + closest_to.minute * 60 + closest_to.second
+                    def _distance(img):
+                        t = self._image_time(img.fullPathAndFilename)
+                        if t is None:
+                            return float("inf")
+                        return abs(t.hour * 3600 + t.minute * 60 + t.second - target_s)
+                    return min(imgs, key=_distance).fullPathAndFilename
             except Exception:
                 pass
+        return None
+
+    def run(self):
+        import urllib.request, datetime as dt_mod
+        today = dt_mod.date.today()
+        if self.last_date is not None and self.last_date < today:
+            today = self.last_date
+        noon = dt_mod.datetime.combine(today, dt_mod.time(12, 0))
+        window = dt_mod.timedelta(hours=max(0.0, min(self.midday_window_hours, 12.0)))
+        t0 = max(noon - window, dt_mod.datetime.combine(today, dt_mod.time.min)).time()
+        t1 = min(noon + window, dt_mod.datetime.combine(today, dt_mod.time.max)).time()
+
+        is_midday = True
+        img_url = self._find_image(today, t0, t1, closest_to=noon.time())
+        if img_url is None and not self._cancelled:
+            # No midday image in the search: fall back to the newest image at any time of day
+            is_midday = False
+            img_url = self._find_image(today, dt_mod.time.min, dt_mod.time.max)
         if self._cancelled:
             return
         if img_url is None:
-            self.result.emit(None, "No image available.")
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+            self.result.emit(None, self.unavailable_message, False)
             return
         try:
             data = urllib.request.urlopen(img_url, timeout=15).read()
             qimg = QtGui.QImage()
             qimg.loadFromData(data)
             self.result.emit(QtGui.QPixmap.fromImage(qimg) if not qimg.isNull() else None,
-                             "" if not qimg.isNull() else "Could not decode image.")
+                             "" if not qimg.isNull() else "Could not decode image.", is_midday)
         except Exception as e:
-            self.result.emit(None, f"Error: {e}")
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+            self.result.emit(None, f"Error: {e}", False)
 
 
 class PhenoCamDailyCountsWorker(QtCore.QThread):
@@ -1146,13 +1231,17 @@ class USGSLatestImageFetcher(QtCore.QThread):
                         int(_phenocam_setting("USGS_Midday_Search_Days")),
                         int(_phenocam_setting("USGS_Midday_List_Keys")),
                         float(_phenocam_setting("USGS_Range_Timeout_s")))
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when no image is found
 
     def run(self):
         try:
             code, pix, is_midday = self._usgs.get_midday_pixmap(self._cam_id, *self._midday)
-            self.result.emit(code, pix, is_midday)
         except Exception:
-            self.result.emit(404, None, False)
+            code, pix, is_midday = 404, None, False
+        if code == 404 or pix is None:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(code, pix, is_midday)
 
 
 class USGSImageRangeFetcher(QtCore.QThread):
@@ -1182,14 +1271,18 @@ class PhenoCamStartupFetcher(QtCore.QThread):
     def __init__(self, neon_api, parent=None):
         super().__init__(parent)
         self._neon_api = neon_api
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when the site table can't be read
 
     def run(self):
         try:
             data = self._neon_api.scrape_phenocam_table()
-            self.result.emit(data)
         except Exception as e:
             print(f"[PhenoCamStartupFetcher] Error: {e}")
-            self.result.emit(None)
+            data = None
+        if not data:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(data)
 
 
 class USGSStartupFetcher(QtCore.QThread):
@@ -1199,6 +1292,8 @@ class USGSStartupFetcher(QtCore.QThread):
     def __init__(self, usgs_client, parent=None):
         super().__init__(parent)
         self._usgs = usgs_client
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when no cameras are found
 
     def run(self):
         try:
@@ -1206,10 +1301,12 @@ class USGSStartupFetcher(QtCore.QThread):
             hivis    = USGS_HIVIS()
             cam_dict = hivis.get_camera_dictionary()
             cam_list = hivis.get_camera_list()
-            self.result.emit(hivis, cam_dict, cam_list)
         except Exception as e:
             print(f"[USGSStartupFetcher] Error: {e}")
-            self.result.emit(None, {}, [])
+            hivis, cam_dict, cam_list = None, {}, []
+        if not cam_dict:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(hivis, cam_dict, cam_list)
 
 
 def _fix_mojibake(text):
@@ -1274,14 +1371,18 @@ class NEONStartupFetcher(QtCore.QThread):
     def __init__(self, neon_api, parent=None):
         super().__init__(parent)
         self._neon_api = neon_api
+        self._internet_check = _internet_check_settings()
+        self.unavailable_message = NO_IMAGE_MESSAGE   # set in run() when the site table can't be read
 
     def run(self):
         try:
             status, site_list = self._neon_api.readFieldSiteTable()
-            self.result.emit(status, site_list)
         except Exception as e:
             print(f"[NEONStartupFetcher] Error: {e}")
-            self.result.emit(None, [])
+            status, site_list = None, []
+        if not site_list:
+            self.unavailable_message = _image_unavailable_message(self._internet_check)
+        self.result.emit(status, site_list)
 
 
 class NWISParameterFetcher(QtCore.QThread):
@@ -1725,7 +1826,7 @@ class MainWindow(QMainWindow):
         self.USGS_labelLatestImage.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Ignored)
 
         # Title label shown above the USGS image
-        self._usgs_image_title_label = QtWidgets.QLabel("", self.USGS_labelLatestImage.parent())
+        self._usgs_image_title_label = QtWidgets.QLabel(SITE_PREVIEW_TITLE, self.USGS_labelLatestImage.parent())
         self._usgs_image_title_label.setAlignment(QtCore.Qt.AlignCenter)
         self._usgs_image_title_label.setFont(QFont("Arial", 10, QFont.Bold))
         parent_layout = self.USGS_labelLatestImage.parent().layout()
@@ -2173,11 +2274,30 @@ class MainWindow(QMainWindow):
 
         dlg.exec_()
 
+    def _report_startup_failure(self, unavailable_message, title=None, text=None):
+        """Dialog for a data source that could not be loaded at startup.
+
+        With no internet, one "No Internet Access" dialog is shown for all of USGS, PhenoCam
+        and NEON, however many of them fail, and the source's own dialog is not shown.
+        With internet, the source's own dialog (title, text) is shown, if it has one.
+        """
+        if unavailable_message == NO_INTERNET_MESSAGE:
+            if not getattr(self, "_no_internet_reported", False):
+                self._no_internet_reported = True
+                msgBox = App_QMessageBox('No Internet Access',
+                                         'No internet access is available.\n\n'
+                                         'USGS, PhenoCam and NEON sites cannot be loaded.')
+                msgBox.displayMsgBox()
+        elif title is not None:
+            msgBox = App_QMessageBox(title, text)
+            msgBox.displayMsgBox()
+
     def _on_usgs_startup_result(self, hivis, camera_dict, camera_list):
         """Callback when USGS HIVIS data has been fetched in background."""
         if hivis is None:
-            msgBox = App_QMessageBox('USGS NIMS Error', 'Unable to access USGS NIMS/HIVIS Database!')
-            msgBox.displayMsgBox()
+            self._show_image_message("usgs", self._usgs_startup_fetcher.unavailable_message)
+            self._report_startup_failure(self._usgs_startup_fetcher.unavailable_message,
+                                         'USGS NIMS Error', 'Unable to access USGS NIMS/HIVIS Database!')
             return
 
         self.myHIVIS         = hivis
@@ -2215,12 +2335,17 @@ class MainWindow(QMainWindow):
         self._usgs_startup_ready = True
         self._check_and_dismiss_splash()
 
+        if not self.cameraDictionary:
+            self._show_image_message("usgs", self._usgs_startup_fetcher.unavailable_message)
+            self._report_startup_failure(self._usgs_startup_fetcher.unavailable_message)
+
     def _on_neon_startup_result(self, status, site_list):
         """Callback when NEON field site table has been fetched in background."""
         self.NEON_siteList = site_list if site_list else []
 
         if not self.NEON_siteList:
             print("NEON Field Site Table from NEON website FAILED...")
+            self._show_image_message("neon", self._neon_startup_fetcher.unavailable_message)
         else:
             print("Populate NEON Sites tab on GUI...")
             self.NEON_listboxSites.clear()
@@ -2253,6 +2378,12 @@ class MainWindow(QMainWindow):
         self._check_and_dismiss_splash()
         #JES self._check_startup_complete()
 
+        # REPORT THE FAILURE HERE, ON THE GUI THREAD, AFTER THE PHENOCAM FETCH HAS STARTED
+        # AND NEON IS MARKED READY, SO THE DIALOG DOES NOT HOLD UP THE REST OF STARTUP.
+        if not self.NEON_siteList:
+            self._report_startup_failure(self._neon_startup_fetcher.unavailable_message,
+                                         'NEON Field Sites Error', 'Unable to access NEON field site information!')
+
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
     def _on_phenocam_startup_result(self, data):
@@ -2265,8 +2396,16 @@ class MainWindow(QMainWindow):
             # site table) so the splash can dismiss and the app proceeds with
             # PhenoCam features simply unavailable.
             self.phenocam_site_dictionary = {}
+            # Build the tab anyway so it shows its own layout (Site Preview title, search,
+            # download table) instead of the placeholder labels from the .ui file.
+            try:
+                self.setup_phenocam_right_panel()
+                self.phenocam_image_panel.showMessage(self._phenocam_startup_fetcher.unavailable_message)
+            except Exception as _e:
+                print(f"[PhenoCam startup] Could not build the PhenoCam tab: {_e}")
             self._phenocam_startup_ready = True
             self._check_and_dismiss_splash()
+            self._report_startup_failure(self._phenocam_startup_fetcher.unavailable_message)
             return
         self.phenocam_site_dictionary = data
         for site_id, info in self.phenocam_site_dictionary.items():
@@ -2760,8 +2899,21 @@ class MainWindow(QMainWindow):
         # Zoomable panel around the label (label shows messages; the panel shows the image)
         self.phenocam_image_panel = ZoomImagePanel(self.phenocam_preview_label)
         self.phenocam_image_panel.setMinimumHeight(int(_phenocam_setting("PhenoCam_Preview_Min_Height_px")))
-        self.phenocam_image_panel.showMessage("Select a site to preview the latest image")
+        self.phenocam_image_panel.showMessage("Select a site to see its preview")
         self._phenocam_pixmap = None
+
+        # Title over the image, matching the NEON and USGS tabs
+        self.phenocam_image_title_label = QtWidgets.QLabel(SITE_PREVIEW_TITLE)
+        self.phenocam_image_title_label.setAlignment(QtCore.Qt.AlignCenter)
+        _usgs_title = getattr(self, "_usgs_image_title_label", None)
+        if _usgs_title is not None:
+            self.phenocam_image_title_label.setFont(_usgs_title.font())
+        phenocam_preview = QtWidgets.QWidget()
+        _ppl = QtWidgets.QVBoxLayout(phenocam_preview)
+        _ppl.setContentsMargins(0, 0, 0, 0)
+        _ppl.setSpacing(2)
+        _ppl.addWidget(self.phenocam_image_title_label, 0)
+        _ppl.addWidget(self.phenocam_image_panel, 1)
 
         bottom = QtWidgets.QWidget()
         bl = QtWidgets.QVBoxLayout(bottom)
@@ -2810,7 +2962,7 @@ class MainWindow(QMainWindow):
                 self.phenocam_folder_edit.setText(saved)
         except Exception:
             pass
-        self.phenocam_browse_btn = QtWidgets.QPushButton("Browse...")
+        self.phenocam_browse_btn = QtWidgets.QPushButton("Browse")
         self.phenocam_browse_btn.setStyleSheet(self._pc_ghost_btn_style)
         self.phenocam_browse_btn.clicked.connect(self._phenocam_browse_folder)
         self.phenocam_download_btn = QtWidgets.QPushButton("Download Images")
@@ -2834,7 +2986,7 @@ class MainWindow(QMainWindow):
 
         self.phenocam_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.phenocam_splitter.setChildrenCollapsible(False)
-        self.phenocam_splitter.addWidget(self.phenocam_image_panel)
+        self.phenocam_splitter.addWidget(phenocam_preview)
         self.phenocam_splitter.addWidget(bottom)
         self.phenocam_splitter.setStretchFactor(0, 0)
         self.phenocam_splitter.setStretchFactor(1, 1)
@@ -3503,7 +3655,8 @@ class MainWindow(QMainWindow):
         import datetime as dt_mod
         label = roi_name if roi_name else site_name
         self._phenocam_pixmap = None
-        self.phenocam_image_panel.showMessage(f"Loading latest image for {label}...")
+        self.phenocam_image_panel.showMessage(f"Loading site preview for {label}...")
+        self.phenocam_image_title_label.setText(SITE_PREVIEW_TITLE)
 
         # Stop any preview search still running for a previously clicked site.
         previous = getattr(self, "_phenocam_preview_fetcher", None)
@@ -3520,15 +3673,18 @@ class MainWindow(QMainWindow):
         fetcher = PhenoCamPreviewFetcher(site_name, self, roi_name=roi_name, last_date=last_date,
                                          search_days=int(_phenocam_setting("PhenoCam_Preview_Search_Days")))
 
-        def _on_result(pixmap, err):
+        def _on_result(pixmap, err, is_midday):
             if self._phenocam_preview_fetcher is not fetcher:
                 return   # result from a site the user has since moved away from
             if pixmap is None:
                 self._phenocam_pixmap = None
-                self.phenocam_image_panel.showMessage("No image available.")
-                if err and err != "No image available.":
+                self.phenocam_image_title_label.setText(SITE_PREVIEW_TITLE)
+                self.phenocam_image_panel.showMessage(fetcher.unavailable_message)
+                if err and err != fetcher.unavailable_message:
                     print(f"[PhenoCam] Preview for {label}: {err}")
             else:
+                self.phenocam_image_title_label.setText(
+                    SITE_PREVIEW_TITLE if is_midday else SITE_PREVIEW_FALLBACK_TITLE)
                 self._phenocam_pixmap = pixmap
                 self._phenocam_fit_preview_height()
             self._phenocam_preview_fetcher = None
@@ -3669,32 +3825,46 @@ class MainWindow(QMainWindow):
     #
     # ------------------------------------------------------------------------------------------------------------------
     def _usgs_progress(self, idx: int, total: int, label: str | None) -> None:
-        """Progress callback for USGSClient operations."""
-        if not hasattr(self, "_usgsProgress"):
-            self._usgsProgress = QProgressWheel(parent=self)
-            self._usgsProgress.setRange(0, total)
-            self._usgsProgress.setWindowTitle("USGS Operation")
-            self._usgsProgress.show()
+        """Progress callback for USGSClient operations. Closing the progress window cancels the download."""
+        wheel = getattr(self, "_usgsProgress", None)
+        if wheel is None:
+            wheel = QProgressWheel(parent=self, on_close=self._usgs_progress_closed)
+            wheel.setRange(0, total)
+            wheel.setWindowTitle("USGS Operation")
+            wheel.show()
+            self._usgsProgress = wheel
 
-        self._usgsProgress.setMaximum(total)
-        self._usgsProgress.setValue(idx)
-
+        wheel.setMaximum(total)
         if label:
-            self._usgsProgress.setWindowTitle(str(label))
+            wheel.setWindowTitle(str(label))
+
+        # setValue processes pending events, so this is where a user's close of the window is handled.
+        wheel.setValue(idx)
 
         # Clean up when finished
         if idx >= total:
-            self._usgsProgress.close()
+            self.force_close_progress()
+
+    def _usgs_progress_closed(self):
+        """Called when the USGS progress window closes. A close by the user cancels the download;
+        a close by the program (force_close_progress) does not."""
+        if not getattr(self, "_usgs_closing_progress", False):
+            self._usgs_cancel_requested = True
+        if hasattr(self, "_usgsProgress"):
             del self._usgsProgress
 
     def force_close_progress(self):
         """Forcefully close and clean up the progress wheel if it exists."""
-        if hasattr(self, "_usgsProgress"):
-            try:
-                self._usgsProgress.close()  # triggers closeEvent
-                self._usgsProgress.deleteLater()  # ensure cleanup
-            finally:
-                del self._usgsProgress
+        wheel = getattr(self, "_usgsProgress", None)
+        if wheel is None:
+            return
+        del self._usgsProgress
+        self._usgs_closing_progress = True
+        try:
+            wheel.close()  # triggers closeEvent
+            wheel.deleteLater()  # ensure cleanup
+        finally:
+            self._usgs_closing_progress = False
 
     # ------------------------------------------------------------------------------------------------------------------
     #
@@ -3970,6 +4140,11 @@ class MainWindow(QMainWindow):
         pl = QtWidgets.QVBoxLayout(preview)
         pl.setContentsMargins(0, 0, 0, 0)
         pl.setSpacing(2)
+        self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
+        self.labelLatestImageTitle.setAlignment(QtCore.Qt.AlignCenter)
+        _usgs_title = getattr(self, "_usgs_image_title_label", None)
+        if _usgs_title is not None:
+            self.labelLatestImageTitle.setFont(_usgs_title.font())   # same title font on all tabs
         pl.addWidget(self.labelLatestImageTitle, 0)
         self.NEON_labelLatestImage.setStyleSheet("QLabel { background: transparent; color: palette(text); }")
         self.neon_image_panel = ZoomImagePanel(self.NEON_labelLatestImage)
@@ -4523,13 +4698,28 @@ class MainWindow(QMainWindow):
                 if num_matches > 0:
                     strFirstProductID = matches[0]
                     strProductID = strFirstProductID.split('.')[1]
-                    self._show_image_message("neon", "Loading latest image...")
-                    self._neon_preview_fetcher = NEONPreviewFetcher(SITECODE, DOMAINCODE, strProductID)
-                    self._neon_preview_fetcher.result.connect(self._neon_preview_received)
+                    self._show_image_message("neon", "Loading site preview...")
+                    self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
+                    # NEON cameras are PhenoCam cameras, so the PhenoCam tab's midday search is reused.
+                    previous = getattr(self, "_neon_preview_fetcher", None)
+                    if previous is not None and hasattr(previous, "cancel"):
+                        previous.cancel()
+                    neon_camera = f"NEON.{DOMAINCODE}.{SITECODE}.DP1.{strProductID}"
+                    self._neon_preview_fetcher = PhenoCamPreviewFetcher(
+                        neon_camera, self,
+                        search_days=int(_phenocam_setting("PhenoCam_Preview_Search_Days")))
+                    fetcher = self._neon_preview_fetcher
+                    self._neon_preview_fetcher.result.connect(
+                        lambda pix, err, is_midday, f=fetcher: self._neon_preview_received(pix, err, is_midday, f))
                     self._neon_preview_fetcher.start()
                 else:
                     gWebImagesAvailable = 0
-                    self._show_image_message("neon", "No image available.")
+                    previous = getattr(self, "_neon_preview_fetcher", None)
+                    if previous is not None and hasattr(previous, "cancel"):
+                        previous.cancel()
+                    self._neon_preview_fetcher = None   # ignore a search still running for the previous site
+                    self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
+                    self._show_image_message("neon", NO_IMAGE_MESSAGE)
 
                 gProcessClick = 0
         except Exception:
@@ -5130,8 +5320,8 @@ class MainWindow(QMainWindow):
     # USGS MULTI-SITE DOWNLOAD
     # ------------------------------------------------------------------------------------------------------------------
     def _usgs_download_checked(self, root_folder):
-        """Download every checked camera. One camera downloads into the folder itself; several
-        cameras each get <folder>/<camera ID>/Images and /data."""
+        """Download every checked camera. Each camera, whether one or several are checked,
+        gets <folder>/<camera ID>/Images and /data."""
         self.usgs_check_timer.stop()
         t = self.table_USGS_Sites
         jobs = []
@@ -5143,14 +5333,13 @@ class MainWindow(QMainWindow):
             App_QMessageBox("USGS Download", "Start must be before End for: " + ", ".join(bad),
                             QMessageBox.Close).displayMsgBox()
             return
-        multi = len(jobs) > 1
         self._usgs_cancel_requested = False
         results = []
         for i, (cam_id, sd, ed, st, et) in enumerate(jobs, start=1):
             if self._usgs_cancel_requested:
                 results.append(f"{cam_id}: not downloaded (cancelled)")
                 continue
-            folder = os.path.join(root_folder, cam_id) if multi else root_folder
+            folder = os.path.join(root_folder, cam_id)
             image_folder = os.path.join(folder, "Images")
             data_folder = os.path.join(folder, "data")
             os.makedirs(image_folder, exist_ok=True)
@@ -5168,6 +5357,9 @@ class MainWindow(QMainWindow):
                 progress=self._usgs_progress,
                 cancel_check=lambda: self._usgs_cancel_requested)
             self.force_close_progress()
+            if self._usgs_cancel_requested:
+                results.append(f"{cam_id}: cancelled after {downloaded} new image(s); no sensor data downloaded")
+                continue
             line = f"{cam_id}: {downloaded} new image(s)" + (f", {missing} failed" if missing else "")
             if nwis:
                 self.myHIVIS.fetchStageAndDischarge(nwis, cam_id, sd, ed, st, et, data_folder)
@@ -5178,7 +5370,8 @@ class MainWindow(QMainWindow):
             self.statusBar().clearMessage()
         except Exception:
             pass
-        App_QMessageBox("USGS Download", "Download complete.\n\n" + "\n".join(results),
+        status = "Download cancelled." if self._usgs_cancel_requested else "Download complete."
+        App_QMessageBox("USGS Download", status + "\n\n" + "\n".join(results),
                         QMessageBox.Close).displayMsgBox()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -5503,7 +5696,9 @@ class MainWindow(QMainWindow):
             self._on_usgs_site_expanded(currentItem)
 
             # Fetch latest image in background thread
-            self._show_image_message("usgs", "Loading midday image...")
+            self._show_image_message("usgs", "Loading site preview...")
+            if hasattr(self, '_usgs_image_title_label'):
+                self._usgs_image_title_label.setText(SITE_PREVIEW_TITLE)
             if self._usgs_image_fetcher and self._usgs_image_fetcher.isRunning():
                 self._usgs_image_fetcher.quit()
                 self._usgs_image_fetcher.wait()
@@ -5529,14 +5724,15 @@ class MainWindow(QMainWindow):
     def _on_usgs_latest_image_received(self, code: int, pix, is_midday: bool):
         if code == 404 or pix is None:
             self.USGS_latestImage = []
-            self._show_image_message("usgs", "No image available.")
+            fetcher = self.sender()
+            self._show_image_message("usgs", getattr(fetcher, "unavailable_message", NO_IMAGE_MESSAGE))
             if hasattr(self, '_usgs_image_title_label'):
-                self._usgs_image_title_label.setText("")
+                self._usgs_image_title_label.setText(SITE_PREVIEW_TITLE)
         else:
             self.USGS_latestImage = pix
             if hasattr(self, '_usgs_image_title_label'):
                 self._usgs_image_title_label.setText(
-                    "Midday Image:" if is_midday else "Last Available Image:")
+                    SITE_PREVIEW_TITLE if is_midday else SITE_PREVIEW_FALLBACK_TITLE)
             self.USGS_DisplayLatestImage()
 
     def _on_usgs_site_expanded(self, item):
@@ -5637,6 +5833,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     def _show_image_message(self, tab, text):
         """Text in place of the image on the "neon" or "usgs" tab (zoom panel if built, else the label)."""
+        setattr(self, f"_{tab}_image_message", text)   # redrawn by NEON_DisplayLatestImage on resize
         panel = getattr(self, f"{tab}_image_panel", None)
         if panel is not None:
             panel.showMessage(text)
@@ -5693,7 +5890,8 @@ class MainWindow(QMainWindow):
 
     def pushButton_NEON_BrowseImageFolder_Clicked(self, item):
         # PROMPT USER FOR FOLDER INTO WHICH TO DOWNLOAD THE IMAGES/FILES
-        folder =  promptlib.Files().dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select NEON image folder", "", options=QFileDialog.ShowDirsOnly)
 
         if os.path.exists(folder):
             self.edit_NEONSaveFilePath.setText(folder)
@@ -5703,7 +5901,8 @@ class MainWindow(QMainWindow):
         JsonEditor().update_json_entry("NEON_Image_Folder", folder)
 
     def pushButton_NEON_Browse_Clicked(self, item=None):
-        folder = promptlib.Files().dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select NEON image folder", "", options=QFileDialog.ShowDirsOnly)
 
         if folder:
             if not os.path.exists(folder):
@@ -5717,7 +5916,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------------------------------------------------------
     def pushButton_USGS_BrowseImageFolder_Clicked(self, item):
         # PROMPT USER FOR FOLDER INTO WHICH TO DOWNLOAD THE IMAGES/FILES
-        folder =  promptlib.Files().dir()
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select USGS image folder", "", options=QFileDialog.ShowDirsOnly)
 
         if os.path.exists(folder):
             self.edit_USGSSaveFilePath.setText(folder)
@@ -6365,7 +6565,8 @@ class MainWindow(QMainWindow):
                                              startTime=startTime, endTime=endTime)
 
             #downloadsFilePath = os.path.join(self.edit_USGSSaveFilePath.text(), 'Images')
-            downloadsFilePath = self.edit_USGSSaveFilePath.text()
+            # Same layout as the checked-camera download: <folder>/<camera ID>/Images and /data
+            downloadsFilePath = os.path.join(self.edit_USGSSaveFilePath.text(), site)
             if not os.path.exists(downloadsFilePath):
                 os.makedirs(downloadsFilePath)
 
@@ -6385,6 +6586,13 @@ class MainWindow(QMainWindow):
                 progress=self._usgs_progress,
                 cancel_check = lambda: self._usgs_cancel_requested
             )
+
+            if self._usgs_cancel_requested:
+                self.force_close_progress()
+                App_QMessageBox("USGS Download",
+                                f"Download cancelled after {downloaded} new image(s). No sensor data was downloaded.",
+                                QMessageBox.Close).displayMsgBox()
+                return
 
             saveFolder = os.path.join(downloadsFilePath, "data")
             if not os.path.exists(saveFolder):
@@ -6432,22 +6640,21 @@ class MainWindow(QMainWindow):
         CONFIG_FILENAME = "site_config.json"
         site_configuration_file = os.path.normpath(os.path.join(settings_folder, CONFIG_FILENAME))
 
-        # Show a splash screen while the ML dialog loads
-        from PyQt5.QtGui import QPixmap, QColor
-        from PyQt5.QtCore import Qt
-        _splash_pix = QPixmap(480, 120)
-        _splash_pix.fill(QColor("#2b2b2b"))
-        _splash = QSplashScreen(_splash_pix, Qt.WindowStaysOnTopHint)
-        _splash.showMessage("Loading ML Image Processing...",
-                            Qt.AlignCenter | Qt.AlignVCenter,
-                            QColor("#ffffff"))
+        # Show the GRIME AI logo splash (the startup splash, with its glowing
+        # border) while the ML dialog loads. It runs in its own process, so the
+        # glow keeps animating while this process is busy building the dialog.
+        from appcore.SplashScreen import FADE_NONE
+        _splash_dir = Path(__file__).resolve().parent / "resources" / "splash_screens"
+        _splash = SplashScreen(image_path=os.path.join(_splash_dir, APP_LOGO_FILENAME),
+                               fade_mode=FADE_NONE,
+                               message="Loading ML Image Processing...")
         _splash.show()
-        QApplication.processEvents()
 
-        from appcore.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
-        hyperparameterDlg = ML_ImageProcessingDlg(frame)
-
-        _splash.finish(hyperparameterDlg)
+        try:
+            from appcore.dialogs.ML_image_processing.ML_ImageProcessingDlg import ML_ImageProcessingDlg
+            hyperparameterDlg = ML_ImageProcessingDlg(frame)
+        finally:
+            _splash.dismiss()
 
         hyperparameterDlg.ml_train_signal.connect(train_main)
         hyperparameterDlg.ml_segment_signal.connect(segment_main)
@@ -6590,8 +6797,8 @@ class MainWindow(QMainWindow):
         response = msgBox.displayMsgBox()
 
         if response == QMessageBox.Yes:
-            prompter = promptlib.Files()
-            folder = prompter.dir()
+            folder = QFileDialog.getExistingDirectory(
+                self, "Select image folder to triage", "", options=QFileDialog.ShowDirsOnly)
 
             if len(folder) == 0:
                 strMessage = 'ERROR! Please specify an image folder containing images to triage.'
@@ -7373,9 +7580,9 @@ class MainWindow(QMainWindow):
                 # so when multiplied with original image removes all non-blue regions
                 result = cv2.bitwise_and(numpyImage, numpyImage, mask=mask)
 
-                cv2.imshow('frame', numpyImage)
-                cv2.imshow('mask', mask)
-                cv2.imshow('result', result)
+                App_Utils().show_image_window('frame', numpyImage)
+                App_Utils().show_image_window('mask', mask)
+                App_Utils().show_image_window('result', result)
 
                 tempCurrentImage = QImage(numpyImage, numpyImage.shape[1], numpyImage.shape[0], QImage.Format_RGB888)
                 currentImage = QPixmap(tempCurrentImage)
@@ -7744,17 +7951,22 @@ class MainWindow(QMainWindow):
     # ======================================================================================================================
     # THIS FUNCTION WILL DISPLAY THE LATEST IMAGE ON THE GUI.
     # ======================================================================================================================
-    def _neon_preview_received(self, pixmap, error_msg):
+    def _neon_preview_received(self, pixmap, error_msg, is_midday=True, fetcher=None):
         global gWebImagesAvailable
+        if fetcher is not None and getattr(self, "_neon_preview_fetcher", None) is not fetcher:
+            return   # result from a site the user has since moved away from
         if pixmap and not pixmap.isNull():
             gWebImagesAvailable = 1
             self.NEON_latestImage = pixmap
+            self.labelLatestImageTitle.setText(
+                SITE_PREVIEW_TITLE if is_midday else SITE_PREVIEW_FALLBACK_TITLE)
             self.NEON_DisplayLatestImage()
         else:
             gWebImagesAvailable = 0
-            self._show_image_message("neon", "No image available.")
+            self.labelLatestImageTitle.setText(SITE_PREVIEW_TITLE)
+            self._show_image_message("neon", fetcher.unavailable_message if fetcher is not None else NO_IMAGE_MESSAGE)
             if error_msg:
-                print(f"[NEON] Latest image: {error_msg}")
+                print(f"[NEON] Site preview: {error_msg}")
 
     def _neon_tree_item_clicked(self, item, column):
         """Open URL in browser if the clicked NEON tree item is a hyperlink."""
@@ -7768,13 +7980,13 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "neon_image_panel", None)
         if panel is not None:
             if self.NEON_latestImage == []:
-                panel.showMessage("No image available.")
+                panel.showMessage(getattr(self, "_neon_image_message", NO_IMAGE_MESSAGE))
             else:
                 panel.setPixmap(self.NEON_latestImage)   # same image keeps the user's zoom
             return
 
         if self.NEON_latestImage == []:
-            self.NEON_labelLatestImage.setText("No image available.")
+            self.NEON_labelLatestImage.setText(getattr(self, "_neon_image_message", NO_IMAGE_MESSAGE))
         elif self.NEON_labelLatestImage.width() > 1:
             self.NEON_labelLatestImage.clear()
             self.NEON_labelLatestImage.setPixmap(self.NEON_latestImage.scaled(self.NEON_labelLatestImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
@@ -9026,7 +9238,7 @@ def NEON_labelOriginalImageDoubleClickEvent(self):
 # ======================================================================================================================
 def NEON_labelMouseDoubleClickEvent(self, event):
     img = App_Utils().convertQImageToMat(self.NEON_labelLatestImage.toImage())
-    cv2.imshow('Original', img)
+    App_Utils().show_image_window('Original', img)
 
     # ----------
     if 0:
@@ -9165,6 +9377,12 @@ def run_gui():
         print(f"[HIDPI] Could not set high-DPI attributes: {_e}")
 
     app = QApplication(sys.argv)
+
+    # One global application font so every widget starts from the same size in
+    # both themes. Keeps the native font family; forces a uniform point size.
+    _app_font = app.font()
+    _app_font.setPointSize(10)
+    app.setFont(_app_font)
 
     # Light mode is the default — dark mode toggled via View menu
     app.setStyleSheet("")
@@ -9788,8 +10006,8 @@ def run_cli(args):
             sys.exit(1)
         os.makedirs(args.output, exist_ok=True)
 
-        import torch
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        from appcore.ml_core import device_utils
+        device = device_utils.get_device()
         category = {"id": args.category_id, "name": args.category_name}
 
         print(f"[{APP_DISPLAY_NAME}] Mode:      {args.mode.upper()}")
@@ -10499,8 +10717,7 @@ def train_main(cfg: DictConfig) -> None:
         # FETCH ANY DATA WE NEED FROM THE MACHINE LEARNING DIALOG
         selected_training_model = hyperparameterDlg.get_selected_training_model()
 
-        # WE ONLY USE HYDRA WITH SEGMENT ANYTHING MODEL (SAM, SAM2, SAM3)
-        # SAM2 uses Hydra; SAM3 (LoRA subprocess) does not. Match SAM2 specifically.
+        # WE ONLY USE HYDRA WITH SEGMENT ANYTHING MODEL (SAM, SAM2)
         if selected_training_model.lower() in ("sam", "sam2"):
             print("Config path:", myconfig_path)
             print("Config name:", myconfig_name)
@@ -10532,7 +10749,7 @@ def train_main(cfg: DictConfig) -> None:
             pass
 
         # Prompt user about suggested blob radius if available
-        # Blob-radius prompt is a SAM2 artifact; SAM3 produces none.
+        # Blob-radius prompt applies to SAM2 only.
         if trainer is not None and selected_training_model.lower() in ("sam", "sam2"):
             try:
                 hyperparameterDlg.training_tab.prompt_blob_radius_update(trainer)

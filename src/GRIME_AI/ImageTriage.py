@@ -22,6 +22,8 @@ from appcore.ImageQualityCheck import ImageQualityAnalyzer
 from datetime import datetime
 from .app_identity import APP_DISPLAY_NAME
 
+PERCENT = 100.0     # the report shows the overexposed area and dominant color as percentages
+
 
 class ImageTriage:
 
@@ -36,11 +38,13 @@ class ImageTriage:
                     bCreateReport, bMoveImages, bCorrectAlignment, bSavePolylines,
                     strReferenceImageFilename, rotationThreshold,
                     use_fft_blur=True, use_laplacian=True,
-                    laplacian_threshold=150.0, blur_logic="OR",
+                    laplacian_threshold=150.0, blur_logic="AND",
                     focus_roi=None,
                     use_color_imbalance=False,
                     color_imbalance_threshold=0.5,
-                    fft_calibration=None):
+                    fft_calibration=None,
+                    use_overexposure=False,
+                    overexposure_limit=0.40):
         """
         Triage images in folder, flagging those that are blurry, too dark, or too light.
 
@@ -55,6 +59,17 @@ class ImageTriage:
             FFT blur calibration saved by the calibration dialog. Used only if it
             was made with the same focus region; otherwise FFT blur is judged from
             this folder alone.
+        blur_logic : str
+            How the two blur detectors combine when both run. "AND" (default):
+            an image is blurry only when both detectors say so, which keeps sharp
+            low-contrast images (snow, fog) that the edge-based detector alone
+            would reject. When only one detector runs, its result is used.
+        use_overexposure : bool
+            Mark images as poor quality when more than overexposure_limit of the pixels are at the
+            top of the brightness range (overexposed). Snow scenes keep texture and
+            stay below the limit.
+        overexposure_limit : float
+            Fraction of pixels (0.0-1.0) above which an image is overexposed (poor quality).
 
         Runs in two passes. Pass 1 analyzes every image. The FFT blur threshold
         is then chosen from the whole folder (ImageQualityAnalyzer.finalize_fft_blur).
@@ -83,6 +98,8 @@ class ImageTriage:
             fft_calibration              = fft_calibration,
             use_color_imbalance          = use_color_imbalance,
             color_imbalance_threshold    = color_imbalance_threshold,
+            use_overexposure               = use_overexposure,
+            overexposure_limit             = overexposure_limit,
         )
 
         reportRows = []   # accumulated for the xlsx report
@@ -93,8 +110,10 @@ class ImageTriage:
             csvFilename      = reportStem + '.csv'
             imageQualityFile = os.path.join(folder, csvFilename)
             csvFile          = open(imageQualityFile, 'a', newline='')
-            csvFile.write('Focus Value, Focus Attrib, Laplacian Value, Intensity Value, Intensity Attrib., '
-                          'Color Imbalance, Color Imbalance Attrib., '
+            csvFile.write('Blur Score (frequency-based), Blur Attrib., Blur Score (edge-based), '
+                          'Brightness, Brightness Attrib., '
+                          'Overexposed Area (%), Overexposed Attrib., '
+                          'Dominant Color (%), Color Balance Attrib., '
                           'Quality, '
                           'Rotation, H. Shift, V. Shift, Filename, Moved\n')
 
@@ -178,6 +197,8 @@ class ImageTriage:
             is_too_light      = quality.get("is_too_light",       False)
             is_color_imbal    = quality.get("is_color_imbalanced", False)
             color_imbalance   = quality.get("color_imbalance",     0.0)
+            is_overexposed     = quality.get("is_overexposed",       False)
+            overexposed_fraction  = quality.get("overexposed_fraction")    # None: check not applied
 
             bBad           = False
             strFocusMetric = "Nominal"
@@ -191,7 +212,12 @@ class ImageTriage:
                 strIntensity = "Too Dark"
                 bBad         = True
             elif is_too_light:
-                strIntensity = "Too Light"
+                strIntensity = "Too Bright"
+                bBad         = True
+
+            strOverexposed = "Nominal"
+            if is_overexposed:
+                strOverexposed = "Overexposed"
                 bBad         = True
 
             strColorImbalance = "Nominal"
@@ -220,11 +246,13 @@ class ImageTriage:
 
                 strQuality = 'Review' if bBad else 'Nominal'
                 strBlurFft = '' if blur_fft is None else '%3.4f' % blur_fft
-                strOutputString = '%s,%s,%3.2f,%3.2f,%s,%3.3f,%s,%s,%3.2f,%3.2f,%3.2f,%s,%s\n' % (
+                strOverexposedArea = '' if overexposed_fraction is None else '%3.1f' % (overexposed_fraction * PERCENT)
+                strOutputString = '%s,%s,%3.2f,%3.2f,%s,%s,%s,%3.1f,%s,%s,%3.2f,%3.2f,%3.2f,%s,%s\n' % (
                     strBlurFft, strFocusMetric,
                     blur_laplacian,
                     brightness, strIntensity,
-                    color_imbalance, strColorImbalance,
+                    strOverexposedArea, strOverexposed,
+                    color_imbalance * PERCENT, strColorImbalance,
                     strQuality,
                     rotationAngle, horizontal_shift, vertical_shift,
                     formula,
@@ -236,7 +264,8 @@ class ImageTriage:
                     None if blur_fft is None else round(blur_fft, 4), strFocusMetric,
                     round(blur_laplacian, 2),
                     round(brightness, 2), strIntensity,
-                    round(color_imbalance, 3), strColorImbalance,
+                    None if overexposed_fraction is None else round(overexposed_fraction * PERCENT, 1), strOverexposed,
+                    round(color_imbalance * PERCENT, 1), strColorImbalance,
                     strQuality,
                     round(rotationAngle, 2), round(horizontal_shift, 2), round(vertical_shift, 2),
                     filename,
@@ -244,7 +273,7 @@ class ImageTriage:
                 ))
 
         if badImageCount == 0:
-            strMessage = 'No bad images found.'
+            strMessage = 'No poor-quality images found.'
             print(strMessage)
             if self.show_gui:
                 msgBox   = App_QMessageBox('Image Triage', strMessage)
@@ -262,7 +291,8 @@ class ImageTriage:
                 bMoveImages, bCorrectAlignment, bSavePolylines,
                 strReferenceImageFilename, rotationThreshold,
                 images_processed=len(reportRows), images_flagged=badImageCount,
-                fft_blur_mode=analyzer.fft_blur_mode)
+                fft_blur_mode=analyzer.fft_blur_mode,
+                use_overexposure=use_overexposure, overexposure_limit=overexposure_limit)
 
             # JSON sidecar: same stem as the CSV, '_settings.json' suffix
             try:
@@ -293,7 +323,8 @@ class ImageTriage:
                              focus_roi, use_color_imbalance, color_imbalance_threshold,
                              bMoveImages, bCorrectAlignment, bSavePolylines,
                              strReferenceImageFilename, rotationThreshold,
-                             images_processed=0, images_flagged=0, fft_blur_mode=None):
+                             images_processed=0, images_flagged=0, fft_blur_mode=None,
+                             use_overexposure=False, overexposure_limit=None):
         """Assemble the complete run configuration for the settings sidecar
         and the xlsx Triage Settings worksheet."""
         try:
@@ -316,6 +347,8 @@ class ImageTriage:
             "blur_logic":                blur_logic,
             "brightness_min":            brightnessMin,
             "brightness_max":            brightnessMAX,
+            "use_overexposure":            bool(use_overexposure),
+            "overexposure_limit":          overexposure_limit,
             "focus_roi":                 focus_roi,
             "use_color_imbalance":       bool(use_color_imbalance),
             "color_imbalance_threshold": color_imbalance_threshold,
@@ -343,20 +376,22 @@ class ImageTriage:
         # --- Sheet 1: Triage Results ---
         ws = wb.active
         ws.title = "Triage Results"
-        headers = ['Focus Value', 'Focus Attrib', 'Laplacian Value',
-                   'Intensity Value', 'Intensity Attrib.',
-                   'Color Imbalance', 'Color Imbalance Attrib.',
+        headers = ['Blur Score (frequency-based)', 'Blur Attrib.', 'Blur Score (edge-based)',
+                   'Brightness', 'Brightness Attrib.',
+                   'Overexposed Area (%)', 'Overexposed Attrib.',
+                   'Dominant Color (%)', 'Color Balance Attrib.',
                    'Quality', 'Rotation', 'H. Shift', 'V. Shift',
                    'Filename', 'Moved']
         ws.append(headers)
+        filenameCol = headers.index('Filename') + 1     # 1-based worksheet column
         for cell in ws[1]:
             cell.font = Font(bold=True)
 
         for row in reportRows:
             ws.append(list(row))
             # Render the filename as a clickable hyperlink (basename shown)
-            filenameCell           = ws.cell(row=ws.max_row, column=12)
-            fullPath               = row[11]
+            filenameCell           = ws.cell(row=ws.max_row, column=filenameCol)
+            fullPath               = row[filenameCol - 1]
             filenameCell.value     = os.path.basename(fullPath)
             filenameCell.hyperlink = fullPath
             filenameCell.style     = "Hyperlink"
@@ -374,7 +409,7 @@ class ImageTriage:
             wsSettings.append([key, value])
 
         # Reasonable column widths
-        for sheet, widths in ((ws, {12: 45}), (wsSettings, {1: 28, 2: 60})):
+        for sheet, widths in ((ws, {filenameCol: 45}), (wsSettings, {1: 28, 2: 60})):
             for colIdx, width in widths.items():
                 colLetter = sheet.cell(row=1, column=colIdx).column_letter
                 sheet.column_dimensions[colLetter].width = width

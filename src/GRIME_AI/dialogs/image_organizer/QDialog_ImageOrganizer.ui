@@ -19,7 +19,7 @@
    <!-- Row 0: Folder -->
    <item row="0" column="0">
     <widget class="QLabel" name="label_folder">
-     <property name="text"><string>Folder:</string></property>
+     <property name="text"><string>&lt;b&gt;Folder:&lt;/b&gt;</string></property>
     </widget>
    </item>
    <item row="0" column="1">
@@ -65,7 +65,7 @@
      </item>
      <item>
       <widget class="QLabel" name="total_count_lbl">
-       <property name="text"><string>TOTAL File Count: 0</string></property>
+       <property name="text"><string>Total images: 0</string></property>
       </widget>
      </item>
      <item>
@@ -76,7 +76,7 @@
      </item>
      <item>
       <widget class="QLabel" name="ts_count_lbl">
-       <property name="text"><string>Files w/Timestamp: 0</string></property>
+       <property name="text"><string>With timestamp: 0</string></property>
       </widget>
      </item>
      <item>
@@ -90,7 +90,7 @@
    <!-- Row 2: Site Name (same visible width as Folder field) -->
    <item row="2" column="0">
     <widget class="QLabel" name="label_site">
-     <property name="text"><string>Site Name:</string></property>
+     <property name="text"><string>&lt;b&gt;Site Name:&lt;/b&gt;</string></property>
     </widget>
    </item>
    <item row="2" column="1">
@@ -159,9 +159,8 @@
         <item>
          <widget class="QLabel" name="sec_warn_lbl">
           <property name="text"><string/></property>
-          <property name="styleSheet">
-           <string notr="true">color: #B22222; /* firebrick red */</string>
-          </property>
+          <!-- Color is applied in code via theme.bind (light/dark), so it is not
+               hard-coded here to avoid two sources of truth. -->
           <property name="wordWrap"><bool>true</bool></property>
           <property name="visible"><bool>false</bool></property>
           <property name="sizePolicy">
@@ -192,7 +191,7 @@
 
       <item row="0" column="0">
        <widget class="QLabel" name="label_copyright">
-        <property name="text"><string>Copyright:</string></property>
+        <property name="text"><string>&lt;b&gt;Copyright:&lt;/b&gt;</string></property>
        </widget>
       </item>
       <item row="0" column="1" colspan="2">
@@ -206,12 +205,52 @@
        </widget>
       </item>
 
-      <item row="1" column="0" alignment="Qt::AlignTop">
+      <item row="1" column="0">
+       <widget class="QLabel" name="label_title">
+        <property name="text"><string>&lt;b&gt;Title:&lt;/b&gt;</string></property>
+       </widget>
+      </item>
+      <item row="1" column="1" colspan="2">
+       <widget class="QLineEdit" name="title_edit">
+        <property name="placeholderText"><string>Title (optional)</string></property>
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+          <horstretch>1</horstretch><verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+       </widget>
+      </item>
+
+      <item row="2" column="0" alignment="Qt::AlignTop">
+       <widget class="QLabel" name="label_comments">
+        <property name="text"><string>&lt;b&gt;Comments:&lt;/b&gt;</string></property>
+       </widget>
+      </item>
+      <item row="2" column="1" colspan="2">
+       <widget class="QTextEdit" name="comments_edit">
+        <property name="acceptRichText"><bool>false</bool></property>
+        <property name="tabChangesFocus"><bool>true</bool></property>
+        <property name="lineWrapMode"><enum>QTextEdit::WidgetWidth</enum></property>
+        <property name="wordWrapMode"><enum>QTextOption::WordWrap</enum></property>
+        <property name="horizontalScrollBarPolicy"><enum>Qt::ScrollBarAlwaysOff</enum></property>
+        <property name="verticalScrollBarPolicy"><enum>Qt::ScrollBarAsNeeded</enum></property>
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+          <horstretch>1</horstretch><verstretch>0</verstretch>
+         </sizepolicy>
+        </property>
+        <property name="placeholderText">
+         <string>Comments (optional, multi-line supported)…</string>
+        </property>
+       </widget>
+      </item>
+
+      <item row="3" column="0" alignment="Qt::AlignTop">
        <widget class="QLabel" name="label_siteinfo">
         <property name="text"><string>&lt;b&gt;Site Information&lt;/b&gt;</string></property>
        </widget>
       </item>
-      <item row="1" column="1" colspan="2">
+      <item row="3" column="1" colspan="2">
        <widget class="QTextEdit" name="site_info_edit">
         <property name="acceptRichText"><bool>false</bool></property>
         <property name="tabChangesFocus"><bool>true</bool></property>

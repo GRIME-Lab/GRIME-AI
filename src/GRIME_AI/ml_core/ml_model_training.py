@@ -19,9 +19,10 @@ from datetime import datetime
 
 from appcore.Save_Utils import Save_Utils
 from appcore.JSON_Editor import JsonEditor
-from appcore.ml_core.segformer_trainer import SegFormerConfig, SegFormerTrainer
+from appcore.ml_core.segformer_errors import SegFormerError
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 from appcore.ml_core.lora_wrapper import GeneralLoRAWrapper
+from appcore.ml_core import device_utils
 
 # ----------------------------------------------------------------------------------------------------------------------
 # WARNING AND ERROR LOGGING
@@ -34,7 +35,7 @@ if True:
 # ----------------------------------------------------------------------------------------------------------------------
 # GET DEVICE TO BE USED
 # ----------------------------------------------------------------------------------------------------------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = device_utils.get_device()
 print(f"Using device: {device}")
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -120,17 +121,6 @@ class MLModelTraining:
 
     # ------------------------------------------------------------------------------------------------------------------
     # ------------------------------------------------------------------------------------------------------------------
-    def _sam3_checkpoint_path(self):
-        """Local SAM3 base checkpoint (<user root>/sam3.pt). Returns the
-        path if it exists so training loads from disk (no HF download/auth);
-        None otherwise, letting the trainer fall back to HuggingFace."""
-        try:
-            from appcore import PROJECT_ROOT
-            p = os.path.join(str(PROJECT_ROOT), "sam3.pt")
-            return p if os.path.exists(p) else None
-        except Exception:
-            return None
-
     def Model_Training_Dispatcher(self, cfg=None, mode="sam2"):
         """
         Unified training entry point.
@@ -144,19 +134,18 @@ class MLModelTraining:
 
         # -------------------------------
         # CREATE OUTPUT FOLDER
+        # (under the active recipe's Models folder, if set)
         # -------------------------------
         try:
+            from appcore.recipe_manager.recipe_manager import get_models_root
             self.model_output_folder = os.path.join(
-                Save_Utils().get_models_folder(), mode,
+                get_models_root(), mode,
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)
         except OSError as e:
             print(f"Error creating folders: {e}")
 
-
-        ###JES TEST TEST TEST TEST TEST
-        ###JES mode = "sam3"
 
         # --------------------------------------------------------------------
         #      SAM2   ---   SAM2   ---   SAM2   ---   SAM2   ---   SAM2
@@ -185,125 +174,105 @@ class MLModelTraining:
             return mySAM2_pipeline
 
         # --------------------------------------------------------------------
-        #      SAM3   ---   SAM3   ---   SAM3   ---   SAM3   ---   SAM3
-        # --------------------------------------------------------------------
-        elif mode.lower() == "sam3":
-            # SAM3 LoRA fine-tuning via the Sompote/SAM3_LoRA trainer, driven as a
-            # subprocess (SAM3LoRATrainer). Uses the same COCO training data and
-            # LoRA/hyperparameter fields the tab already collects.
-            from appcore.ml_core.sam3_lora_trainer import SAM3LoRATrainer
-
-            # Resolve the COCO data root. SAM3_LoRA expects
-            # <data_dir>/train/_annotations.coco.json (and optional valid/). The
-            # app provides a list of training folders; use the first as the root.
-            paths = self.site_config.get('Path', [])
-            data_dir = None
-            for path in paths:
-                folders = path.get('directoryPaths', {}).get('folders', [])
-                if folders:
-                    data_dir = folders[0]
-                    break
-            if not data_dir:
-                print("[SAM3] No training folder found; aborting SAM3 training.")
-                return None
-
-            lr = (self.learning_rates[0] if self.learning_rates
-                  else ModelConfigManager.get_default('learningRates')[0])
-
-            mySAM3_pipeline = SAM3LoRATrainer(
-                data_dir=data_dir,
-                output_dir=self.model_output_folder,
-                num_epochs=self.num_epochs,
-                batch_size=self.site_config.get(
-                    'batch_size', ModelConfigManager.get_default('batch_size')),
-                learning_rate=lr,
-                weight_decay=self.weight_decay,
-                rank=self.site_config.get('lora_rank',
-                                          ModelConfigManager.get_default('lora_rank')),
-                alpha=self.site_config.get('lora_alpha',
-                                           ModelConfigManager.get_default('lora_alpha')),
-                dropout=self.site_config.get('lora_dropout',
-                                             ModelConfigManager.get_default('lora_dropout')),
-                num_negatives=self.site_config.get('sam3_num_negatives', 3),
-                checkpoint_path=self._sam3_checkpoint_path(),
-            )
-            print("Begin SAM3 LoRA Training...")
-            rc = mySAM3_pipeline.run(on_output=lambda line: print(line))
-            print(f"Completed SAM3 LoRA Training (exit code {rc}).")
-            if rc == 0:
-                print(f"SAM3 LoRA weights: {mySAM3_pipeline.best_weights_path}")
-            return mySAM3_pipeline
-
-        # --------------------------------------------------------------------
         #     SegFormer  ---  SegFormer  ---  SegFormer  ---  SegFormer
         # --------------------------------------------------------------------
         elif mode.lower() == "segformer":
-            # Collect folders and annotations
-            paths = self.site_config.get('Path', [])
-            for path in paths:
-                directory_path = path['directoryPaths']
+            try:
+                # Imported here, not at module level, so a SegFormer import problem
+                # cannot stop SAM2 or YOLO training.
+                from appcore.ml_core.segformer_trainer import SegFormerConfig
 
-                self.folders = directory_path.get('folders', [])
-                self.all_folders.extend([self.folders])
+                # Collect folders and annotations
+                paths = self.site_config.get('Path', [])
+                for path in paths:
+                    directory_path = path['directoryPaths']
 
-                self.annotation_files = directory_path.get('annotations', [])
-                self.all_annotations.extend([self.annotation_files])
+                    self.folders = directory_path.get('folders', [])
+                    self.all_folders.extend([self.folders])
 
-            # BUILD CATEGORIES AND UPDATE CONFIG
-            self.categories = self.build_unique_categories(self.all_annotations)
-            cfg = SegFormerConfig(
-                images_dir="",
-                ann_path="",
-                num_epochs=self.num_epochs,
-                batch_size=self.site_config.get(
-                    'batch_size', ModelConfigManager.get_default('batch_size')),
-                backbone_size=self.site_config.get('backbone_size', 'b0'),
-                loss_function=self.site_config.get('loss_function', 'ce_dice'),
-                tversky_alpha=self.site_config.get('tversky_alpha', 0.5),
-                tversky_beta=self.site_config.get('tversky_beta', 0.5),
-                focal_gamma=self.site_config.get('focal_gamma', 2.0),
-                use_augmentation=self.site_config.get('use_augmentation', False),
-                aug_horizontal_flip=self.site_config.get('aug_horizontal_flip', 0.5),
-                aug_vertical_flip=self.site_config.get('aug_vertical_flip', 0.0),
-                aug_rotation=self.site_config.get('aug_rotation', 15.0),
-                aug_brightness=self.site_config.get('aug_brightness', 0.2),
-                aug_contrast=self.site_config.get('aug_contrast', 0.2),
-                lr=(self.learning_rates[0] if self.learning_rates
-                    else ModelConfigManager.get_default('learningRates')[0]),
-                weight_decay=self.weight_decay,
-                early_stopping=self.early_stopping,
-                patience=self.patience,
-                max_best_checkpoints=self.max_best_checkpoints,
-                lr_scheduler_enabled=self.site_config.get(
-                    'lr_scheduler_enabled', ModelConfigManager.get_default('lr_scheduler_enabled')),
-                lr_scheduler_factor=self.site_config.get(
-                    'lr_scheduler_factor', ModelConfigManager.get_default('lr_scheduler_factor')),
-                lr_scheduler_patience=self.site_config.get(
-                    'lr_scheduler_patience', ModelConfigManager.get_default('lr_scheduler_patience')),
-                lr_scheduler_min_lr=self.site_config.get(
-                    'lr_scheduler_min_lr', ModelConfigManager.get_default('lr_scheduler_min_lr')),
-                num_val_overlays=self.site_config.get(
-                    'validation_overlay_samples',
-                    ModelConfigManager.get_default('validation_overlay_samples')),
-                validation_overlay_mode=self.site_config.get(
-                    'validation_overlay_mode',
-                    ModelConfigManager.get_default('validation_overlay_mode')),
-                validation_overlay_interval=self.site_config.get(
-                    'validation_overlay_interval',
-                    ModelConfigManager.get_default('validation_overlay_interval')),
-                categories=self.categories,
-                target_category_name=self.site_config["train_model"]["TRAINING_CATEGORIES"][0]["label_name"],
-                output_dir=self.model_output_folder,
-                formatted_time=self.formatted_time,
-                site_name=self.site_name,
-            )
+                    self.annotation_files = directory_path.get('annotations', [])
+                    self.all_annotations.extend([self.annotation_files])
 
-            print("Begin SegFormer Training...")
-            self.run_segformer(self.all_folders, self.all_annotations, cfg,
-                          use_lora=self.site_config.get('use_lora', True),
-                          lora_target_modules=["query", "key", "value"],
-                          modules_to_save=["decode_head.classifier"])
-            print("Completed SegFormer Training...")
+                if not normalize_files(self.all_folders) or not normalize_files(self.all_annotations):
+                    raise SegFormerError("No training image folders or annotation files are selected.")
+
+                # BUILD CATEGORIES AND UPDATE CONFIG
+                self.categories = self.build_unique_categories(self.all_annotations)
+                target_category_name = self._segformer_target_category()
+                cfg = SegFormerConfig(
+                    images_dir="",
+                    ann_path="",
+                    num_epochs=self.num_epochs,
+                    batch_size=self.site_config.get(
+                        'batch_size', ModelConfigManager.get_default('batch_size')),
+                    backbone_size=self.site_config.get(
+                        'backbone_size', ModelConfigManager.get_default('backbone_size')),
+                    loss_function=self.site_config.get(
+                        'loss_function', ModelConfigManager.get_default('loss_function')),
+                    tversky_alpha=self.site_config.get('tversky_alpha', 0.5),
+                    tversky_beta=self.site_config.get('tversky_beta', 0.5),
+                    focal_gamma=self.site_config.get('focal_gamma', 2.0),
+                    use_augmentation=self.site_config.get('use_augmentation', False),
+                    aug_horizontal_flip=self.site_config.get('aug_horizontal_flip', 0.5),
+                    aug_vertical_flip=self.site_config.get('aug_vertical_flip', 0.0),
+                    aug_rotation=self.site_config.get('aug_rotation', 15.0),
+                    aug_brightness=self.site_config.get('aug_brightness', 0.2),
+                    aug_contrast=self.site_config.get('aug_contrast', 0.2),
+                    lr=(self.learning_rates[0] if self.learning_rates
+                        else ModelConfigManager.get_default('learningRates')[0]),
+                    weight_decay=self.weight_decay,
+                    num_workers=self.site_config.get('num_workers', SegFormerConfig.num_workers),
+                    early_stopping=self.early_stopping,
+                    patience=self.patience,
+                    improvement_threshold_sigmas=self.site_config.get(
+                        'improvement_threshold_sigmas',
+                        ModelConfigManager.get_default('improvement_threshold_sigmas')),
+                    max_best_checkpoints=self.max_best_checkpoints,
+                    lr_scheduler_enabled=self.site_config.get(
+                        'lr_scheduler_enabled', ModelConfigManager.get_default('lr_scheduler_enabled')),
+                    lr_scheduler_factor=self.site_config.get(
+                        'lr_scheduler_factor', ModelConfigManager.get_default('lr_scheduler_factor')),
+                    lr_scheduler_patience=self.site_config.get(
+                        'lr_scheduler_patience', ModelConfigManager.get_default('lr_scheduler_patience')),
+                    lr_scheduler_min_lr=self.site_config.get(
+                        'lr_scheduler_min_lr', ModelConfigManager.get_default('lr_scheduler_min_lr')),
+                    num_val_overlays=self.site_config.get(
+                        'validation_overlay_samples',
+                        ModelConfigManager.get_default('validation_overlay_samples')),
+                    validation_overlay_mode=self.site_config.get(
+                        'validation_overlay_mode',
+                        ModelConfigManager.get_default('validation_overlay_mode')),
+                    validation_overlay_interval=self.site_config.get(
+                        'validation_overlay_interval',
+                        ModelConfigManager.get_default('validation_overlay_interval')),
+                    categories=self.categories,
+                    target_category_name=target_category_name,
+                    output_dir=self.model_output_folder,
+                    formatted_time=self.formatted_time,
+                    site_name=self.site_name,
+                )
+
+                # LoRA settings saved by the Training tab (or set in the Site
+                # Config Editor / CLI), defaulting through the schema.
+                _D = ModelConfigManager.get_default
+                use_lora = bool(self.site_config.get('use_lora', _D('use_lora')))
+                lora_target_modules = list(
+                    self.site_config.get('lora_target_modules', _D('lora_target_modules')) or [])
+                if use_lora and not lora_target_modules:
+                    raise SegFormerError("Use LoRA is on, but no LoRA target modules are selected. "
+                                         "Select at least one of Query, Key or Value.")
+
+                print("Begin SegFormer Training...")
+                self.run_segformer(self.all_folders, self.all_annotations, cfg,
+                              use_lora=use_lora,
+                              lora_target_modules=lora_target_modules,
+                              modules_to_save=["decode_head.classifier"],
+                              lora_rank=self.site_config.get('lora_rank', _D('lora_rank')),
+                              lora_alpha=self.site_config.get('lora_alpha', _D('lora_alpha')),
+                              lora_dropout=self.site_config.get('lora_dropout', _D('lora_dropout')))
+                print("Completed SegFormer Training...")
+            except Exception as e:
+                return self._segformer_failed(e)
 
         # -------------------------------
         # Mask R-CNN BRANCH
@@ -335,7 +304,7 @@ class MLModelTraining:
 
             # AdamW is the only optimizer used project-wide (matches SAM2/SegFormer paths)
             optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.lr, weight_decay=1e-4)
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = device_utils.get_device()
 
             trainer = MaskRCNNTrainer(model, train_loader, val_loader, optimizer, device)
             trainer.train(cfg.epochs)
@@ -374,33 +343,79 @@ class MLModelTraining:
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------
-    def run_segformer(self, image_dirs, ann_paths, cfg: SegFormerConfig,
+    def _segformer_target_category(self):
+        """The selected training category, checked against the annotation files."""
+        try:
+            target = self.site_config["train_model"]["TRAINING_CATEGORIES"][0]["label_name"]
+        except (KeyError, IndexError, TypeError):
+            raise SegFormerError("No training category is selected.")
+        if not target:
+            raise SegFormerError("No training category is selected.")
+        names = {c["name"] for c in self.categories}
+        if target not in names:
+            raise SegFormerError(
+                f"The selected training category '{target}' is not defined in any of the "
+                f"annotation files.\n\nCategories found: {', '.join(sorted(names)) or 'none'}")
+        return target
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def _segformer_failed(self, error):
+        """Report why SegFormer training stopped. In the GUI this shows a dialog; from the CLI the error is raised."""
+        if isinstance(error, SegFormerError):
+            msg = f"SegFormer training stopped.\n\n{error}"
+        else:
+            import traceback
+            traceback.print_exception(type(error), error, error.__traceback__)
+            msg = (f"SegFormer training stopped because of an unexpected error.\n\n"
+                   f"{type(error).__name__}: {error}")
+        print(f"[{self.className}] {msg}")
+        device_utils.empty_cache()
+
+        from PyQt5.QtWidgets import QApplication, QMessageBox
+        if QApplication.instance() is None:
+            # No GUI (CLI run): stop with the message.
+            if isinstance(error, SegFormerError):
+                raise error
+            raise SegFormerError(msg) from error
+        QMessageBox.critical(None, "SegFormer Training Error", msg)
+        return None
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def run_segformer(self, image_dirs, ann_paths, cfg: "SegFormerConfig",
                       use_lora: bool = False,
                       lora_target_modules=None,
                       modules_to_save=None,
-                      site_name_plain="segformer_plain",
-                      site_name_lora="segformer_lora"):
+                      site_name_plain=None,
+                      site_name_lora=None,
+                      lora_rank=None,
+                      lora_alpha=None,
+                      lora_dropout=None):
         """
         Compose SegFormer training with optional LoRA wrapping.
         - Builds base SegFormer via SegFormerTrainer.
         - Optionally wraps with GeneralLoRAWrapper.
         - Trains using SegFormerTrainer with the correct optimizer.
         """
+        from appcore.ml_core.segformer_trainer import SegFormerTrainer
         trainer = SegFormerTrainer(cfg, parent_widget=self.parent_widget)
-        
-        # Calculate num_labels from categories
-        # Background (class 0) + all annotated categories
-        num_labels = len(cfg.categories) + 1  # +1 for background class
-        print(f"Building SegFormer with {num_labels} classes (background + {len(cfg.categories)} categories)")
 
-        num_labels = 2  ###JES - DIAGNOSTIC - BACK TO ORIGINAL 2 CLASS CODE
-        base_model = trainer.build_model(num_labels=num_labels)
+        # Graphs, report and checkpoints are named for the site being trained.
+        site_name_plain = site_name_plain or cfg.site_name
+        site_name_lora = site_name_lora or cfg.site_name
+
+        # Binary model: background (class 0) + the selected target category (class 1).
+        # MultiCocoTargetDataset builds masks for the one target category, and the
+        # trainer and inference engine both read class 1 as the target.
+        base_model = trainer.build_model(num_labels=SegFormerTrainer.BINARY_NUM_LABELS)
 
         if use_lora:
+            _D = ModelConfigManager.get_default
             lora = GeneralLoRAWrapper(
-                r=cfg.__dict__.get("lora_r", 16),
-                alpha=cfg.__dict__.get("lora_alpha", 32),
-                dropout=cfg.__dict__.get("lora_dropout", 0.05),
+                r=int(lora_rank if lora_rank is not None else _D("lora_rank")),
+                alpha=int(lora_alpha if lora_alpha is not None else _D("lora_alpha")),
+                dropout=float(lora_dropout if lora_dropout is not None else _D("lora_dropout")),
                 target_modules=lora_target_modules or ["query", "key", "value"],
                 modules_to_save=modules_to_save or ["decode_head.classifier"],
                 task_type="FEATURE_EXTRACTION"
@@ -438,11 +453,11 @@ class MLModelTraining:
 
         for p in annotation_files:
             try:
-                data = json.load(open(p, 'r'))
+                with open(p, 'r') as f:
+                    data = json.load(f)
                 cats = data.get('categories', [])
             except Exception as e:
-                print(f"Failed loading '{p}': {e}")
-                continue
+                raise SegFormerError(f"The annotation file could not be read:\n{p}\n\n{e}") from e
 
             for cat in cats:
                 cid = cat.get('id'); cname = cat.get('name')
@@ -457,7 +472,7 @@ class MLModelTraining:
                 id_to_name[cid] = cname
 
                 if cname in name_to_id and name_to_id[cname] != cid:
-                    print(f"⚠️ Name conflict: '{cname}' → {self.name_to_id[cname]} vs {cid}")
+                    print(f"⚠️ Name conflict: '{cname}' → {name_to_id[cname]} vs {cid}")
                     continue
                 name_to_id[cname] = cid
 

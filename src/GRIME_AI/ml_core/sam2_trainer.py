@@ -48,15 +48,17 @@ from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfig
 from appcore.QProgressWheel import QProgressWheel
 from appcore.Save_Utils import Save_Utils
 from appcore.ml_core.model_training_visualization import ModelTrainingVisualization
+from appcore.ml_core.convergence_analysis import ImprovementTracker
 from appcore.App_QMessageBox import App_QMessageBox
 from appcore.dialogs.ML_image_processing.model_config_manager import ModelConfigManager
 
 from appcore.utils.datasetutils import DatasetUtils
+from appcore.ml_core import device_utils
 from appcore.ml_core.ml_helpers import (build_centroid_point_prompts, sample_pooled_prompts,
                                          DEFAULT_MAX_POSITIVES as _DEFAULT_MAX_POSITIVES,
                                          DEFAULT_NEGATIVE_BALANCE as _DEFAULT_NEGATIVE_BALANCE)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = device_utils.get_device()
 print(f"Using device: {device}")
 print(sam2_base.__file__)
 
@@ -264,6 +266,9 @@ class SAM2Trainer:
             'max_best_checkpoints', ModelConfigManager.get_default('max_best_checkpoints')))
         self.early_stopping = self.site_config['early_stopping']
         self.patience = self.site_config['patience']
+        # An improvement must exceed this many noise standard deviations to reset patience.
+        self.improvement_threshold_sigmas = float(self.site_config.get(
+            'improvement_threshold_sigmas', ModelConfigManager.get_default('improvement_threshold_sigmas')))
 
         # Mini-batch size for SAM2 training (GUI "Batch Size" spinbox).
         # Accepts either key spelling; clamped to >= 1. Resolved value is
@@ -314,10 +319,11 @@ class SAM2Trainer:
         self.categories = []
         self.annotation_index = []
 
-        # create output folder
+        # create output folder (under the active recipe's Models folder, if set)
         try:
+            from appcore.recipe_manager.recipe_manager import get_models_root
             self.model_output_folder = os.path.join(
-                Save_Utils().get_models_folder(), 'sam2',
+                get_models_root(), 'sam2',
                 f"{self.formatted_time}_{self.site_name}"
             )
             os.makedirs(self.model_output_folder, exist_ok=True)
@@ -564,7 +570,7 @@ class SAM2Trainer:
 
             checkpoint = torch.load(
                 sam2_checkpoint,
-                map_location=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+                map_location=device
             )
             if "model" in checkpoint:
                 model.load_state_dict(checkpoint["model"], strict=False)
@@ -587,7 +593,7 @@ class SAM2Trainer:
         model = instantiate(new_cfg, _recursive_=True)
 
         ckpt = torch.load(checkpoint,
-                          map_location=torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu"))
+                          map_location=device)
         model.load_state_dict(ckpt["model"] if "model" in ckpt else ckpt, strict=False)
         # --- END HYDRA PATCH
 
@@ -712,8 +718,7 @@ class SAM2Trainer:
         seed = 42
         random.seed(seed)
         np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
+        device_utils.manual_seed_all(seed)
 
         torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.deterministic = True
@@ -777,7 +782,8 @@ class SAM2Trainer:
         self.lr_values = []
 
         # Note: loss_fn defined here but not passed to validation anymore
-        use_amp = True
+        # Mixed precision on CUDA (bf16/fp16) and CPU (bf16); MPS trains in full precision.
+        use_amp = device.type != "mps"
         if use_amp and device.type == "cuda":
             # MAKE PORTABLE ACROSS GPU AND CPU MACHINES
             try:
@@ -790,7 +796,7 @@ class SAM2Trainer:
             scaler = None
 
         best_val_loss = float("inf")
-        patience_counter = 0
+        improvement_tracker = ImprovementTracker(self.improvement_threshold_sigmas)
         divergence_threshold = 1e3
         last_completed_epoch = 0
         self._overlays_written = False
@@ -889,10 +895,10 @@ class SAM2Trainer:
                       f"IoU: {train_iou:.4f}")
 
                 # Clear GPU cache after training to prevent memory accumulation
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                    cur_mb = torch.cuda.memory_allocated() / 1024 ** 2
-                    res_mb = torch.cuda.memory_reserved() / 1024 ** 2
+                device_utils.empty_cache(device)
+                _mem = device_utils.memory_mb(device)
+                if _mem is not None:
+                    cur_mb, res_mb = _mem
                     trend = ""
                     if _prev_train_vram_mb is not None:
                         delta = cur_mb - _prev_train_vram_mb
@@ -920,7 +926,8 @@ class SAM2Trainer:
                         predictor=predictor,
                         progressBar=progressBar,
                         target_label=target_label,
-                        save_overlays=self._should_save_overlays(epoch + 1, epochs)
+                        save_overlays=self._should_save_overlays(epoch + 1, epochs),
+                        overlay_tag=f"ep{epoch + 1:03d}"  # 1-based, zero-padded to match checkpoint names
                     )
 
                     _dt_val = _time.perf_counter() - _t_val
@@ -951,9 +958,9 @@ class SAM2Trainer:
                           f"Recall: {_extra.get('recall', float('nan')):.4f} "
                           f"Pooled IoU: {miou:.4f} Pixel acc (incl. background): {val_accuracy:.4f}")
 
+                    # Checkpoints: every new lowest validation loss is saved.
                     if avg_val_loss < best_val_loss:
                         best_val_loss = avg_val_loss
-                        patience_counter = 0
                         self._run_best_epoch = epoch + 1
                         self._save_model_checkpoint(
                             predictor, learnrate, epoch + 1,
@@ -961,13 +968,17 @@ class SAM2Trainer:
                             val_loss=avg_val_loss, val_accuracy=val_accuracy, miou=miou,
                             target_category_name=target_label
                         )
-                    else:
-                        patience_counter += 1
-                        if self.early_stopping and patience_counter >= self.patience:
-                            print(f"Early stopping triggered at epoch {epoch + 1}.")
-                            self.early_stopped = True
-                            self.early_stop_epoch = epoch + 1
-                            break
+
+                    # Early stopping: patience resets only on a meaningful improvement
+                    # (larger than improvement_threshold_sigmas x noise), the same test
+                    # the training report uses.
+                    improvement_tracker.update(epoch + 1, avg_val_loss)
+                    if self.early_stopping and \
+                            improvement_tracker.epochs_without_improvement >= self.patience:
+                        print(f"Early stopping triggered at epoch {epoch + 1}.")
+                        self.early_stopped = True
+                        self.early_stop_epoch = epoch + 1
+                        break
 
                     # ============================================================================
                     # UPDATE LEARNING RATE SCHEDULER BASED ON VALIDATION LOSS
@@ -1272,6 +1283,12 @@ class SAM2Trainer:
         Selects the best available SDPA backend once, to be reused throughout training.
         Returns the selected backend or None if all fail.
         """
+        # SDPBackend selection is a CUDA feature; MPS and CPU use PyTorch's
+        # default attention kernel.
+        if device.type != "cuda":
+            print("\n=== SDPA Backend: default (non-CUDA device) ===")
+            return None
+
         # Enable all SDP backends — allows CuDNN fused attention on RTX 40-series
         torch.backends.cuda.enable_cudnn_sdp(True)
         torch.backends.cuda.enable_flash_sdp(True)
@@ -1965,8 +1982,8 @@ class SAM2Trainer:
 
             # Periodically clear GPU cache to prevent VRAM fragmentation
             _since_cache_clear += batch_valid
-            if _since_cache_clear >= 20 and torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            if _since_cache_clear >= 20:
+                device_utils.empty_cache(device)
                 _since_cache_clear = 0
 
             # Explicitly free batch tensors to prevent VRAM accumulation
@@ -2143,6 +2160,7 @@ class SAM2Trainer:
         val_correct, val_total = 0, 0
         n_items = 0
         tp_total, fp_total, fn_total = 0.0, 0.0, 0.0
+        n_overlays_written = 0
         self.last_val_extra = {}
 
         # Clear per-epoch pixel lists to prevent unbounded memory growth across epochs
@@ -2366,17 +2384,31 @@ class SAM2Trainer:
                                + heat.astype(np.float32) * alpha).astype(np.uint8)
                     overlay_dir = os.path.join(self.model_output_folder, "validation_overlays")
                     os.makedirs(overlay_dir, exist_ok=True)
-                    _tag = overlay_tag if overlay_tag else f"e{len(self.epoch_list)}"
+                    _tag = overlay_tag if overlay_tag else f"ep{len(self.epoch_list):03d}"
                     out_path = os.path.join(
                         overlay_dir,
                         f"{self.formatted_time}_{self.site_name}_val_overlay_{_tag}_{val_idx}.png"
                     )
-                    cv2.imwrite(out_path, blended)  # already BGR
-                    self._overlays_written = True
+                    try:
+                        wrote = bool(cv2.imwrite(out_path, blended))  # already BGR
+                        err = "" if wrote else "cv2.imwrite returned False"
+                    except Exception as e:
+                        wrote, err = False, str(e)
+                    if wrote:
+                        n_overlays_written += 1
+                        self._overlays_written = True
+                    else:
+                        print(f"[SAM2Trainer] Validation overlay NOT written ({err}): {out_path}")
 
                 del logit_tensor, logit_upsampled, prob_upsampled, pred_binary, val_true_mask_tensor, iou_actual
 
                 progressBar.setValue(progressBar.getValue() + 1)
+
+        if save_overlays:
+            print(f"[SAM2Trainer] Validation overlays written this pass: {n_overlays_written} "
+                  f"(mode={getattr(self, 'validation_overlay_mode', 'last')}, "
+                  f"max per pass={self.validation_overlay_samples}, "
+                  f"validation images={len(val_cache)})")
 
         # Compute averages
         avg_val_loss = val_loss / n_items if n_items > 0 else 0.0
@@ -2417,10 +2449,10 @@ class SAM2Trainer:
               f"iou={self.val_iou_best_thr:.3f}")
 
         # Clear GPU cache after validation to prevent memory accumulation
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            cur_mb = torch.cuda.memory_allocated() / 1024 ** 2
-            res_mb = torch.cuda.memory_reserved() / 1024 ** 2
+        device_utils.empty_cache(device)
+        _mem = device_utils.memory_mb(device)
+        if _mem is not None:
+            cur_mb, res_mb = _mem
             trend = ""
             if self._prev_val_vram_mb is not None:
                 delta = cur_mb - self._prev_val_vram_mb
@@ -2579,7 +2611,6 @@ class SAM2Trainer:
                 "dice_at_f1_optimal_threshold": getattr(self, "val_dice_best_thr", None),
                 "n_val_images": extra.get("n_images"),
             }
-            self._overlays_written = True
         except Exception as e:
             print(f"[SAM2Trainer] Best-checkpoint evaluation failed: {e}")
         finally:
@@ -2790,6 +2821,7 @@ class SAM2Trainer:
             text_file.write(f"Best Checkpoints Kept: {self.max_best_checkpoints}\n")
             text_file.write(f"Early Stopping: {self.early_stopping}\n")
             text_file.write(f"Patience: {self.patience}\n")
+            text_file.write(f"Improvement Threshold (noise std devs): {self.improvement_threshold_sigmas}\n")
             text_file.write("Early Stopping Monitor: validation loss (mode=min)\n")
             _sched_on = getattr(self, 'lr_scheduler_enabled', True)
             text_file.write(f"LR Scheduler: {'ReduceLROnPlateau' if _sched_on else 'None'}\n")
@@ -2808,8 +2840,7 @@ class SAM2Trainer:
             text_file.write(f"Max Positive Prompts: {self.site_config.get('max_positives', _DEFAULT_MAX_POSITIVES)}\n")
             text_file.write(f"Negative Balance: {self.site_config.get('negative_balance', _DEFAULT_NEGATIVE_BALANCE)}:1\n")
             text_file.write(f"Batch Size: {getattr(self, 'batch_size', 1)}\n")
-            _amp = "bf16" if (torch.cuda.is_available() and torch.cuda.is_bf16_supported(including_emulation=False)) else "fp16"
-            text_file.write(f"AMP dtype: {_amp}\n")
+            text_file.write(f"AMP dtype: {self._amp_label()}\n")
             if getattr(self, "val_best_thr", None) is not None:
                 text_file.write(f"Val F1-optimal threshold: {self.val_best_thr:.3f} "
                                 f"(Dice {self.val_dice_best_thr:.4f}, IoU {self.val_iou_best_thr:.4f})\n")
@@ -3078,6 +3109,7 @@ class SAM2Trainer:
                 "train": getattr(self, "time_train_seconds", None),
                 "validate": getattr(self, "time_val_seconds", None),
             },
+            platform=device_utils.platform_info(device, self._amp_label()),
         )
 
         # ── Model card ─────────────────────────────────────────────────────
@@ -3144,7 +3176,18 @@ class SAM2Trainer:
             "checkpoint_files": [os.path.basename(p) for _, p in self.best_checkpoints if p],
             "training_time_seconds": getattr(self, "training_time_seconds", None),
             "device": str(device),
+            "platform": device_utils.platform_info(device, self._amp_label()),
         }
+
+    # ------------------------------------------------------------------------
+    # ------------------------------------------------------------------------
+    def _amp_label(self):
+        """Mixed precision used in training (matches the autocast setup)."""
+        if device.type == "mps":
+            return "off (fp32)"
+        if device.type == "cpu":
+            return "bf16"
+        return "bf16" if torch.cuda.is_bf16_supported(including_emulation=False) else "fp16"
 
     # ------------------------------------------------------------------------
     # ------------------------------------------------------------------------

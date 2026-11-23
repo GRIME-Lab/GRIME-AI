@@ -336,9 +336,9 @@ class GuidedTrainingParamsPanel(QWidget):
         lay = QHBoxLayout(w)
         lay.setContentsMargins(0, 0, 0, 4)
         try:
-            import torch
-            ok = torch.cuda.is_available()
-            name = torch.cuda.get_device_name(0) if ok else None
+            from appcore.ml_core import device_utils
+            ok = device_utils.gpu_available()
+            name = device_utils.gpu_name() if ok else None
         except Exception:
             ok, name = False, None
         if ok:

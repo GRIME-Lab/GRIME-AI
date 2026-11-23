@@ -10,6 +10,8 @@ folders you would otherwise have to reset by hand every time you switch sites:
     composites      - where composite slices are saved
     videos          - where videos are saved
     gifs            - where GIFs are saved
+    models          - root folder for ML training output (model-specific
+                      sub-folders such as SAM2/SAM3 are created beneath it)
     usgs            - where USGS files are downloaded
     neon            - where NEON files are downloaded
 
@@ -39,7 +41,8 @@ from PyQt5.QtWidgets import (
 from appcore.app_identity import APP_DISPLAY_NAME
 
 # Editable path fields, in display order, mapped to their default sub-folder name.
-# Input-folder fields (set manually; NOT auto-derived/rebased from root).
+# Input-folder fields. Image input follows the Test images folder; Data input
+# auto-derives/rebases as <root>/data.
 INPUT_FIELDS = [
     ("image_input", "Image input"),
     ("data_input",  "Data input"),
@@ -50,6 +53,7 @@ OUTPUT_FIELDS = [
     ("videos",       "Videos"),
     ("gifs",         "GIFs"),
     ("predictions",  "Segmentation results"),
+    ("models",       "Models"),
 ]
 # Download-manager destination folders (USGS / NEON / PhenoCam).
 DOWNLOAD_FIELDS = [
@@ -57,21 +61,27 @@ DOWNLOAD_FIELDS = [
     ("neon",     "NEON"),
     ("phenocam", "PhenoCam"),
 ]
-# Machine-learning fields (set manually; NOT auto-derived/rebased from root).
+# Machine-learning fields (training/test images auto-derive/rebase as
+# <root>/train and <root>/test).
 ML_FIELDS = [
     ("ml_images", "Training images"),
+    ("ml_test_images", "Test images"),
 ]
 # All editable path fields, for load / save round-tripping.
 PATH_FIELDS = INPUT_FIELDS + OUTPUT_FIELDS + DOWNLOAD_FIELDS + ML_FIELDS
-# Auto-fill / rebase apply to OUTPUT + DOWNLOAD folders.
+# Auto-fill / rebase apply to OUTPUT + DOWNLOAD folders and training/test images.
 SUBFOLDER_DEFAULTS = {
     "composites":   "composites",
     "videos":       "Videos",
     "gifs":         "GIFs",
     "predictions":  "predictions",
+    "models":       "models",
     "usgs":         "usgs",
     "neon":         "neon",
     "phenocam":     "phenocam",
+    "ml_images":    "train",
+    "ml_test_images": "test",
+    "data_input":   "data",
 }
 
 # Muted, color-blind-safe (Okabe-Ito family) tint per folder group, as
@@ -156,10 +166,12 @@ class Recipe:
     videos: str = ""
     gifs: str = ""
     predictions: str = ""
+    models: str = ""
     usgs: str = ""
     neon: str = ""
     phenocam: str = ""
     ml_images: str = ""
+    ml_test_images: str = ""
 
     def derive_from_root(self, overwrite: bool = False) -> None:
         """Fill sub-folder paths as <root>/<default>. If overwrite is False,
@@ -169,6 +181,9 @@ class Recipe:
         for attr, sub in SUBFOLDER_DEFAULTS.items():
             if overwrite or not getattr(self, attr):
                 setattr(self, attr, _os_path(os.path.join(self.root, sub)))
+        # Image input is the Test images folder.
+        if self.ml_test_images and (overwrite or not self.image_input):
+            self.image_input = self.ml_test_images
 
     @staticmethod
     def _parts(path: str) -> list:
@@ -201,7 +216,9 @@ class Recipe:
         """Re-root every sub-folder that currently lives under `old_root`.
         Returns True if anything changed."""
         changed = False
-        for attr in ("composites", "videos", "gifs", "predictions", "usgs", "neon", "phenocam"):
+        for attr in ("composites", "videos", "gifs", "predictions", "models",
+                     "usgs", "neon", "phenocam", "ml_images",
+                     "ml_test_images", "image_input", "data_input"):
             new_val = Recipe.rebase_path(getattr(self, attr), old_root, new_root)
             if new_val != getattr(self, attr):
                 setattr(self, attr, new_val)
@@ -215,9 +232,9 @@ class Recipe:
     def from_dict(cls, d: dict) -> "Recipe":
         fields = ("name", "created", "modified", "root",
                   "image_input", "data_input",
-                  "composites", "videos", "gifs", "predictions",
+                  "composites", "videos", "gifs", "predictions", "models",
                   "usgs", "neon", "phenocam",
-                  "ml_images")
+                  "ml_images", "ml_test_images")
         out = {k: d.get(k, "") for k in fields}
         # Back-compat: recipes saved before Videos/GIFs were split into two
         # fields carry a single "videos_gifs" path — seed both from it.
@@ -293,6 +310,23 @@ class RecipeStore:
         while f"{base} ({i})" in existing:
             i += 1
         return f"{base} ({i})"
+
+
+def get_models_root() -> str:
+    """Root folder for ML training output. Uses the active recipe's Models
+    folder when a recipe is active and that folder is set; otherwise the
+    normal GRIME AI models folder. Trainers create their model-specific
+    sub-folders (sam2, sam3, segformer, yolo) beneath this root."""
+    try:
+        active = RecipeStore().get_active()
+        if active is not None and active.models.strip():
+            root = _os_path(active.models.strip())
+            print(f"[Recipe] Models root from recipe '{active.name}': {root}")
+            return root
+    except Exception as e:
+        print(f"[Recipe] Models root lookup skipped: {e}")
+    from appcore.Save_Utils import Save_Utils
+    return Save_Utils().get_models_folder()
 
 
 # --------------------------------------------------------------------------- #
@@ -416,7 +450,7 @@ class RecipeManagerDialog(QDialog):
         self.root_edit.textChanged.connect(self._on_root_changed)
         self.root_edit.editingFinished.connect(self._commit_root_change)
 
-        self.autofill = QCheckBox("Auto-fill output sub-folders from root")
+        self.autofill = QCheckBox("Auto-fill sub-folders from root")
         self.autofill.setChecked(True)
 
         self.created_label = QLabel("\u2014")
@@ -462,7 +496,7 @@ class RecipeManagerDialog(QDialog):
         input_box = _build_group("Input folders", INPUT_FIELDS, color=_tint("input"))
 
         btn_reset = QPushButton("Reset")
-        btn_reset.setToolTip("Reset output and download sub-folders to root defaults")
+        btn_reset.setToolTip("Reset all sub-folders to root defaults (Image input is set to the Test images folder)")
         btn_reset.setFixedWidth(self._browse_w)
         btn_reset.setStyleSheet(
             "QPushButton { background-color: transparent; color: #c0392b;"
@@ -738,7 +772,17 @@ class RecipeManagerDialog(QDialog):
     def _on_field_changed(self, attr: str) -> None:
         if self._loading or not self._current:
             return
-        setattr(self._current, attr, self.path_edits[attr].text().strip())
+        old_val = getattr(self._current, attr)
+        new_val = self.path_edits[attr].text().strip()
+        setattr(self._current, attr, new_val)
+        # Image input follows Test images while it is empty or still matches
+        # the previous Test images path (i.e. the user has not set it apart).
+        if (attr == "ml_test_images" and self.autofill.isChecked()
+                and self._current.image_input in ("", old_val)):
+            self._current.image_input = new_val
+            self._loading = True
+            self.path_edits["image_input"].setText(new_val)
+            self._loading = False
         self._mark_dirty()
         self._touch_current()
 
@@ -896,8 +940,9 @@ class RecipeManagerDialog(QDialog):
         d = self._current
         has_content = bool(d and (d.name.strip() or d.root
                                   or d.image_input or d.data_input or d.composites
-                                  or d.videos or d.gifs or d.usgs or d.neon
-                                  or d.ml_images))
+                                  or d.videos or d.gifs or d.models
+                                  or d.usgs or d.neon
+                                  or d.ml_images or d.ml_test_images))
         if not has_content:
             return True
         return QMessageBox.question(

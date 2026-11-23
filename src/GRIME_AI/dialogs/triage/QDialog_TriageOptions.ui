@@ -20,13 +20,13 @@
          <widget class="QCheckBox" name="checkBoxTriageImagesReport">
           <property name="text"><string>Generate report</string></property>
           <property name="checked"><bool>true</bool></property>
-          <property name="toolTip"><string>Saves a CSV file in the image folder with focus, brightness, and quality scores for every image processed.</string></property>
+          <property name="toolTip"><string>Saves a report in the image folder: an Excel workbook and a CSV file with the focus, brightness, and quality scores for every image processed, and a JSON file with the triage settings used.</string></property>
          </widget>
         </item>
         <item>
          <widget class="QCheckBox" name="checkBoxTriageImagesMove">
           <property name="text"><string>Move bad images</string></property>
-          <property name="toolTip"><string>Moves images that fail quality checks into a MovedImages subfolder so they are excluded from downstream processing.</string></property>
+          <property name="toolTip"><string>Moves poor-quality images into a MovedImages subfolder so they are excluded from downstream processing.</string></property>
          </widget>
         </item>
        </layout>
@@ -72,12 +72,12 @@
           <item>
            <widget class="QLabel" name="labelRotationThreshold">
             <property name="text"><string>Rotation threshold (°)</string></property>
-            <property name="toolTip"><string>Images rotated more than this many degrees from the reference are flagged for realignment.</string></property>
+            <property name="toolTip"><string>Images rotated more than this many degrees from the reference get an aligned copy saved in the warp subfolder.</string></property>
            </widget>
           </item>
           <item>
            <widget class="QDoubleSpinBox" name="doubleSpinBox_TriageOptions_RotationThreshold">
-            <property name="toolTip"><string>Images rotated more than this many degrees from the reference are flagged for realignment.</string></property>
+            <property name="toolTip"><string>Images rotated more than this many degrees from the reference get an aligned copy saved in the warp subfolder.</string></property>
             <property name="maximum"><double>180.000000000000000</double></property>
             <property name="singleStep"><double>0.010000000000000</double></property>
             <property name="value"><double>0.250000000000000</double></property>
@@ -108,9 +108,9 @@
       <!-- Edge-based -->
       <item>
        <widget class="QCheckBox" name="checkBox_UseLaplacian">
-        <property name="text"><string>Blur sensitivity (edge-based)</string></property>
+        <property name="text"><string>Blur detection (edge-based)</string></property>
         <property name="checked"><bool>true</bool></property>
-        <property name="toolTip"><string>Enable the edge-sharpness blur detector. Detects focus blur and camera vibration blur. Recommended for fixed-mounted cameras.</string></property>
+        <property name="toolTip"><string>Turns on the edge-based blur detector. Detects focus blur and camera vibration blur. Recommended for fixed-mounted cameras.</string></property>
        </widget>
       </item>
       <item>
@@ -144,19 +144,19 @@
           <property name="singleStep"><number>1</number></property>
           <property name="pageStep"><number>1</number></property>
           <property name="minimum"><number>0</number></property>
-          <property name="maximum"><number>500</number></property>
+          <property name="maximum"><number>5000</number></property>
           <property name="value"><number>150</number></property>
           <property name="orientation"><enum>Qt::Horizontal</enum></property>
           <property name="tickPosition"><enum>QSlider::TicksBelow</enum></property>
-          <property name="tickInterval"><number>1</number></property>
-          <property name="toolTip"><string>Adjusts how aggressively the edge-based detector flags blurry images. Use Calibrate to find the best setting for your camera.</string></property>
+          <property name="tickInterval"><number>100</number></property>
+          <property name="toolTip"><string>Images with edge sharpness below this value are blurry (poor quality). More sensitive = more images are blurry. Use Calibrate to find the best setting for your camera.</string></property>
          </widget>
         </item>
         <item row="2" column="0" colspan="3">
          <widget class="QDoubleSpinBox" name="doubleSpinBoxLaplacianThreshold">
           <property name="visible"><bool>false</bool></property>
           <property name="minimum"><double>0.000000000000000</double></property>
-          <property name="maximum"><double>1000.000000000000000</double></property>
+          <property name="maximum"><double>5000.000000000000000</double></property>
           <property name="value"><double>150.000000000000000</double></property>
          </widget>
         </item>
@@ -168,9 +168,10 @@
        <widget class="QCheckBox" name="checkBox_UseFftBlur">
         <property name="text"><string>Blur detection (frequency-based)</string></property>
         <property name="checked"><bool>false</bool></property>
-        <property name="toolTip"><string>Enable the frequency-based blur detector. It needs no setting: each folder's images are compared with each other, and images far less sharp than the folder's typical image are flagged. Folders with fewer than 30 images use edge-based detection only.</string></property>
+        <property name="toolTip"><string>Turns on the frequency-based blur detector. It has no setting: each image&apos;s fine detail is compared with the median of all images in the folder, and images far below the median are blurry (poor quality). A calibration made with the same focus region keeps this comparison within limits set from your labeled images. Folders with fewer than 30 images use the edge-based detector only.</string></property>
        </widget>
       </item>
+
 
      </layout>
     </widget>
@@ -182,113 +183,117 @@
      <property name="title"><string>Brightness</string></property>
      <layout class="QVBoxLayout" name="vLayoutBrightness">
 
-      <!-- Too dark -->
+      <!-- Too bright / Too dark: two stacked sliders on one 0-255 scale.
+           Too bright on top (pointer down), Too dark below (pointer up).
+           The colored part of each bar is the poor-quality range. -->
       <item>
-       <widget class="QLabel" name="labelTooDark">
-        <property name="text"><string>Too dark</string></property>
-        <property name="toolTip"><string>Controls how dark an image must be before it is flagged. More sensitive = flags more dark images.</string></property>
-       </widget>
-      </item>
-      <item>
-       <layout class="QGridLayout" name="gridDarkSlider">
-        <item row="0" column="0">
-         <widget class="QLabel" name="labelDarkLeft">
-          <property name="text"><string>Less sensitive</string></property>
+       <layout class="QGridLayout" name="gridBrightness">
+        <property name="verticalSpacing"><number>4</number></property>
+        <item row="0" column="0" colspan="3">
+         <widget class="QLabel" name="labelTooBright">
+          <property name="text"><string>&lt;b&gt;Too bright&lt;/b&gt;</string></property>
+          <property name="textFormat"><enum>Qt::RichText</enum></property>
+          <property name="toolTip"><string>Images brighter than this value are poor quality. Drag left (more sensitive) to mark more bright images as poor quality. Set it high to keep snow scenes; overexposed images are caught by Check exposure. Use Calibrate to find the best setting.</string></property>
          </widget>
         </item>
-        <item row="0" column="1">
-         <widget class="QLabel" name="labelDarkMiddle">
-          <property name="text"><string>Balanced</string></property>
-          <property name="alignment"><set>Qt::AlignHCenter|Qt::AlignVCenter</set></property>
-         </widget>
-        </item>
-        <item row="0" column="2">
-         <widget class="QLabel" name="labelDarkRight">
-          <property name="text"><string>More sensitive</string></property>
-          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
-         </widget>
-        </item>
-        <item row="1" column="3">
-         <widget class="QLineEdit" name="lineEdit_bmin_value">
-          <property name="text"><string>—</string></property>
-          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
-          <property name="maximumWidth"><number>55</number></property>
-         </widget>
-        </item>
-        <item row="1" column="0" colspan="3">
-         <widget class="QSlider" name="sliderBrightnessMin">
-          <property name="singleStep"><number>1</number></property>
-          <property name="pageStep"><number>1</number></property>
-          <property name="minimum"><number>0</number></property>
-          <property name="maximum"><number>255</number></property>
-          <property name="value"><number>40</number></property>
-          <property name="orientation"><enum>Qt::Horizontal</enum></property>
-          <property name="tickPosition"><enum>QSlider::TicksBelow</enum></property>
-          <property name="tickInterval"><number>1</number></property>
-          <property name="toolTip"><string>Controls how dark an image must be before it is flagged. More sensitive = flags more dark images. Use Calibrate to find the best setting.</string></property>
-         </widget>
-        </item>
-        <item row="2" column="0" colspan="3">
-         <widget class="QDoubleSpinBox" name="doubleSpinBoxBrightnessMin">
-          <property name="visible"><bool>false</bool></property>
-          <property name="maximum"><double>255.000000000000000</double></property>
-          <property name="value"><double>40.000000000000000</double></property>
-         </widget>
-        </item>
-       </layout>
-      </item>
-
-      <!-- Too bright -->
-      <item>
-       <widget class="QLabel" name="labelTooBright">
-        <property name="text"><string>Too bright</string></property>
-        <property name="toolTip"><string>Controls how bright an image must be before it is flagged. More sensitive = flags more bright images.</string></property>
-       </widget>
-      </item>
-      <item>
-       <layout class="QGridLayout" name="gridBrightSlider">
-        <item row="0" column="0">
+        <item row="1" column="0">
          <widget class="QLabel" name="labelBrightLeft">
-          <property name="text"><string>Less sensitive</string></property>
+          <property name="text"><string>More sensitive</string></property>
          </widget>
         </item>
-        <item row="0" column="1">
+        <item row="1" column="1">
          <widget class="QLabel" name="labelBrightMiddle">
           <property name="text"><string>Balanced</string></property>
           <property name="alignment"><set>Qt::AlignHCenter|Qt::AlignVCenter</set></property>
          </widget>
         </item>
-        <item row="0" column="2">
+        <item row="1" column="2">
          <widget class="QLabel" name="labelBrightRight">
-          <property name="text"><string>More sensitive</string></property>
+          <property name="text"><string>Less sensitive</string></property>
           <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
          </widget>
         </item>
-        <item row="1" column="3">
-         <widget class="QLineEdit" name="lineEdit_bmax_value">
-          <property name="text"><string>—</string></property>
-          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
-          <property name="maximumWidth"><number>55</number></property>
-         </widget>
-        </item>
-        <item row="1" column="0" colspan="3">
-         <widget class="QSlider" name="sliderBrightnessMax">
+        <item row="2" column="0" colspan="3">
+         <widget class="PointerSlider" name="sliderBrightnessMax">
+          <property name="limitKind" stdset="0"><string>too_bright</string></property>
           <property name="singleStep"><number>1</number></property>
           <property name="pageStep"><number>1</number></property>
           <property name="minimum"><number>0</number></property>
           <property name="maximum"><number>255</number></property>
           <property name="value"><number>215</number></property>
           <property name="orientation"><enum>Qt::Horizontal</enum></property>
-          <property name="tickPosition"><enum>QSlider::TicksBelow</enum></property>
-          <property name="tickInterval"><number>1</number></property>
-          <property name="toolTip"><string>Controls how bright an image must be before it is flagged. More sensitive = flags more bright images. Use Calibrate to find the best setting.</string></property>
+          <property name="toolTip"><string>Images brighter than this value are poor quality. Drag left (more sensitive) to mark more bright images as poor quality. Set it high to keep snow scenes; overexposed images are caught by Check exposure. Use Calibrate to find the best setting.</string></property>
          </widget>
         </item>
-        <item row="2" column="0" colspan="3">
+        <item row="2" column="3">
+         <widget class="QLineEdit" name="lineEdit_bmax_value">
+          <property name="text"><string>—</string></property>
+          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
+          <property name="maximumWidth"><number>55</number></property>
+          <property name="toolTip"><string>Images brighter than this value are poor quality. Drag left (more sensitive) to mark more bright images as poor quality. Set it high to keep snow scenes; overexposed images are caught by Check exposure. Use Calibrate to find the best setting.</string></property>
+         </widget>
+        </item>
+        <item row="3" column="0" colspan="3">
+         <widget class="PointerSlider" name="sliderBrightnessMin">
+          <property name="limitKind" stdset="0"><string>too_dark</string></property>
+          <property name="singleStep"><number>1</number></property>
+          <property name="pageStep"><number>1</number></property>
+          <property name="minimum"><number>0</number></property>
+          <property name="maximum"><number>255</number></property>
+          <property name="value"><number>40</number></property>
+          <property name="orientation"><enum>Qt::Horizontal</enum></property>
+          <property name="toolTip"><string>Images darker than this value are poor quality. Drag right (more sensitive) to mark more dark images as poor quality. Use Calibrate to find the best setting.</string></property>
+         </widget>
+        </item>
+        <item row="3" column="3">
+         <widget class="QLineEdit" name="lineEdit_bmin_value">
+          <property name="text"><string>—</string></property>
+          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
+          <property name="maximumWidth"><number>55</number></property>
+          <property name="toolTip"><string>Images darker than this value are poor quality. Drag right (more sensitive) to mark more dark images as poor quality. Use Calibrate to find the best setting.</string></property>
+         </widget>
+        </item>
+        <item row="4" column="0">
+         <widget class="QLabel" name="labelDarkLeft">
+          <property name="text"><string>Less sensitive</string></property>
+         </widget>
+        </item>
+        <item row="4" column="1">
+         <widget class="QLabel" name="labelDarkMiddle">
+          <property name="text"><string>Balanced</string></property>
+          <property name="alignment"><set>Qt::AlignHCenter|Qt::AlignVCenter</set></property>
+         </widget>
+        </item>
+        <item row="4" column="2">
+         <widget class="QLabel" name="labelDarkRight">
+          <property name="text"><string>More sensitive</string></property>
+          <property name="alignment"><set>Qt::AlignRight|Qt::AlignVCenter</set></property>
+         </widget>
+        </item>
+        <item row="5" column="0" colspan="3">
+         <widget class="QLabel" name="labelTooDark">
+          <property name="text"><string>&lt;b&gt;Too dark&lt;/b&gt;</string></property>
+          <property name="textFormat"><enum>Qt::RichText</enum></property>
+          <property name="toolTip"><string>Images darker than this value are poor quality. Drag right (more sensitive) to mark more dark images as poor quality. Use Calibrate to find the best setting.</string></property>
+         </widget>
+        </item>
+        <item row="6" column="0" colspan="4">
+         <widget class="QLabel" name="labelBrightnessKey">
+          <property name="text"><string>Colored part of a bar = poor quality. Images between the two values are kept.</string></property>
+         </widget>
+        </item>
+        <item row="7" column="0">
          <widget class="QDoubleSpinBox" name="doubleSpinBoxBrightnessMax">
           <property name="visible"><bool>false</bool></property>
           <property name="maximum"><double>255.000000000000000</double></property>
           <property name="value"><double>215.000000000000000</double></property>
+         </widget>
+        </item>
+        <item row="7" column="1">
+         <widget class="QDoubleSpinBox" name="doubleSpinBoxBrightnessMin">
+          <property name="visible"><bool>false</bool></property>
+          <property name="maximum"><double>255.000000000000000</double></property>
+          <property name="value"><double>40.000000000000000</double></property>
          </widget>
         </item>
        </layout>
@@ -299,33 +304,78 @@
    </item>
 
 
+   <!-- Exposure -->
+   <item>
+    <widget class="QGroupBox" name="groupBox_Exposure">
+     <property name="title"><string>Exposure</string></property>
+     <layout class="QVBoxLayout" name="vLayoutExposure">
+      <item>
+       <layout class="QHBoxLayout" name="hLayoutOverexposure">
+        <item>
+         <widget class="QCheckBox" name="checkBox_UseOverexposure">
+          <property name="text"><string>Check exposure</string></property>
+          <property name="checked"><bool>false</bool></property>
+          <property name="toolTip"><string>Marks images as poor quality when a large part of the image is overexposed (near pure white). Snow keeps its texture and is not marked, so the Too bright limit can be set high to keep snow scenes. Dark images are handled by Too dark.</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="labelOverexposureLimit">
+          <property name="text"><string>Overexposed area limit</string></property>
+          <property name="toolTip"><string>Images where more than this percentage of the image is overexposed (near pure white) are poor quality.</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="doubleSpinBox_OverexposureLimit">
+          <property name="enabled"><bool>false</bool></property>
+          <property name="suffix"><string>%</string></property>
+          <property name="minimum"><double>1.000000000000000</double></property>
+          <property name="maximum"><double>100.000000000000000</double></property>
+          <property name="singleStep"><double>1.000000000000000</double></property>
+          <property name="decimals"><number>0</number></property>
+          <property name="value"><double>40.000000000000000</double></property>
+          <property name="toolTip"><string>Images where more than this percentage of the image is overexposed (near pure white) are poor quality.</string></property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="spacerOverexposure">
+          <property name="orientation"><enum>Qt::Horizontal</enum></property>
+          <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
    <!-- Color imbalance -->
    <item>
     <widget class="QGroupBox" name="groupBox_ColorImbalance">
-     <property name="title"><string>Color imbalance</string></property>
+     <property name="title"><string>Color balance</string></property>
      <layout class="QHBoxLayout" name="hLayoutColorImbalance">
       <item>
        <widget class="QCheckBox" name="checkBox_UseColorImbalance">
-        <property name="text"><string>Flag color imbalance</string></property>
+        <property name="text"><string>Check color balance</string></property>
         <property name="checked"><bool>false</bool></property>
-        <property name="toolTip"><string>Flag images where a single color channel dominates the scene, indicating sunrise/sunset lighting or a camera white balance problem.</string></property>
+        <property name="toolTip"><string>Marks images as poor quality when one color dominates the image, such as sunrise or sunset lighting or a camera white balance problem.</string></property>
        </widget>
       </item>
       <item>
        <widget class="QLabel" name="labelColorImbalanceThreshold">
-        <property name="text"><string>Max channel fraction</string></property>
-        <property name="toolTip"><string>Flag if the dominant channel exceeds this fraction of total RGB. 0.5 = any channel contributing more than 50% of total brightness is flagged.</string></property>
+        <property name="text"><string>Dominant color limit</string></property>
+        <property name="toolTip"><string>Images where one color makes up more than this percentage of the image&apos;s total color are poor quality, such as sunrise or sunset lighting or a camera white balance problem.</string></property>
        </widget>
       </item>
       <item>
        <widget class="QDoubleSpinBox" name="doubleSpinBox_ColorImbalanceThreshold">
         <property name="enabled"><bool>false</bool></property>
-        <property name="minimum"><double>0.334000000000000</double></property>
-        <property name="maximum"><double>1.000000000000000</double></property>
-        <property name="singleStep"><double>0.010000000000000</double></property>
-        <property name="decimals"><number>3</number></property>
-        <property name="value"><double>0.500000000000000</double></property>
-        <property name="toolTip"><string>Flag if the dominant channel exceeds this fraction of total RGB. 0.5 = any channel contributing more than 50% of total brightness is flagged.</string></property>
+        <property name="suffix"><string>%</string></property>
+        <property name="minimum"><double>34.000000000000000</double></property>
+        <property name="maximum"><double>100.000000000000000</double></property>
+        <property name="singleStep"><double>1.000000000000000</double></property>
+        <property name="decimals"><number>0</number></property>
+        <property name="value"><double>50.000000000000000</double></property>
+        <property name="toolTip"><string>Images where one color makes up more than this percentage of the image&apos;s total color are poor quality, such as sunrise or sunset lighting or a camera white balance problem.</string></property>
        </widget>
       </item>
       <item>
@@ -344,7 +394,7 @@
      <item>
       <widget class="QPushButton" name="pushButton_Calibrate">
        <property name="text"><string>Calibrate...</string></property>
-       <property name="toolTip"><string>Open the calibration tool to automatically determine optimal blur and brightness thresholds from your own labelled images.</string></property>
+       <property name="toolTip"><string>Opens the calibration tool to set the blur and brightness values from your own labeled images.</string></property>
       </widget>
      </item>
      <item>
@@ -352,7 +402,7 @@
        <property name="text"><string>Use focus region</string></property>
        <property name="enabled"><bool>false</bool></property>
        <property name="checked"><bool>false</bool></property>
-       <property name="toolTip"><string>Restrict blur scoring to the focus region defined in Calibrate. Enabled only when a focus region has been saved.</string></property>
+       <property name="toolTip"><string>Restricts blur scoring to the focus region defined in Calibrate. Enabled only when a focus region has been saved.</string></property>
       </widget>
      </item>
      <item>
@@ -373,6 +423,13 @@
 
   </layout>
  </widget>
+ <customwidgets>
+  <customwidget>
+   <class>PointerSlider</class>
+   <extends>QSlider</extends>
+   <header>appcore.dialogs.triage.PointerSlider</header>
+  </customwidget>
+ </customwidgets>
  <resources/>
  <connections>
   <connection>

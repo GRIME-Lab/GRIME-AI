@@ -35,6 +35,9 @@ SETTINGS_KEY = "roi_feature_extraction"
 SETTINGS_FILE = "site_config.json"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 STATUS_OK = "OK"
+# Subfolder of a predictions folder that holds the ROI feature files, beside the
+# panels and probability map subfolders.
+ROI_FEATURES_FOLDER_NAME = "roi_features"
 
 DEFAULT_SETTINGS = {
     "clustering": {
@@ -407,7 +410,7 @@ def write_xlsx(xlsx_path, header, rows):
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "ROI Metrics"
+    ws.title = "ROI Features"
     for c, title in enumerate(header, start=1):
         ws.cell(row=1, column=c, value=title)
 
@@ -432,8 +435,8 @@ def export_pairs(pairs, output_folder, settings=None, prefix=None,
                  progress_callback=None, cancel_callback=None):
     """
     Compute features for (image_path, mask_path) pairs and write
-    <prefix>_roi_metrics.csv (row by row, so a stopped run keeps its rows) and,
-    if enabled, <prefix>_roi_metrics.xlsx in output_folder.
+    <prefix>_roi_features.csv (row by row, so a stopped run keeps its rows) and,
+    if enabled, <prefix>_roi_features.xlsx in output_folder.
 
     progress_callback(done, total) and cancel_callback() -> bool are optional.
     Returns dict: csv_path, xlsx_path (None if not written), rows_ok, rows_failed, cancelled.
@@ -443,7 +446,7 @@ def export_pairs(pairs, output_folder, settings=None, prefix=None,
     header = extractor.header()
     prefix = prefix or run_prefix()
     os.makedirs(output_folder, exist_ok=True)
-    csv_path = os.path.join(output_folder, f"{prefix}_roi_metrics.csv")
+    csv_path = os.path.join(output_folder, f"{prefix}_roi_features.csv")
 
     rows, n_ok, n_failed, cancelled = [], 0, 0, False
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
@@ -466,7 +469,7 @@ def export_pairs(pairs, output_folder, settings=None, prefix=None,
 
     xlsx_path = None
     if settings["output"]["excel"] and rows:
-        xlsx_path = os.path.join(output_folder, f"{prefix}_roi_metrics.xlsx")
+        xlsx_path = os.path.join(output_folder, f"{prefix}_roi_features.xlsx")
         try:
             write_xlsx(xlsx_path, header, rows)
         except Exception as e:
@@ -482,7 +485,7 @@ def export_datasets(datasets, output_folder, settings=None, prefix=None,
     """
     Features for several datasets in one file. datasets is a list of
     (pairs, sensor_file); each dataset is correlated against its own sensor file,
-    and all of them go into one <prefix>_roi_metrics.csv and .xlsx in output_folder.
+    and all of them go into one <prefix>_roi_features.csv and .xlsx in output_folder.
 
     Rows are written to the CSV as they are computed; the sensor columns are added
     when every dataset is done, so a stopped run still leaves the features.
@@ -495,7 +498,7 @@ def export_datasets(datasets, output_folder, settings=None, prefix=None,
     header = extractor.header()
     prefix = prefix or run_prefix()
     os.makedirs(output_folder, exist_ok=True)
-    csv_path = os.path.join(output_folder, f"{prefix}_roi_metrics.csv")
+    csv_path = os.path.join(output_folder, f"{prefix}_roi_features.csv")
 
     total = sum(len(pairs) for pairs, _ in datasets)
     done, n_ok, n_failed, cancelled = 0, 0, 0, False
@@ -536,7 +539,7 @@ def export_datasets(datasets, output_folder, settings=None, prefix=None,
 
     xlsx_path = None
     if settings["output"]["excel"]:
-        xlsx_path = os.path.join(output_folder, f"{prefix}_roi_metrics.xlsx")
+        xlsx_path = os.path.join(output_folder, f"{prefix}_roi_features.xlsx")
         try:
             write_xlsx(xlsx_path, header, rows)
         except Exception as e:
