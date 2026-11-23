@@ -175,6 +175,22 @@ class USGSService:
 
     # --------------------------------------------------------------------------------
     # --------------------------------------------------------------------------------
+    def api_headers(self) -> dict:
+        """Public access to the X-Api-Key header for callers outside this class."""
+        return self._api_headers()
+
+    # --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
+    def list_files_url(self) -> str:
+        """listFiles URL for the endpoint stored in settings (APIKeyManager).
+        New NIMS API: <endpoint>/listFiles. Legacy AWS Lambda: <endpoint>/prod/listFiles.
+        """
+        if "api.waterdata.usgs.gov" in self._endpoint:
+            return f"{self._endpoint}/listFiles"
+        return f"{self._endpoint}/prod/listFiles"
+
+    # --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
     def initialize(self) -> None:
         """Fetch the camera list.  Tries the new NIMS endpoint first,
         falls back to the legacy AWS Lambda endpoint if it fails.
@@ -723,12 +739,7 @@ class USGSService:
         """
         import time as time_module
 
-        if "api.waterdata.usgs.gov" in self._endpoint:
-            # New NIMS API - ISO 8601 timestamps, no /prod/ prefix
-            url = f"{self._endpoint}/listFiles?camId={site_name}{after}{before}"
-        else:
-            # Legacy AWS Lambda endpoint
-            url = f"{self._endpoint}/prod/listFiles?camId={site_name}{after}{before}"
+        url = f"{self.list_files_url()}?camId={site_name}{after}{before}"
 
         # ============================================================================
         # RETRY LOGIC FOR NETWORK ISSUES
