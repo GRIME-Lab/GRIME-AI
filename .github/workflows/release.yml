@@ -121,3 +121,44 @@ jobs:
             GRIME_PACKAGE=${{ steps.version.outputs.package_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [release, release-container]
+    permissions:
+      contents: write
+    steps:
+      - name: Create release page
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VER="${TAG#v}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::A release for $TAG already exists (published or draft). Not overwriting it."
+            exit 1
+          fi
+
+          cat > notes.md <<NOTES
+          ## Install
+
+          Conda:
+          \`\`\`
+          conda install grimelab::grime-ai=$VER
+          \`\`\`
+
+          Docker:
+          \`\`\`
+          docker pull $IMAGE:$VER
+          \`\`\`
+          NOTES
+
+          gh release create "$TAG" \
+            --verify-tag \
+            --title "$TAG (Official)" \
+            --notes-file notes.md \
+            --generate-notes \
+            --latest
