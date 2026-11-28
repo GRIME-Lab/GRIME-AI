@@ -1,33 +1,205 @@
-FROM almalinux:8.10
-LABEL org.opencontainers.image.source https://github.com/GRIME-Lab/GRIME-AI
+# Author: John Edward Stranzl Jr., PhD
+# Affiliation(s): University of Nebraska-Lincoln, Blade Vision Systems, LLC
+# Contact: jstranzl2@huskers.unl.edu, johnstranzl@gmail.com
+# Created: Nov 1, 2026
+# License: Apache License, Version 2.0, http://www.apache.org/licenses/LICENSE-2.0
 
-RUN dnf install -y epel-release
-RUN dnf install -y -q mesa-libGLU-devel mesa-libGL-devel tcsh bzip2 libglvnd-glx xcalc
-RUN dnf groupinstall -y -q base-x
+# push_zenodo.yml
 
-# micromamba version to install ("latest", or a version number such as 2.5.0)
-ARG MICROMAMBA_VERSION="latest"
-RUN curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/${MICROMAMBA_VERSION} | tar -C /usr/local -xvj bin/micromamba && \
-    echo "micromamba version: $(micromamba --version)"
+name: Push to Zenodo
 
-ARG GRIME_PACKAGE='grime-ai'
-ARG PYTHON_VERSION="3.12"
+# Archives a GRIME AI release on Zenodo and mints its version DOI.
+#
+# Runs automatically after the Official Release workflow succeeds (publishes to
+# real Zenodo), or manually from the Actions tab with a tag and a target
+# (sandbox for testing, zenodo for real).
+#
+# Record details (authors, funding, license, ...) come from zenodo_metadata.json
+# in the repository root. Each run adds a new version to the existing GRIME AI
+# record, so the all-versions DOI never changes.
+#
+# Settings in the "zenodo" environment:
+#   Secret   ZENODO_TOKEN               token for zenodo.org          (deposit:write, deposit:actions)
+#   Secret   ZENODO_SANDBOX_TOKEN       token for sandbox.zenodo.org  (deposit:write, deposit:actions)
+#   Variable ZENODO_CONCEPT_ID          all-versions ID of the GRIME AI record on zenodo.org (22087225)
+#   Variable ZENODO_SANDBOX_CONCEPT_ID  all-versions ID of the GRIME AI record on the sandbox
 
-RUN CONDA_OVERRIDE_CUDA=12.9 micromamba create -y -p /opt/grimeai -c grimelab -c conda-forge ${GRIME_PACKAGE} python=${PYTHON_VERSION} 'pytorch=*=cuda*' && \
-    micromamba clean -q -y -a
+on:
+  workflow_run:
+    workflows: ["Official Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to archive, for example v2.2.2.2"
+        required: true
+      target:
+        description: "Where to publish"
+        type: choice
+        options: [sandbox, zenodo]
+        default: sandbox
+      first_record:
+        description: "Create the first record (only when the target has no GRIME AI record yet)"
+        type: boolean
+        default: false
 
-# Use the repo's copy of the checkpoint downloader so fixes apply without republishing grime-ai-post
-COPY grime-ai-post/download-sam2-checkpoints.py /tmp/download-sam2-checkpoints.py
-RUN /opt/grimeai/bin/python /tmp/download-sam2-checkpoints.py && rm /tmp/download-sam2-checkpoints.py
-RUN command -v /opt/grimeai/bin/download-yolo11-models && /opt/grimeai/bin/download-yolo11-models do-something || true
+permissions:
+  contents: read
 
-RUN useradd -m grimeai
+concurrency:
+  group: push-zenodo
+  cancel-in-progress: false
 
-ENV PATH=/opt/grimeai/bin:$PATH
-ENV LD_LIBRARY_PATH=/opt/grimeai/lib:$LD_LIBRARY_PATH
-ENV QT_XCB_GL_INTEGRATION=none
-ENV QT_QUICK_BACKEND=software
-ENV HOME=/home/grimeai
-WORKDIR /home/grimeai
+jobs:
+  archive:
+    name: Archive release on Zenodo
+    runs-on: ubuntu-latest
+    # The Zenodo tokens are environment secrets; this line makes them available
+    # and applies the environment's approval and branch rules.
+    environment: zenodo
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || 'zenodo' }}
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
 
-USER grimeai
+      - name: Download source zip for the tag
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "::error::'$TAG' is not a release tag (expected v followed by numbers, for example v2.2.2.2)"
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          ZIP="GRIME-AI-${VERSION}.zip"
+          curl -fsSL -o "$ZIP" "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${TAG}.zip" \
+            || { echo "::error::Tag $TAG not found on GitHub"; exit 1; }
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          ls -l "$ZIP"
+
+      - name: Publish to Zenodo
+        env:
+          ZENODO_TOKEN_REAL: ${{ secrets.ZENODO_TOKEN }}
+          ZENODO_TOKEN_SANDBOX: ${{ secrets.ZENODO_SANDBOX_TOKEN }}
+          ZENODO_CONCEPT_ID: ${{ vars.ZENODO_CONCEPT_ID }}
+          ZENODO_SANDBOX_CONCEPT_ID: ${{ vars.ZENODO_SANDBOX_CONCEPT_ID }}
+          FIRST_RECORD: ${{ github.event_name == 'workflow_dispatch' && inputs.first_record || false }}
+          DOI_WAIT_TRIES: "12"      # times to re-read the record while Zenodo registers the DOI
+          DOI_WAIT_SECONDS: "10"    # seconds between those reads
+        run: |
+          python3 - <<'EOF'
+          import datetime, json, os, sys, time, urllib.error, urllib.request
+
+          SITES = {
+              "zenodo":  ("https://zenodo.org",         "ZENODO_TOKEN_REAL",    "ZENODO_TOKEN",         "ZENODO_CONCEPT_ID"),
+              "sandbox": ("https://sandbox.zenodo.org", "ZENODO_TOKEN_SANDBOX", "ZENODO_SANDBOX_TOKEN", "ZENODO_SANDBOX_CONCEPT_ID"),
+          }
+          target = os.environ["TARGET"]
+          if target not in SITES:
+              sys.exit(f"Unknown target '{target}'")
+          base, token_var, secret_name, concept_var = SITES[target]
+          token = os.environ.get(token_var, "")
+          if not token:
+              sys.exit(f"The {secret_name} secret is not set in the zenodo environment.")
+
+          tag      = os.environ["TAG"]
+          version  = os.environ["VERSION"]
+          zip_path = os.environ["ZIP"]
+          page_size = 100   # records requested per API page
+
+          def api(method, path, data=None, raw=None, content_type="application/json", missing_ok=False):
+              url = path if path.startswith("http") else base + path
+              body = raw if raw is not None else (json.dumps(data).encode() if data is not None else None)
+              req = urllib.request.Request(url, data=body, method=method)
+              req.add_header("Authorization", f"Bearer {token}")
+              req.add_header("Accept", "application/json")
+              if body is not None:
+                  req.add_header("Content-Type", content_type)
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      text = r.read().decode()
+                      return json.loads(text) if text else {}
+              except urllib.error.HTTPError as e:
+                  if missing_ok and e.code == 404:
+                      return None
+                  sys.exit(f"Zenodo {method} {url} failed ({e.code}):\n{e.read().decode()[:3000]}")
+
+          # Record details from the repository.
+          with open("zenodo_metadata.json", encoding="utf-8") as f:
+              cfg = json.load(f)
+          metadata = dict(cfg["metadata"])
+          metadata["title"] = cfg["release_text"]["title"].format(version=version)
+          metadata["description"] = cfg["release_text"]["description"].format(version=version)
+          metadata["version"] = tag
+          metadata["publication_date"] = datetime.date.today().isoformat()
+          draft_body = {"metadata": metadata,
+                        "custom_fields": cfg.get("custom_fields", {}),
+                        "files": {"enabled": True}}
+
+          # The GRIME AI record to add versions to, by its all-versions (concept) ID.
+          concept_id = os.environ.get(concept_var, "").strip()
+          if concept_id:
+              # Zenodo may or may not accept the all-versions ID for "latest version";
+              # if not, open the all-versions ID (which leads to a version) and ask from there.
+              latest = api("GET", f"/api/records/{concept_id}/versions/latest", missing_ok=True)
+              if latest is None:
+                  some_version = api("GET", f"/api/records/{concept_id}")
+                  latest = api("GET", f"/api/records/{some_version['id']}/versions/latest")
+              versions = api("GET", f"/api/records/{latest['id']}/versions?size={page_size}")["hits"]["hits"]
+              for v in versions:
+                  if v.get("metadata", {}).get("version") == tag:
+                      doi = v.get("pids", {}).get("doi", {}).get("identifier", "")
+                      print(f"{tag} is already on {target} as record {v['id']} (DOI {doi}). Nothing to do.")
+                      sys.exit(0)
+              print(f"Adding a new version to record {latest['id']} (all-versions ID {concept_id}).")
+              draft = api("POST", f"/api/records/{latest['id']}/versions")
+              draft_id = draft["id"]
+              api("PUT", f"/api/records/{draft_id}/draft", draft_body)
+          elif os.environ.get("FIRST_RECORD", "false") == "true":
+              print(f"Creating the first GRIME AI record on {target}.")
+              draft = api("POST", "/api/records", draft_body)
+              draft_id = draft["id"]
+          else:
+              sys.exit(f"The {concept_var} variable is not set in the zenodo environment, so the record "
+                       f"to add this version to is unknown. Set it to the record's all-versions ID, or run "
+                       f"manually with 'Create the first record' ticked if no record exists yet.")
+
+          # Upload the source zip.
+          key = os.path.basename(zip_path)
+          api("POST", f"/api/records/{draft_id}/draft/files", [{"key": key}])
+          with open(zip_path, "rb") as f:
+              api("PUT", f"/api/records/{draft_id}/draft/files/{key}/content",
+                  raw=f.read(), content_type="application/octet-stream")
+          api("POST", f"/api/records/{draft_id}/draft/files/{key}/commit")
+
+          # Publish and report the DOIs.
+          record = api("POST", f"/api/records/{draft_id}/draft/actions/publish")
+
+          # Zenodo registers DOIs after publishing, so the publish reply can come
+          # back without them. Re-read the published record until they appear.
+          def dois(r):
+              return (r.get("pids", {}).get("doi", {}).get("identifier", ""),
+                      r.get("parent", {}).get("pids", {}).get("doi", {}).get("identifier", ""))
+          doi, concept_doi = dois(record)
+          tries = int(os.environ["DOI_WAIT_TRIES"])
+          wait = float(os.environ["DOI_WAIT_SECONDS"])
+          for _ in range(tries):
+              if doi and concept_doi:
+                  break
+              time.sleep(wait)
+              record = api("GET", f"/api/records/{record['id']}")
+              doi, concept_doi = dois(record)
+          if not doi:
+              print(f"::warning::Published record {record['id']}, but Zenodo had not reported the DOI yet. Check the record page.")
+          page = record.get("links", {}).get("self_html", "")
+
+          print(f"Published {tag} on {target}: DOI {doi} (all versions: {concept_doi})")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as s:
+              s.write(f"### {tag} archived on {target}\n\n"
+                      f"| | |\n|---|---|\n"
+                      f"| Version DOI | {doi} |\n"
+                      f"| All-versions DOI | {concept_doi} |\n"
+                      f"| Record | {page} |\n")
+          EOF
